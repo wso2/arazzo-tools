@@ -6,7 +6,7 @@
   "publisher": "wso2",
   "repository": {
     "type": "git",
-    "url": "https://github.com/OAI/arazzo-tools.git",
+    "url": "https://github.com/wso2/arazzo-tools.git",
     "directory": "extensions/arazzo-visualizer/arazzo-designer-extension"
   },
   "engines": {

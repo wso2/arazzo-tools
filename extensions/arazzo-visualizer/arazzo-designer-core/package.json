@@ -23,7 +23,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/wso2/vscode-extensions.git"
+    "url": "git+https://github.com/wso2/arazzo-tools.git"
   },
   "publishConfig": {
     "registry": "https://npm.pkg.github.com/"
