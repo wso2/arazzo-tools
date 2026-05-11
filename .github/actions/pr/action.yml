@@ -41,8 +41,12 @@ runs:
         shell: bash
         id: create_tag
         run: |
-          git tag ${{ inputs.version }}
-          git push origin "refs/tags/${{ inputs.version }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${{ inputs.version }}"; then
+            echo "Tag ${{ inputs.version }} already exists. Skipping tag creation."
+          else
+            git tag ${{ inputs.version }}
+            git push origin "refs/tags/${{ inputs.version }}"
+          fi
 
       - name: Create release branch
         shell: bash

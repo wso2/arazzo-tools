@@ -111,6 +111,7 @@ jobs:
         with:
           repo: wso2/arazzo-tools
           name: arazzo-visualizer
+          isPreRelease: ${{ github.event.inputs.isPreRelease }}
 
       - name: Update Arazzo visualizer package version
         if: ${{ github.event.inputs.arazzo == 'true' }}

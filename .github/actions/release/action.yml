@@ -7,6 +7,9 @@ inputs:
   name:
     description: 'File name'
     required: true
+  isPreRelease:
+    description: 'Whether this is a pre-release'
+    default: 'true'
 
 runs:
   using: "composite"
@@ -19,17 +22,19 @@ runs:
         fileName=${file##*-}
         version=${fileName%.*}
         extension=${{ inputs.name }}
+        releaseTag="${extension}-${version}"
         extensionName="$(echo "$extension" | sed 's/.*/\u&/')"
         echo "vsixName=$file" >> $GITHUB_OUTPUT
         echo "version=$version" >> $GITHUB_OUTPUT
+        echo "releaseTag=$releaseTag" >> $GITHUB_OUTPUT
         echo "extensionName=$extensionName" >> $GITHUB_OUTPUT
 
     - name: Create a release in ${{ inputs.repo }} repo
       shell: bash
       run: |
         createResponse=`curl -X POST  -H "Accept: application/vnd.github.v3+json" \
-        -H "Authorization: Bearer ${{ github.token }}" -d '{"tag_name":"v${{ steps.vsix.outputs.version }}", \
-        "draft":false, "name": "Release v${{ steps.vsix.outputs.version }}", "prerelease":true}' \
+        -H "Authorization: Bearer ${{ github.token }}" -d '{"tag_name":"${{ steps.vsix.outputs.releaseTag }}", \
+        "draft":false, "name": "Release ${{ steps.vsix.outputs.releaseTag }}", "prerelease":${{ inputs.isPreRelease }}}' \
         https://api.github.com/repos/${{ inputs.repo }}/releases` \
           && id=`echo "$createResponse" | sed -n -e 's/"id":\ \([0-9]\+\),/\1/p' | head -n 1 | sed 's/[[:blank:]]//g'` && \
           uploadResponse=`curl -X POST -H "Authorization: Bearer ${{ github.token }}" -H "Content-Type:application/octet-stream" \
