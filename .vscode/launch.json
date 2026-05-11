@@ -1,0 +1,34 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Arazzo Visualizer Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "env": {
+        "WEB_VIEW_WATCH_MODE": "true",
+        "WEB_VIEW_DEV_HOST": "http://localhost:9000"
+      },
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/extensions/arazzo-visualizer/arazzo-designer-extension"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/extensions/arazzo-visualizer/arazzo-designer-extension/dist/**/*.js"
+      ],
+      "preLaunchTask": "watch-arazzo-extension"
+    },
+    {
+      "name": "Arazzo Visualizer Extension Tests",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/extensions/arazzo-visualizer/arazzo-designer-extension",
+        "--extensionTestsPath=${workspaceFolder}/extensions/arazzo-visualizer/arazzo-designer-extension/dist/test/suite/index"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/extensions/arazzo-visualizer/arazzo-designer-extension/dist/**/*.js"
+      ],
+      "preLaunchTask": "watch-arazzo-tests"
+    }
+  ]
+}

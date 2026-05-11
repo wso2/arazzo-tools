@@ -1,0 +1,43 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/rush/v5/rush.schema.json",
+  "rushVersion": "5.155.1",
+  "pnpmVersion": "10.11.0",
+  "nodeSupportedVersionRange": ">=20.0.0 <23.0.0",
+  "projectFolderMinDepth": 2,
+  "projectFolderMaxDepth": 4,
+  "repository": {
+    "defaultBranch": "main",
+    "defaultRemote": "origin"
+  },
+  "eventHooks": {
+    "postRushBuild": [
+      "cd extensions/arazzo-visualizer/arazzo-designer-extension && pnpm run copyVSIXToRoot"
+    ]
+  },
+  "projects": [
+    {
+      "packageName": "@wso2/font-wso2-vscode",
+      "projectFolder": "extensions/arazzo-visualizer/common-libs/font-wso2-vscode"
+    },
+    {
+      "packageName": "@wso2/ui-toolkit",
+      "projectFolder": "extensions/arazzo-visualizer/common-libs/ui-toolkit"
+    },
+    {
+      "packageName": "@wso2/arazzo-designer-core",
+      "projectFolder": "extensions/arazzo-visualizer/arazzo-designer-core"
+    },
+    {
+      "packageName": "@wso2/arazzo-designer-rpc-client",
+      "projectFolder": "extensions/arazzo-visualizer/arazzo-designer-rpc-client"
+    },
+    {
+      "packageName": "@wso2/arazzo-designer-visualizer",
+      "projectFolder": "extensions/arazzo-visualizer/arazzo-designer-visualizer"
+    },
+    {
+      "packageName": "arazzo-visualizer",
+      "projectFolder": "extensions/arazzo-visualizer/arazzo-designer-extension"
+    }
+  ]
+}

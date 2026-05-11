@@ -1,0 +1,36 @@
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"name": "Run Arazzo Visualizer Extension",
+			"type": "extensionHost",
+			"request": "launch",
+			"args": [
+				"--extensionDevelopmentPath=${workspaceFolder}"
+			],
+			"env": {
+                "WEB_VIEW_WATCH_MODE": "true",
+                "WEB_VIEW_DEV_HOST": "http://localhost:9000"
+            },
+			"outFiles": [
+				"${workspaceFolder}/dist/**/*.js",
+			],
+			"sourceMaps": true,
+			"preLaunchTask": "${defaultBuildTask}"
+		},
+		{
+			"name": "Arazzo Visualizer Extension Tests",
+			"type": "extensionHost",
+			"request": "launch",
+			"args": [
+				"--extensionDevelopmentPath=${workspaceFolder}",
+				"--extensionTestsPath=${workspaceFolder}/dist/test/suite/index"
+			],
+			"sourceMaps": true,
+			"outFiles": [
+				"${workspaceFolder}/dist/**/*.js",
+			],
+			"preLaunchTask": "arazzo-extension: watch-tests"
+		}
+	]
+}

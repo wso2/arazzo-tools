@@ -1,0 +1,16 @@
+{
+  "files": {
+    "extensions/arazzo-visualizer/arazzo-designer-rpc-client/.rush/temp/chunked-rush-logs/arazzo-designer-rpc-client.build.chunks.jsonl": "996ee3cecd6c6f4760d8758c104037039bc4c4f1",
+    "extensions/arazzo-visualizer/arazzo-designer-rpc-client/.rush/temp/package-deps_build.json": "795fbd3f5237630147acf1f0d8636fba9aca39ef",
+    "extensions/arazzo-visualizer/arazzo-designer-rpc-client/.rush/temp/shrinkwrap-deps.json": "98dfcdf807c7128d45a27d98e9c8df8e13b5e0df",
+    "extensions/arazzo-visualizer/arazzo-designer-rpc-client/config/rush-project.json": "3c3241c8f6af1a707f1872cc186f0682eccdd140",
+    "extensions/arazzo-visualizer/arazzo-designer-rpc-client/eslint.config.cjs": "ba42b1074d7d623968d1ecb9d69badb1893a07a6",
+    "extensions/arazzo-visualizer/arazzo-designer-rpc-client/package.json": "5f9e0087d7f319a9953f99b5bc1d242eb850b086",
+    "extensions/arazzo-visualizer/arazzo-designer-rpc-client/src/RpcClient.ts": "091b324b6fba60918873a4dc4b9b455e8e520de7",
+    "extensions/arazzo-visualizer/arazzo-designer-rpc-client/src/context/arazzo-designer-webview-context.ts": "489909e95f2f9a7f0924259287352268fb5cf66e",
+    "extensions/arazzo-visualizer/arazzo-designer-rpc-client/src/index.ts": "3acbe08573c41807964c46d618031d360b68f9b4",
+    "extensions/arazzo-visualizer/arazzo-designer-rpc-client/src/rpc-clients/visualizer/rpc-client.ts": "7bb692029da0699a30c1ec196ac7ab8b47e64dbd",
+    "extensions/arazzo-visualizer/arazzo-designer-rpc-client/tsconfig.json": "58613a529359a3fb98852a5512a98772eebdd0f1"
+  },
+  "arguments": "pnpm run lint && tsc --pretty "
+}

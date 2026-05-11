@@ -1,0 +1,15 @@
+{
+  "name": "arazzo-tools",
+  "private": true,
+  "scripts": {
+    "rush:install": "rush install",
+    "rush:update": "rush update",
+    "rush:update-full": "rush update --full",
+    "build": "rush build",
+    "build:arazzo-visualizer": "rush build --to arazzo-visualizer",
+    "rebuild": "rush rebuild",
+    "watch:arazzo-extension": "pnpm --dir extensions/arazzo-visualizer/arazzo-designer-extension run watch",
+    "watch:arazzo-visualizer": "pnpm --dir extensions/arazzo-visualizer/arazzo-designer-visualizer run start",
+    "package:arazzo-visualizer": "rush build --to arazzo-visualizer"
+  }
+}

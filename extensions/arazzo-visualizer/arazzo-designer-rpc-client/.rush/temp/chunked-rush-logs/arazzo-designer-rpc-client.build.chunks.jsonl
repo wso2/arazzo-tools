@@ -1,0 +1,12 @@
+{"kind":"O","text":"Invoking: pnpm run lint && tsc --pretty \n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"> @wso2/arazzo-designer-rpc-client@1.0.0 lint /Users/anjanash/Desktop/Office/Arazzo-tools-repo/arazzo-tools/extensions/arazzo-visualizer/arazzo-designer-rpc-client\n"}
+{"kind":"O","text":"> eslint .\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"/Users/anjanash/Desktop/Office/Arazzo-tools-repo/arazzo-tools/extensions/arazzo-visualizer/arazzo-designer-rpc-client/src/context/arazzo-designer-webview-context.ts\n"}
+{"kind":"O","text":"  2:1  warning  Unused eslint-disable directive (no problems were reported from '@typescript-eslint/no-explicit-any')\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"✖ 1 problem (0 errors, 1 warning)\n"}
+{"kind":"O","text":"  0 errors and 1 warning potentially fixable with the `--fix` option.\n"}
+{"kind":"O","text":"\n"}

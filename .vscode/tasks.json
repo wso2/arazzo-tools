@@ -1,0 +1,47 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "watch-arazzo-extension",
+      "type": "npm",
+      "script": "watch",
+      "path": "extensions/arazzo-visualizer/arazzo-designer-extension",
+      "problemMatcher": "$tsc-watch",
+      "isBackground": true,
+      "presentation": {
+        "reveal": "never",
+        "group": "watchers"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "watch-arazzo-tests",
+      "type": "npm",
+      "script": "watch-tests",
+      "path": "extensions/arazzo-visualizer/arazzo-designer-extension",
+      "problemMatcher": "$tsc-watch",
+      "isBackground": true,
+      "presentation": {
+        "reveal": "never",
+        "group": "watchers"
+      },
+      "group": "build"
+    },
+    {
+      "label": "watch-arazzo-visualizer",
+      "type": "npm",
+      "script": "start",
+      "path": "extensions/arazzo-visualizer/arazzo-designer-visualizer",
+      "problemMatcher": "$ts-webpack-watch",
+      "isBackground": true,
+      "presentation": {
+        "reveal": "always",
+        "group": "watchers"
+      },
+      "group": "build"
+    }
+  ]
+}

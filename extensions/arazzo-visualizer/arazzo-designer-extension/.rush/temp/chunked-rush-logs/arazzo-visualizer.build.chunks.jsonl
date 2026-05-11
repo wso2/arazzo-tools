@@ -1,0 +1,129 @@
+{"kind":"O","text":"Invoking: pnpm clean && pnpm run copyFonts && webpack --mode production --devtool hidden-source-map && pnpm run package && pnpm run postbuild \n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"> arazzo-visualizer@0.2.0 clean /Users/anjanash/Desktop/Office/Arazzo-tools-repo/arazzo-tools/extensions/arazzo-visualizer/arazzo-designer-extension\n"}
+{"kind":"O","text":"> rimraf ./dist\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"> arazzo-visualizer@0.2.0 copyFonts /Users/anjanash/Desktop/Office/Arazzo-tools-repo/arazzo-tools/extensions/arazzo-visualizer/arazzo-designer-extension\n"}
+{"kind":"O","text":"> copyfiles -f ./node_modules/@wso2/font-wso2-vscode/dist/* ./resources/font-wso2-vscode/dist/\n"}
+{"kind":"O","text":"\n"}
+{"kind":"E","text":"    [webpack-cli] Compiler starting... \n"}
+{"kind":"E","text":"    [webpack-cli] Compiler is using config: '/Users/anjanash/Desktop/Office/Arazzo-tools-repo/arazzo-tools/extensions/arazzo-visualizer/arazzo-designer-extension/webpack.config.js'\n"}
+{"kind":"E","text":"    [webpack-cli] Compiler finished\n"}
+{"kind":"O","text":"asset extension.js 581 KiB [emitted] [minimized] (name: main) 2 related assets\n"}
+{"kind":"O","text":"orphan modules 164 KiB [orphan] 22 modules\n"}
+{"kind":"O","text":"runtime modules 793 bytes 4 modules\n"}
+{"kind":"O","text":"modules by path ../../../common/temp/node_modules/.pnpm/ 1.67 MiB 159 modules\n"}
+{"kind":"O","text":"modules by path ./src/ 151 KiB 21 modules\n"}
+{"kind":"O","text":"modules by path ../arazzo-designer-core/lib/ 12.3 KiB\n"}
+{"kind":"O","text":"  modules by path ../arazzo-designer-core/lib/*.js 9.44 KiB 4 modules\n"}
+{"kind":"O","text":"  modules by path ../arazzo-designer-core/lib/rpc-types/visualizer/*.js 2.06 KiB\n"}
+{"kind":"O","text":"    ../arazzo-designer-core/lib/rpc-types/visualizer/index.js 786 bytes [built] [code generated]\n"}
+{"kind":"O","text":"    + 2 modules\n"}
+{"kind":"O","text":"  ../arazzo-designer-core/lib/interfaces/arazzoInterface.js 852 bytes [built] [code generated]\n"}
+{"kind":"O","text":"+ 9 modules\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"WARNING in ../../../common/temp/node_modules/.pnpm/vscode-languageserver-types@3.17.5/node_modules/vscode-languageserver-types/lib/umd/main.js 3:24-31\n"}
+{"kind":"O","text":"Critical dependency: require function is used in a way in which dependencies cannot be statically extracted\n"}
+{"kind":"O","text":" @ ../../../common/temp/node_modules/.pnpm/vscode-languageserver-protocol@3.17.5/node_modules/vscode-languageserver-protocol/lib/common/api.js 23:13-51\n"}
+{"kind":"O","text":" @ ../../../common/temp/node_modules/.pnpm/vscode-languageserver-protocol@3.17.5/node_modules/vscode-languageserver-protocol/lib/node/main.js 24:13-37\n"}
+{"kind":"O","text":" @ ../../../common/temp/node_modules/.pnpm/vscode-languageclient@9.0.1/node_modules/vscode-languageclient/lib/common/api.js 22:13-54\n"}
+{"kind":"O","text":" @ ../../../common/temp/node_modules/.pnpm/vscode-languageclient@9.0.1/node_modules/vscode-languageclient/lib/node/main.js 34:13-37\n"}
+{"kind":"O","text":" @ ../../../common/temp/node_modules/.pnpm/vscode-languageclient@9.0.1/node_modules/vscode-languageclient/node.js 7:0-43\n"}
+{"kind":"O","text":" @ ./src/extension.ts 61:15-52\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"1 warning has detailed information that is not shown.\n"}
+{"kind":"O","text":"Use 'stats.errorDetails: true' resp. '--stats-error-details' to show it.\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"webpack 5.104.1 compiled with 1 warning in 26172 ms\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"> arazzo-visualizer@0.2.0 package /Users/anjanash/Desktop/Office/Arazzo-tools-repo/arazzo-tools/extensions/arazzo-visualizer/arazzo-designer-extension\n"}
+{"kind":"O","text":"> pnpm run prepare-binaries && node ../common-libs/scripts/package-vsix.js\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"> arazzo-visualizer@0.2.0 prepare-binaries /Users/anjanash/Desktop/Office/Arazzo-tools-repo/arazzo-tools/extensions/arazzo-visualizer/arazzo-designer-extension\n"}
+{"kind":"O","text":"> pnpm run build-cli && pnpm run build-lsp && pnpm run ensure-cli-executable\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"> arazzo-visualizer@0.2.0 build-cli /Users/anjanash/Desktop/Office/Arazzo-tools-repo/arazzo-tools/extensions/arazzo-visualizer/arazzo-designer-extension\n"}
+{"kind":"O","text":"> node ./scripts/build-cli.js\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"Building Arazzo Designer CLI for darwin/arm64 -> arazzo-designer-cli-darwin-arm64\n"}
+{"kind":"O","text":"Building Arazzo Designer CLI for darwin/amd64 -> arazzo-designer-cli-darwin-amd64\n"}
+{"kind":"O","text":"Building Arazzo Designer CLI for linux/amd64 -> arazzo-designer-cli-linux-amd64\n"}
+{"kind":"O","text":"Building Arazzo Designer CLI for linux/arm64 -> arazzo-designer-cli-linux-arm64\n"}
+{"kind":"O","text":"Building Arazzo Designer CLI for windows/amd64 -> arazzo-designer-cli.exe\n"}
+{"kind":"O","text":"Arazzo Designer CLI binaries are ready at: /Users/anjanash/Desktop/Office/Arazzo-tools-repo/arazzo-tools/extensions/arazzo-visualizer/arazzo-designer-extension/cli\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"> arazzo-visualizer@0.2.0 build-lsp /Users/anjanash/Desktop/Office/Arazzo-tools-repo/arazzo-tools/extensions/arazzo-visualizer/arazzo-designer-extension\n"}
+{"kind":"O","text":"> cd ../arazzo-designer-lsp && bash build.sh\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"Building Arazzo Language Server...\n"}
+{"kind":"O","text":"Building for darwin/arm64 -> arazzo-language-server-darwin-arm64...\n"}
+{"kind":"O","text":"✓ Built and copied arazzo-language-server-darwin-arm64\n"}
+{"kind":"O","text":"Building for darwin/amd64 -> arazzo-language-server-darwin-amd64...\n"}
+{"kind":"O","text":"✓ Built and copied arazzo-language-server-darwin-amd64\n"}
+{"kind":"O","text":"Building for linux/amd64 -> arazzo-language-server-linux-amd64...\n"}
+{"kind":"O","text":"✓ Built and copied arazzo-language-server-linux-amd64\n"}
+{"kind":"O","text":"Building for linux/arm64 -> arazzo-language-server-linux-arm64...\n"}
+{"kind":"O","text":"✓ Built and copied arazzo-language-server-linux-arm64\n"}
+{"kind":"O","text":"Building for windows/amd64 -> arazzo-language-server.exe...\n"}
+{"kind":"O","text":"✓ Built and copied arazzo-language-server.exe\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"Language Server Binaries in extension ls/ folder:\n"}
+{"kind":"O","text":"total 73160\n"}
+{"kind":"O","text":"-rwxr-xr-x@ 1 anjanash  staff   7.4M May 11 13:19 arazzo-language-server-darwin-amd64\n"}
+{"kind":"O","text":"-rwxr-xr-x@ 1 anjanash  staff   7.0M May 11 13:19 arazzo-language-server-darwin-arm64\n"}
+{"kind":"O","text":"-rwxr-xr-x@ 1 anjanash  staff   7.2M May 11 13:19 arazzo-language-server-linux-amd64\n"}
+{"kind":"O","text":"-rwxr-xr-x@ 1 anjanash  staff   6.8M May 11 13:19 arazzo-language-server-linux-arm64\n"}
+{"kind":"O","text":"-rwxr-xr-x@ 1 anjanash  staff   7.3M May 11 13:19 arazzo-language-server.exe\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"✓ Build complete! Language servers are ready at:\n"}
+{"kind":"O","text":"  ../arazzo-designer-extension/ls/\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"Available binaries:\n"}
+{"kind":"O","text":"  - arazzo-language-server-darwin-arm64  (macOS Apple Silicon)\n"}
+{"kind":"O","text":"  - arazzo-language-server-darwin-amd64  (macOS Intel)\n"}
+{"kind":"O","text":"  - arazzo-language-server-linux-amd64   (Ubuntu/Linux x86_64)\n"}
+{"kind":"O","text":"  - arazzo-language-server-linux-arm64   (Linux ARM64)\n"}
+{"kind":"O","text":"  - arazzo-language-server.exe           (Windows)\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"> arazzo-visualizer@0.2.0 ensure-cli-executable /Users/anjanash/Desktop/Office/Arazzo-tools-repo/arazzo-tools/extensions/arazzo-visualizer/arazzo-designer-extension\n"}
+{"kind":"O","text":"> node ./scripts/ensure-cli-executable.js\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"Ensured executable permissions on 4 Arazzo Designer CLI binaries.\n"}
+{"kind":"O","text":"Packaging VSIX with args: vsce package --no-dependencies\n"}
+{"kind":"O","text":" INFO  Files included in the VSIX:\n"}
+{"kind":"O","text":"arazzo-visualizer-0.2.0.vsix\n"}
+{"kind":"O","text":"├─ [Content_Types].xml \n"}
+{"kind":"O","text":"├─ extension.vsixmanifest \n"}
+{"kind":"O","text":"└─ extension/\n"}
+{"kind":"O","text":"   ├─ ICON_SETUP.md [4.01 KB]\n"}
+{"kind":"O","text":"   ├─ LICENSE.txt [4.14 KB]\n"}
+{"kind":"O","text":"   ├─ NAVIGATION_GUIDE.md [10.33 KB]\n"}
+{"kind":"O","text":"   ├─ changelog.md [3.68 KB]\n"}
+{"kind":"O","text":"   ├─ eslint.config.cjs [0.97 KB]\n"}
+{"kind":"O","text":"   ├─ language-configuration.json [0.46 KB]\n"}
+{"kind":"O","text":"   ├─ package.json [9.81 KB]\n"}
+{"kind":"O","text":"   ├─ playwright.config.js [1.25 KB]\n"}
+{"kind":"O","text":"   ├─ readme.md [6.88 KB]\n"}
+{"kind":"O","text":"   ├─ .rush/ (2 files) [80.61 KB]\n"}
+{"kind":"O","text":"   ├─ assets/ (19 files) [29.33 MB]\n"}
+{"kind":"O","text":"   ├─ cli/ (5 files) [57.38 MB]\n"}
+{"kind":"O","text":"   ├─ dist/ (2 files) [582 KB]\n"}
+{"kind":"O","text":"   ├─ icons/ (2 files) [3.25 KB]\n"}
+{"kind":"O","text":"   ├─ ls/ (5 files) [35.72 MB]\n"}
+{"kind":"O","text":"   ├─ resources/ (10 files) [8.23 MB]\n"}
+{"kind":"O","text":"   └─ syntaxes/ (1 file) [4.92 KB]\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"=> Run vsce ls --tree to see all included files.\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":" DONE  Packaged: /Users/anjanash/Desktop/Office/Arazzo-tools-repo/arazzo-tools/extensions/arazzo-visualizer/arazzo-designer-extension/arazzo-visualizer-0.2.0.vsix (57 files, 78.67 MB)\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"> arazzo-visualizer@0.2.0 postbuild /Users/anjanash/Desktop/Office/Arazzo-tools-repo/arazzo-tools/extensions/arazzo-visualizer/arazzo-designer-extension\n"}
+{"kind":"O","text":"> pnpm run copyVSIX\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"> arazzo-visualizer@0.2.0 copyVSIX /Users/anjanash/Desktop/Office/Arazzo-tools-repo/arazzo-tools/extensions/arazzo-visualizer/arazzo-designer-extension\n"}
+{"kind":"O","text":"> copyfiles *.vsix ./vsix\n"}
+{"kind":"O","text":"\n"}

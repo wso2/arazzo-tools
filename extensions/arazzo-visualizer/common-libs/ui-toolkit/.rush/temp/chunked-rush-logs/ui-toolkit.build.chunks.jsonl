@@ -1,0 +1,25 @@
+{"kind":"O","text":"Invoking: tsc --pretty && pnpm run copy-font && pnpm run lint \n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"> @wso2/ui-toolkit@2.0.24050215 copy-font /Users/anjanash/Desktop/Office/Arazzo-tools-repo/arazzo-tools/extensions/arazzo-visualizer/common-libs/ui-toolkit\n"}
+{"kind":"O","text":"> copyfiles -u 1 node_modules/@wso2/font-wso2-vscode/dist/* .storybook/fonts/ && copyfiles -u 1 node_modules/@vscode/codicons/dist/* .storybook/fonts/\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"> @wso2/ui-toolkit@2.0.24050215 lint /Users/anjanash/Desktop/Office/Arazzo-tools-repo/arazzo-tools/extensions/arazzo-visualizer/common-libs/ui-toolkit\n"}
+{"kind":"O","text":"> eslint .\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"/Users/anjanash/Desktop/Office/Arazzo-tools-repo/arazzo-tools/extensions/arazzo-visualizer/common-libs/ui-toolkit/src/components/DiagramNavigationWrapper/NavigationWrapperCanvasWidget.tsx\n"}
+{"kind":"O","text":"  18:1  warning  Unused eslint-disable directive (no problems were reported from 'react-hooks/exhaustive-deps')\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"/Users/anjanash/Desktop/Office/Arazzo-tools-repo/arazzo-tools/extensions/arazzo-visualizer/common-libs/ui-toolkit/src/components/ExpressionEditor/components/Header/ExpressionEditor.tsx\n"}
+{"kind":"O","text":"  81:9  warning  Unused eslint-disable directive (no problems were reported from '@typescript-eslint/no-unused-vars')\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"/Users/anjanash/Desktop/Office/Arazzo-tools-repo/arazzo-tools/extensions/arazzo-visualizer/common-libs/ui-toolkit/src/components/ExpressionEditor/components/MonacoEditor/index.tsx\n"}
+{"kind":"O","text":"  120:21  warning  Unused eslint-disable directive (no problems were reported from 'no-useless-escape')\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"/Users/anjanash/Desktop/Office/Arazzo-tools-repo/arazzo-tools/extensions/arazzo-visualizer/common-libs/ui-toolkit/src/styles/Theme.ts\n"}
+{"kind":"O","text":"  1:1  warning  Unused eslint-disable directive (no problems were reported from '@typescript-eslint/no-duplicate-enum-values')\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"✖ 4 problems (0 errors, 4 warnings)\n"}
+{"kind":"O","text":"  0 errors and 4 warnings potentially fixable with the `--fix` option.\n"}
+{"kind":"O","text":"\n"}

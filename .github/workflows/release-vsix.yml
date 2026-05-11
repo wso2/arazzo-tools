@@ -1,0 +1,49 @@
+name: Release VSIX
+
+on:
+  workflow_dispatch:
+    inputs:
+      isPreRelease:
+        description: Package the VSIX as a pre-release
+        type: boolean
+        required: true
+        default: true
+      tag:
+        description: Release tag to create or update
+        type: string
+        required: true
+      createGitHubRelease:
+        description: Create a GitHub release and upload the VSIX
+        type: boolean
+        required: true
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+    secrets: inherit
+    with:
+      isPreRelease: ${{ inputs.isPreRelease }}
+      runTrivy: false
+
+  release:
+    name: Publish GitHub release
+    needs: build
+    if: ${{ inputs.createGitHubRelease }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download VSIX
+        uses: actions/download-artifact@v4
+        with:
+          name: arazzo-visualizer-vsix
+          path: dist
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          prerelease: ${{ inputs.isPreRelease }}
+          files: dist/**/*.vsix

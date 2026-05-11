@@ -1,0 +1,15 @@
+{"kind":"O","text":"Invoking: npm run gen-icons && node src/searchableInput/addSearch.js && npm run copy-icons \n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"> @wso2/font-wso2-vscode@1.0.0 gen-icons\n"}
+{"kind":"O","text":"> node src/generate-font/generate-font.js && node src/searchableInput/addSearch.js\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"Generating icon font...\n"}
+{"kind":"O","text":"✅ Icon font generated successfully!\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"> @wso2/font-wso2-vscode@1.0.0 copy-icons\n"}
+{"kind":"O","text":"> node src/plugin-icons/configurePlugins.js\n"}
+{"kind":"O","text":"\n"}
+{"kind":"E","text":"Icon not found in wso2-vscode font: delete\n"}
+{"kind":"E","text":"package.json not found at /Users/anjanash/Desktop/Office/Arazzo-tools-repo/arazzo-tools/extensions/arazzo-visualizer/choreo/choreo-extension/package.json. Skipping icon contribution update.\n"}
+{"kind":"E","text":"package.json not found at /Users/anjanash/Desktop/Office/Arazzo-tools-repo/arazzo-tools/extensions/arazzo-visualizer/ballerina/ballerina-extension/package.json. Skipping icon contribution update.\n"}
+{"kind":"E","text":"package.json not found at /Users/anjanash/Desktop/Office/Arazzo-tools-repo/arazzo-tools/extensions/arazzo-visualizer/mi/mi-extension/package.json. Skipping icon contribution update.\n"}

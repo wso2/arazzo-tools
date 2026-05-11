@@ -1,0 +1,47 @@
+name: Create Release PR
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version bump for the Arazzo Visualizer extension
+        type: choice
+        required: true
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+          - prerelease
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-pr:
+    name: Open release PR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - name: Bump extension version
+        working-directory: extensions/arazzo-visualizer/arazzo-designer-extension
+        run: npm version ${{ inputs.version }} --no-git-tag-version
+
+      - name: Refresh Rush lockfile
+        run: node common/scripts/install-run-rush.js update
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: release/arazzo-visualizer-version-bump
+          commit-message: Bump Arazzo Visualizer version
+          title: Bump Arazzo Visualizer version
+          body: |
+            Updates the Arazzo Visualizer extension version and refreshes Rush package metadata.

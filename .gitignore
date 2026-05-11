@@ -22,3 +22,29 @@
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
 replay_pid*
+
+# Node/Rush
+node_modules/
+common/temp/
+common/autoinstallers/*/node_modules/
+common/deploy/
+common/npm-cache/
+common/pnpm-store/
+common/rush/
+
+# Build artifacts
+dist/
+lib/
+out/
+*.vsix
+extensions/arazzo-visualizer/arazzo-designer-extension/vsix/
+extensions/arazzo-visualizer/arazzo-designer-extension/cli/
+extensions/arazzo-visualizer/arazzo-designer-extension/resources/jslibs/
+extensions/arazzo-visualizer/arazzo-designer-extension/resources/font-wso2-vscode/dist/
+extensions/arazzo-visualizer/arazzo-designer-visualizer/build/
+extensions/arazzo-visualizer/common-libs/ui-toolkit/.storybook/fonts/
+extensions/arazzo-visualizer/common-libs/ui-toolkit/storybook-static/
+extensions/arazzo-visualizer/common-libs/font-wso2-vscode/dist/
+
+# Editor/OS
+.DS_Store

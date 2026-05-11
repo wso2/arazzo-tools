@@ -1,0 +1,61 @@
+{"kind":"O","text":"Invoking: webpack && pnpm run postbuild && npm run copy-font \n"}
+{"kind":"O","text":"assets by path ../lib/components/ 54 KiB 48 assets\n"}
+{"kind":"O","text":"assets by path ../lib/views/ 8.22 KiB 9 assets\n"}
+{"kind":"O","text":"assets by path ../lib/visitors/*.ts 12.8 KiB 7 assets\n"}
+{"kind":"O","text":"assets by path ../lib/*.ts 3.29 KiB 5 assets\n"}
+{"kind":"O","text":"assets by path ../lib/utils/*.ts 6.55 KiB 3 assets\n"}
+{"kind":"O","text":"assets by path ../lib/Definitions/*.ts 8.57 KiB 2 assets\n"}
+{"kind":"O","text":"assets by path ../lib/constants/*.ts 5.83 KiB 2 assets\n"}
+{"kind":"O","text":"assets by path ./images/*.svg 690 bytes 2 assets\n"}
+{"kind":"O","text":"asset Visualizer.js 6.69 MiB [compared for emit] (name: main) 1 related asset\n"}
+{"kind":"O","text":"asset ../lib/resources/icons/BranchIcon.d.ts 727 bytes [compared for emit]\n"}
+{"kind":"O","text":"asset ../lib/APIDesignerContext/index.d.ts 175 bytes [compared for emit]\n"}
+{"kind":"O","text":"orphan modules 485 KiB [orphan] 242 modules\n"}
+{"kind":"O","text":"runtime modules 3.45 KiB 9 modules\n"}
+{"kind":"O","text":"modules by path ../ 4.92 MiB\n"}
+{"kind":"O","text":"  modules by path ../../../common/temp/node_modules/.pnpm/ 4.06 MiB 568 modules\n"}
+{"kind":"O","text":"  modules by path ../common-libs/ 859 KiB 139 modules\n"}
+{"kind":"O","text":"  modules by path ../arazzo-designer-core/lib/ 12 KiB 8 modules\n"}
+{"kind":"O","text":"  modules by path ../arazzo-designer-rpc-client/lib/ 10.2 KiB\n"}
+{"kind":"O","text":"    modules by path ../arazzo-designer-rpc-client/lib/*.js 6.05 KiB 2 modules\n"}
+{"kind":"O","text":"    + 2 modules\n"}
+{"kind":"O","text":"modules by path ./src/ 307 KiB (javascript) 690 bytes (asset) 59 modules\n"}
+{"kind":"O","text":"webpack 5.104.1 compiled successfully in 34903 ms\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"assets by path ../lib/components/ 54 KiB 48 assets\n"}
+{"kind":"O","text":"assets by path ../lib/views/ 8.22 KiB 9 assets\n"}
+{"kind":"O","text":"assets by path ../lib/visitors/*.ts 12.8 KiB 7 assets\n"}
+{"kind":"O","text":"assets by path ../lib/*.ts 3.29 KiB 5 assets\n"}
+{"kind":"O","text":"assets by path ../lib/utils/*.ts 6.55 KiB 3 assets\n"}
+{"kind":"O","text":"assets by path ../lib/Definitions/*.ts 8.57 KiB\n"}
+{"kind":"O","text":"  asset ../lib/Definitions/ServiceDefinitions.d.ts 7.34 KiB [compared for emit]\n"}
+{"kind":"O","text":"  asset ../lib/Definitions/Context.d.ts 1.23 KiB [compared for emit]\n"}
+{"kind":"O","text":"assets by path ../lib/constants/*.ts 5.83 KiB\n"}
+{"kind":"O","text":"  asset ../lib/constants/index.d.ts 3.26 KiB [compared for emit]\n"}
+{"kind":"O","text":"  asset ../lib/constants/nodeConstants.d.ts 2.57 KiB [compared for emit]\n"}
+{"kind":"O","text":"asset MCPPlayground.js 1.25 MiB [compared for emit] (name: main) 1 related asset\n"}
+{"kind":"O","text":"asset ../lib/resources/icons/BranchIcon.d.ts 727 bytes [compared for emit]\n"}
+{"kind":"O","text":"asset ../lib/APIDesignerContext/index.d.ts 175 bytes [compared for emit]\n"}
+{"kind":"O","text":"runtime modules 1.04 KiB 5 modules\n"}
+{"kind":"O","text":"orphan modules 236 bytes [orphan] 1 module\n"}
+{"kind":"O","text":"modules by path ../../../common/temp/node_modules/.pnpm/ 1.19 MiB\n"}
+{"kind":"O","text":"  modules by path ../../../common/temp/node_modules/.pnpm/stylis@4.2.0/node_modules/s...(truncated) 23.3 KiB 7 modules\n"}
+{"kind":"O","text":"  modules by path ../../../common/temp/node_modules/.pnpm/react@18.2.0/node_modules/react/ 127 KiB 4 modules\n"}
+{"kind":"O","text":"  modules by path ../../../common/temp/node_modules/.pnpm/react-dom@18.2.0_react@18.2.0/node_modu...(truncated) 1000 KiB 3 modules\n"}
+{"kind":"O","text":"  modules by path ../../../common/temp/node_modules/.pnpm/@emotion+css@11.10.5_@babel+core@7.24.4/...(truncated) 4.25 KiB 2 modules\n"}
+{"kind":"O","text":"  modules by path ../../../common/temp/node_modules/.pnpm/scheduler@0.23.2/node_modules/scheduler/ 17.3 KiB\n"}
+{"kind":"O","text":"    ../../../common/temp/node_modules/.pnpm/scheduler@0.23.2/node_modules/sche...(truncated) 198 bytes [built] [code generated]\n"}
+{"kind":"O","text":"    ../../../common/temp/node_modules/.pnpm/scheduler@0.23.2/node_modules/scheduler/...(truncated) 17.1 KiB [built] [code generated]\n"}
+{"kind":"O","text":"  + 8 modules\n"}
+{"kind":"O","text":"modules by path ./src/ 20.7 KiB\n"}
+{"kind":"O","text":"  ./src/mcpPlaygroundIndex.tsx 1.14 KiB [built] [code generated]\n"}
+{"kind":"O","text":"  ./src/views/MCP_Playground/MCPPlayground.tsx 19.6 KiB [built] [code generated]\n"}
+{"kind":"O","text":"webpack 5.104.1 compiled successfully in 33775 ms\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"> @wso2/arazzo-designer-visualizer@1.0.0 postbuild /Users/anjanash/Desktop/Office/Arazzo-tools-repo/arazzo-tools/extensions/arazzo-visualizer/arazzo-designer-visualizer\n"}
+{"kind":"O","text":"> copyfiles -u 1 \"build/**/*\" ../arazzo-designer-extension/resources/jslibs\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"\n"}
+{"kind":"O","text":"> @wso2/arazzo-designer-visualizer@1.0.0 copy-font\n"}
+{"kind":"O","text":"> copyfiles -u 1 node_modules/@wso2/font-wso2-vscode/dist/* .storybook/fonts/ && copyfiles -u 1 node_modules/@vscode/codicons/dist/* .storybook/fonts/\n"}
+{"kind":"O","text":"\n"}
