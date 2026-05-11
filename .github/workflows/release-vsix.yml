@@ -4,46 +4,120 @@ on:
   workflow_dispatch:
     inputs:
       isPreRelease:
-        description: Package the VSIX as a pre-release
+        required: true
+        type: boolean
+      arazzo:
+        description: Release Arazzo extension
         type: boolean
         required: true
-        default: true
-      tag:
-        description: Release tag to create or update
-        type: string
+        default: false
+      version:
+        type: choice
+        description: 'Enter the version type'
         required: true
-      createGitHubRelease:
-        description: Create a GitHub release and upload the VSIX
-        type: boolean
-        required: true
-        default: true
+        default: 'N/A'
+        options:
+          - 'patch'
+          - 'minor'
+          - 'major'
+          - 'N/A'
 
 permissions:
   contents: write
 
 jobs:
-  build:
+  Build:
+    name: Build branch - ${{ github.ref_name }}
     uses: ./.github/workflows/build.yml
     secrets: inherit
     with:
       isPreRelease: ${{ inputs.isPreRelease }}
       runTrivy: false
+      arazzo: ${{ inputs.arazzo }}
+      version: ${{ inputs.version }}
+      isReleaseBuild: true
 
-  release:
-    name: Publish GitHub release
-    needs: build
-    if: ${{ inputs.createGitHubRelease }}
+  Release:
+    name: Release VSIX
+    needs: Build
+    timeout-minutes: 45
     runs-on: ubuntu-latest
     steps:
       - name: Download VSIX
         uses: actions/download-artifact@v4
         with:
-          name: arazzo-visualizer-vsix
-          path: dist
+          name: VSIX
+          path: ./
 
-      - name: Create release
+      - name: Get version
+        id: vsix
+        run: |
+          if [[ "${{ github.event.inputs.arazzo }}" == "true" ]]; then
+            file=$(ls arazzo-visualizer-[0-9]*.[0-9]*.[0-9]*.vsix)
+          fi
+          fileName=${file##*-}
+          version=${fileName%.*}
+          echo "vsixName=$file" >> $GITHUB_OUTPUT
+          echo "version=$version" >> $GITHUB_OUTPUT
+
+      - name: Set Chat API
+        id: chat
+        run: echo "chatAPI=${{ secrets.TOOLING_TEAM_CHAT_API }}" >> $GITHUB_OUTPUT
+
+      - name: Create a release in wso2/arazzo-tools repo for arazzo
+        if: ${{ github.event.inputs.arazzo == 'true' }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.tag }}
+          tag_name: v${{ steps.vsix.outputs.version }}
+          name: Release v${{ steps.vsix.outputs.version }}
           prerelease: ${{ inputs.isPreRelease }}
-          files: dist/**/*.vsix
+          files: ${{ steps.vsix.outputs.vsixName }}
+
+      - name: Release Notification
+        if: ${{ github.event.inputs.arazzo == 'true' }}
+        run: |
+          body=$(cat << EOF
+          {
+            "cards": [
+              {
+                "header": {
+                    "title": "New Release - arazzo-visualizer"
+                },
+                "sections": [
+                  {
+                    "widgets": [
+                      {
+                        "keyValue": {
+                          "topLabel": "VSIX",
+                          "content": "v${{ steps.vsix.outputs.version }}",
+                          "onClick": {
+                            "openLink": {
+                              "url": "https://github.com/${{ github.repository }}/releases/tag/v${{ steps.vsix.outputs.version }}"
+                            }
+                          },
+                          "iconUrl": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9a/Visual_Studio_Code_1.35_icon.svg/512px-Visual_Studio_Code_1.35_icon.svg.png",
+                          "button": {
+                            "textButton": {
+                              "text": "Download VSIX",
+                              "onClick": {
+                                "openLink": {
+                                  "url": "https://github.com/${{ github.repository }}/releases/download/v${{ steps.vsix.outputs.version }}/${{ steps.vsix.outputs.vsixName }}"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+          EOF
+          )
+          curl \
+            -X POST \
+            -H 'Content-Type: application/json' \
+            "${{ steps.chat.outputs.chatAPI }}" \
+            -d "$body"

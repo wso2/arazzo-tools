@@ -9,6 +9,18 @@ on:
       runTrivy:
         type: boolean
         default: true
+      arazzo:
+        description: Build Arazzo extension
+        type: boolean
+        required: false
+        default: true
+      version:
+        default: 'N/A'
+        type: string
+        required: false
+      isReleaseBuild:
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       isPreRelease:
@@ -19,6 +31,21 @@ on:
         type: boolean
         required: true
         default: true
+      arazzo:
+        description: Build Arazzo extension
+        type: boolean
+        required: true
+        default: true
+      version:
+        type: choice
+        description: 'Enter the version type'
+        required: true
+        default: 'N/A'
+        options:
+          - 'patch'
+          - 'minor'
+          - 'major'
+          - 'N/A'
 
 jobs:
   build:
@@ -51,13 +78,20 @@ jobs:
       - name: Install dependencies
         run: node common/scripts/install-run-rush.js install
 
+      - name: Update Arazzo visualizer version
+        if: ${{ inputs.version != 'N/A' }}
+        working-directory: extensions/arazzo-visualizer/arazzo-designer-extension
+        run: npm version ${{ inputs.version }} --no-git-tag-version
+
       - name: Build Arazzo visualizer
+        if: ${{ inputs.arazzo }}
         run: node common/scripts/install-run-rush.js build --to arazzo-visualizer
 
       - name: Upload VSIX
+        if: ${{ inputs.arazzo }}
         uses: actions/upload-artifact@v4
         with:
-          name: arazzo-visualizer-vsix
+          name: VSIX
           path: |
             arazzo-visualizer-*.vsix
             extensions/arazzo-visualizer/arazzo-designer-extension/vsix/*.vsix
