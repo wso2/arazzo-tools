@@ -47,10 +47,12 @@ jobs:
           run_id: ${{ github.event.inputs.workflowRunId }}
           name: VSIX
 
-      - name: Unzip
+      - name: Prepare artifact
         run: |
-          unzip VSIX.zip
-          rm VSIX.zip
+          if [ -f VSIX.zip ]; then
+            unzip VSIX.zip
+            rm VSIX.zip
+          fi
 
       - name: Use Node.js 20.x
         uses: actions/setup-node@v1
@@ -93,35 +95,39 @@ jobs:
         if: ${{ github.event.inputs.openVSX == 'true' }}
         run: ovsx publish -p ${{ secrets.OPENVSX_TOKEN }} --packagePath ${{ steps.vsix.outputs.vsixName }} ${{ steps.vsix.outputs.releaseMode }}
 
-      - name: Create a release in ${{ steps.repo.outputs.repo }} repo
+      - name: Update existing release in ${{ steps.repo.outputs.repo }} repo
         id: create_release
         if: ${{ steps.repo.outputs.repo != '' && github.event.inputs.isPreRelease == 'false' }}
         run: |
+          set -euo pipefail
           id=$(curl -X GET -H "Accept: application/vnd.github.v3+json" \
           -H "Authorization:token ${{ secrets.CHOREO_BOT_TOKEN }}" \
           https://api.github.com/repos/${{ steps.repo.outputs.repo }}/releases/tags/v${{ steps.vsix.outputs.version }} \
-           | jq -r .id) && \
-           curl -X PATCH -H "Accept: application/vnd.github.v3+json" \
-          -H "Authorization:token ${{ secrets.CHOREO_BOT_TOKEN }}" \
-            -d '{"draft":false,"prerelease":false}' \
-            https://api.github.com/repos/${{ steps.repo.outputs.repo }}/releases/$id
+           | jq -r .id)
 
-          if [ $? -eq 0 ]; then
-            echo "release_created=true" >> $GITHUB_OUTPUT
-            echo "Release successfully created/updated for version v${{ steps.vsix.outputs.version }}"
-          else
-            echo "release_created=false" >> $GITHUB_OUTPUT
-            echo "Failed to create/update release for version v${{ steps.vsix.outputs.version }}"
+          if [ -z "$id" ] || [ "$id" = "null" ]; then
+            echo "Release v${{ steps.vsix.outputs.version }} was not found in ${{ steps.repo.outputs.repo }}."
             exit 1
           fi
 
-      - name: Set Chat API
-        id: chat
-        run: echo "chatAPI=${{ secrets.TOOLING_TEAM_CHAT_API }}" >> $GITHUB_OUTPUT
+          curl -X PATCH -H "Accept: application/vnd.github.v3+json" \
+            -H "Authorization:token ${{ secrets.CHOREO_BOT_TOKEN }}" \
+            -d '{"draft":false,"prerelease":false}' \
+            https://api.github.com/repos/${{ steps.repo.outputs.repo }}/releases/$id
+
+          echo "release_created=true" >> $GITHUB_OUTPUT
+          echo "Release successfully updated for version v${{ steps.vsix.outputs.version }}"
 
       - name: "Release Notification"
         if: ${{ github.event.inputs.notify == 'true' }}
+        env:
+          CHAT_API: ${{ secrets.TOOLING_TEAM_CHAT_API }}
         run: |
+          if [ -z "$CHAT_API" ]; then
+            echo "TOOLING_TEAM_CHAT_API is not configured. Skipping release notification."
+            exit 0
+          fi
+
           body=$(cat << EOF
           {
             "cards": [
@@ -178,5 +184,5 @@ jobs:
           curl \
             -X POST \
             -H 'Content-Type: application/json' \
-            "${{ steps.chat.outputs.chatAPI }}" \
+            "$CHAT_API" \
             -d "$body"
