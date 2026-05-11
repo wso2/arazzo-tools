@@ -35,6 +35,11 @@ jobs:
         with:
           node-version: 22.x
 
+      - name: Set up PNPM
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.11.0 --activate
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:

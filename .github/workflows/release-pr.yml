@@ -30,6 +30,11 @@ jobs:
         with:
           node-version: 22.x
 
+      - name: Set up PNPM
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.11.0 --activate
+
       - name: Bump extension version
         working-directory: extensions/arazzo-visualizer/arazzo-designer-extension
         run: npm version ${{ inputs.version }} --no-git-tag-version
