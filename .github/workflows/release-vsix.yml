@@ -84,7 +84,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          token: ${{ secrets.CHOREO_BOT_TOKEN }}
           fetch-depth: 0
 
       - name: Download VSIX
@@ -106,23 +105,12 @@ jobs:
           echo "version=$version" >> $GITHUB_OUTPUT
           echo "packageVersion=$packageVersion" >> $GITHUB_OUTPUT
 
-      - name: Set Chat API
-        id: chat
-        run: |
-          if [ "${{ github.event.inputs.arazzo }}" == "true" ]; then
-            echo "chatAPI=${{ secrets.TOOLING_TEAM_CHAT_API }}" >> $GITHUB_OUTPUT
-          else
-            echo "chatAPI=${{ secrets.TOOLING_TEAM_CHAT_API }}" >> $GITHUB_OUTPUT
-          fi
-
       - name: Create a release in wso2/arazzo-tools repo for arazzo
         if: ${{ github.event.inputs.arazzo == 'true' }}
         uses: ./.github/actions/release
         with:
           repo: wso2/arazzo-tools
-          token: ${{ secrets.CHOREO_BOT_TOKEN }}
           name: arazzo-visualizer
-          chatAPI: ${{ steps.chat.outputs.chatAPI }}
 
       - name: Update Arazzo visualizer package version
         if: ${{ github.event.inputs.arazzo == 'true' }}
@@ -137,14 +125,10 @@ jobs:
           fs.writeFileSync(path, `${JSON.stringify(pkg, null, 2)}\n`);
           NODE
 
-      - name: Create PR and notify
+      - name: Create PR
         uses: ./.github/actions/pr
         with:
           version: ${{ steps.vsix.outputs.version }}
           isPreRelease: ${{ github.event.inputs.isPreRelease }}
-          bot_username: ${{ secrets.CHOREO_BOT_USERNAME }}
-          bot_email: ${{ secrets.CHOREO_BOT_EMAIL }}
-          bot_token: ${{ secrets.CHOREO_BOT_TOKEN }}
           ref_name: ${{ github.ref_name }}
           arazzo: ${{ inputs.arazzo }}
-          chatAPI: ${{ secrets.TOOLING_TEAM_CHAT_API }}

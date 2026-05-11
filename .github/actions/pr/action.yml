@@ -1,5 +1,5 @@
-name: 'Create PR and sent notification'
-description: 'Create a release branch, open a stable PR, and send a notification'
+name: 'Create PR'
+description: 'Create a release branch and open a stable PR'
 inputs:
   version:
     description: 'Publish version'
@@ -7,18 +7,6 @@ inputs:
   isPreRelease:
     description: 'Whether this is a pre-release'
     default: 'true'
-  chatAPI:
-    description: 'Google chat API'
-    required: false
-  bot_username:
-    description: 'Ballerina bot username'
-    required: true
-  bot_email:
-    description: 'Ballerina bot email'
-    required: true
-  bot_token:
-    description: 'Ballerina bot token'
-    required: true
   ref_name:
     description: 'Branch name'
     required: true
@@ -32,8 +20,8 @@ runs:
       - name: Config git
         shell: bash
         run: |
-          git config user.name ${{ inputs.bot_username }}
-          git config user.email ${{ inputs.bot_email }}
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
 
       - name: Add Arazzo git changes
         if: ${{ inputs.arazzo == 'true' }}
@@ -44,10 +32,10 @@ runs:
         shell: bash
         id: commit
         run: |
-          git remote set-url origin https://${{ inputs.bot_token }}@github.com/${{ github.repository }}.git
+          git remote set-url origin https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git
           git diff --staged --quiet || git commit -m "Update version to ${{ inputs.version }}"
         env:
-          GH_TOKEN: ${{ inputs.bot_token }}
+          GH_TOKEN: ${{ github.token }}
 
       - name: Create tag
         shell: bash
@@ -76,53 +64,4 @@ runs:
           pr=$(gh pr create -B "$baseBranch" -H "${{ inputs.version }}" --title "Merge \"${{ inputs.version }}\" into \"$baseBranch\"" --body '$subject')
           echo "prURL=$pr" >> $GITHUB_OUTPUT
         env:
-          GH_TOKEN: ${{ inputs.bot_token }}
-
-      - name: "PR Notification"
-        if: ${{ inputs.isPreRelease == 'false' }}
-        shell: bash
-        run: |
-          if [ -z "${{ inputs.chatAPI }}" ]; then
-            echo "Chat API is not configured. Skipping PR notification."
-            exit 0
-          fi
-
-          body=$(cat << EOF
-          {
-            "cards": [
-              {
-                "header": {
-                    "title": "New Release PR"
-                },
-                "sections": [
-                  {
-                    "widgets": [
-                      {
-                        "keyValue": {
-                          "topLabel": "Pull Request",
-                          "content": "${{ steps.pr.outputs.prURL }}",
-                          "button": {
-                            "textButton": {
-                              "text": "Merge",
-                              "onClick": {
-                                "openLink": {
-                                  "url": "${{ steps.pr.outputs.prURL }}"
-                                }
-                              }
-                            }
-                          }
-                        }
-                      }
-                    ]
-                  }
-                ]
-              }
-            ]
-          }
-          EOF
-          )
-          curl \
-            -X POST \
-            -H 'Content-Type: application/json' \
-            "${{ inputs.chatAPI }}" \
-            -d "$body"
+          GH_TOKEN: ${{ github.token }}
