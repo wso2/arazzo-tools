@@ -1,27 +1,12 @@
-name: 'Create PR and sent notification'
-description: 'Create a release PR and send a notification'
+name: 'Create PR'
+description: 'Create a release branch and open a stable PR'
 inputs:
   version:
-    description: 'Release branch and tag name'
-    required: true
-  packageVersion:
-    description: 'Arazzo Visualizer package version'
+    description: 'Publish version'
     required: true
   isPreRelease:
     description: 'Whether this is a pre-release'
     default: 'true'
-  chatAPI:
-    description: 'Google chat API'
-    required: false
-  bot_username:
-    description: 'Bot username'
-    required: true
-  bot_email:
-    description: 'Bot email'
-    required: true
-  bot_token:
-    description: 'Bot token'
-    required: true
   ref_name:
     description: 'Branch name'
     required: true
@@ -32,103 +17,51 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Config git
-      shell: bash
-      run: |
-        git config user.name "${{ inputs.bot_username }}"
-        git config user.email "${{ inputs.bot_email }}"
-        git remote set-url origin "https://x-access-token:${{ inputs.bot_token }}@github.com/${{ github.repository }}.git"
+      - name: Config git
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
 
-    - name: Add Arazzo git changes
-      if: ${{ inputs.arazzo == 'true' }}
-      shell: bash
-      run: git add extensions/arazzo-visualizer/arazzo-designer-extension/package.json
+      - name: Add Arazzo git changes
+        if: ${{ inputs.arazzo == 'true' }}
+        shell: bash
+        run: git add extensions/arazzo-visualizer/arazzo-designer-extension/package.json
 
-    - name: Commit version
-      shell: bash
-      id: commit
-      run: git diff --staged --quiet || git commit -m "Update version to ${{ inputs.version }}"
-      env:
-        GH_TOKEN: ${{ inputs.bot_token }}
+      - name: Commit version
+        shell: bash
+        id: commit
+        run: |
+          git remote set-url origin https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git
+          git diff --staged --quiet || git commit -m "Update version to ${{ inputs.version }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
 
-    - name: Create tag
-      shell: bash
-      id: create_tag
-      run: |
-        if git rev-parse -q --verify "refs/tags/${{ inputs.version }}" >/dev/null; then
-          echo "Tag ${{ inputs.version }} already exists. Skipping tag creation."
-        else
-          git tag "${{ inputs.version }}"
+      - name: Create tag
+        shell: bash
+        id: create_tag
+        run: |
+          git tag ${{ inputs.version }}
           git push origin "refs/tags/${{ inputs.version }}"
-        fi
 
-    - name: Create release branch
-      shell: bash
-      if: ${{ inputs.isPreRelease == 'false' }}
-      id: create_branch
-      run: |
-        git checkout -B "${{ inputs.version }}"
-        git push origin "refs/heads/${{ inputs.version }}"
+      - name: Create release branch
+        shell: bash
+        if: ${{ inputs.isPreRelease == 'false' }}
+        id: create_branch
+        run: |
+          git checkout -b "${{ inputs.version }}"
+          git push origin "refs/heads/${{ inputs.version }}"
 
-    - name: Create Pull Request
-      shell: bash
-      if: ${{ inputs.isPreRelease == 'false' }}
-      id: pr
-      run: |
-        baseBranch="stable/arazzo-visualizer"
-        pr=$(gh pr list --base "$baseBranch" --head "${{ inputs.version }}" --json url --jq '.[0].url')
-        if [ -z "$pr" ]; then
+      - name: Create Pull Request
+        shell: bash
+        if: ${{ inputs.isPreRelease == 'false' }}
+        id: pr
+        run: |
+          baseBranch=""
+          if [ "${{ inputs.arazzo }}" == 'true' ]; then
+            baseBranch="stable/arazzo-visualizer"
+          fi
           pr=$(gh pr create -B "$baseBranch" -H "${{ inputs.version }}" --title "Merge \"${{ inputs.version }}\" into \"$baseBranch\"" --body '$subject')
-        fi
-        echo "prURL=$pr" >> $GITHUB_OUTPUT
-      env:
-        GH_TOKEN: ${{ inputs.bot_token }}
-
-    - name: "PR Notification"
-      if: ${{ inputs.isPreRelease == 'false' }}
-      shell: bash
-      run: |
-        if [ -z "${{ inputs.chatAPI }}" ]; then
-          echo "Chat API is not configured. Skipping PR notification."
-          exit 0
-        fi
-
-        body=$(cat << EOF
-        {
-          "cards": [
-            {
-              "header": {
-                  "title": "New Release PR"
-              },
-              "sections": [
-                {
-                  "widgets": [
-                    {
-                      "keyValue": {
-                        "topLabel": "Pull Request",
-                        "content": "${{ steps.pr.outputs.prURL }}",
-                        "button": {
-                          "textButton": {
-                            "text": "Merge",
-                            "onClick": {
-                              "openLink": {
-                                "url": "${{ steps.pr.outputs.prURL }}"
-                              }
-                            }
-                          }
-                        }
-                      }
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        }
-        EOF
-        )
-        curl \
-          -X POST \
-          -H 'Content-Type: application/json' \
-          "${{ inputs.chatAPI }}" \
-          -d "$body"
+          echo "prURL=$pr" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ github.token }}

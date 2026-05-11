@@ -24,11 +24,6 @@ on:
         type: boolean
         required: true
         default: false
-      notify:
-        description: Notify release on VSCode chat
-        type: boolean
-        required: true
-        default: false
       workflowRunId:
         required: true
 
@@ -47,12 +42,10 @@ jobs:
           run_id: ${{ github.event.inputs.workflowRunId }}
           name: VSIX
 
-      - name: Prepare artifact
+      - name: Unzip
         run: |
-          if [ -f VSIX.zip ]; then
-            unzip VSIX.zip
-            rm VSIX.zip
-          fi
+          unzip VSIX.zip
+          rm VSIX.zip
 
       - name: Use Node.js 20.x
         uses: actions/setup-node@v1
@@ -67,9 +60,9 @@ jobs:
         id: vsix
         run: |
           file=$(ls ${{ github.event.inputs.extension }}-[0-9]*.[0-9]*.[0-9]*.vsix)
+          fileName=${file##*-}
+          version=${fileName%.*}
           extension=${{ github.event.inputs.extension }}
-          version=$(basename "$file" .vsix)
-          version=${version#${extension}-}
           extensionName="$(echo "$extension" | sed 's/.*/\u&/')"
           echo "vsixName=$file" >> $GITHUB_OUTPUT
           echo "version=$version" >> $GITHUB_OUTPUT
@@ -95,94 +88,25 @@ jobs:
         if: ${{ github.event.inputs.openVSX == 'true' }}
         run: ovsx publish -p ${{ secrets.OPENVSX_TOKEN }} --packagePath ${{ steps.vsix.outputs.vsixName }} ${{ steps.vsix.outputs.releaseMode }}
 
-      - name: Update existing release in ${{ steps.repo.outputs.repo }} repo
+      - name: Create a release in ${{ steps.repo.outputs.repo }} repo
         id: create_release
         if: ${{ steps.repo.outputs.repo != '' && github.event.inputs.isPreRelease == 'false' }}
         run: |
-          set -euo pipefail
-          id=$(curl -X GET -H "Accept: application/vnd.github.v3+json" \
-          -H "Authorization:token ${{ secrets.CHOREO_BOT_TOKEN }}" \
+          id=`curl -X GET -H "Accept: application/vnd.github.v3+json" \
+          -H "Authorization: Bearer ${{ github.token }}" \
           https://api.github.com/repos/${{ steps.repo.outputs.repo }}/releases/tags/v${{ steps.vsix.outputs.version }} \
-           | jq -r .id)
+           | jq -r .id` && \
+           updateResponse=`curl -X PATCH -H "Accept: application/vnd.github.v3+json" \
+          -H "Authorization: Bearer ${{ github.token }}" \
+            -d '{"draft":false,"prerelease":false}' \
+            https://api.github.com/repos/${{ steps.repo.outputs.repo }}/releases/$id`
 
-          if [ -z "$id" ] || [ "$id" = "null" ]; then
-            echo "Release v${{ steps.vsix.outputs.version }} was not found in ${{ steps.repo.outputs.repo }}."
+          # Verify the release was created/updated successfully
+          if [ $? -eq 0 ]; then
+            echo "release_created=true" >> $GITHUB_OUTPUT
+            echo "Release successfully created/updated for version v${{ steps.vsix.outputs.version }}"
+          else
+            echo "release_created=false" >> $GITHUB_OUTPUT
+            echo "Failed to create/update release for version v${{ steps.vsix.outputs.version }}"
             exit 1
           fi
-
-          curl -X PATCH -H "Accept: application/vnd.github.v3+json" \
-            -H "Authorization:token ${{ secrets.CHOREO_BOT_TOKEN }}" \
-            -d '{"draft":false,"prerelease":false}' \
-            https://api.github.com/repos/${{ steps.repo.outputs.repo }}/releases/$id
-
-          echo "release_created=true" >> $GITHUB_OUTPUT
-          echo "Release successfully updated for version v${{ steps.vsix.outputs.version }}"
-
-      - name: "Release Notification"
-        if: ${{ github.event.inputs.notify == 'true' }}
-        env:
-          CHAT_API: ${{ secrets.TOOLING_TEAM_CHAT_API }}
-        run: |
-          if [ -z "$CHAT_API" ]; then
-            echo "TOOLING_TEAM_CHAT_API is not configured. Skipping release notification."
-            exit 0
-          fi
-
-          body=$(cat << EOF
-          {
-            "cards": [
-              {
-                "header": {
-                    "title": "Marketplace Release",
-                    "subtitle": "${{ steps.vsix.outputs.extensionName }} Extension"
-                },
-                "sections": [
-                  {
-                    "widgets": [
-                      {
-                        "keyValue": {
-                          "topLabel": "VSCode Marketplace",
-                          "content": "v${{ steps.vsix.outputs.version }}",
-                          "iconUrl": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9a/Visual_Studio_Code_1.35_icon.svg/512px-Visual_Studio_Code_1.35_icon.svg.png",
-                          "button": {
-                            "textButton": {
-                              "text": "View",
-                              "onClick": {
-                                "openLink": {
-                                  "url": "https://marketplace.visualstudio.com/items?itemName=WSO2.${{ github.event.inputs.extension }}"
-                                }
-                              }
-                            }
-                          }
-                        }
-                      },
-                      {
-                        "keyValue": {
-                          "topLabel": "OpenVSX Marketplace",
-                          "content": "v${{ steps.vsix.outputs.version }}",
-                          "iconUrl": "https://projects.eclipse.org/sites/default/files/open-vsx-logo-withouttext.png",
-                          "button": {
-                            "textButton": {
-                              "text": "View",
-                              "onClick": {
-                                "openLink": {
-                                  "url": "https://open-vsx.org/extension/wso2/${{ github.event.inputs.extension }}"
-                                }
-                              }
-                            }
-                          }
-                        }
-                      }
-                    ]
-                  }
-                ]
-              }
-            ]
-          }
-          EOF
-          )
-          curl \
-            -X POST \
-            -H 'Content-Type: application/json' \
-            "$CHAT_API" \
-            -d "$body"

@@ -1,0 +1,37 @@
+name: 'Release vsix to github'
+description: 'Create a GitHub release for a VSIX'
+inputs:
+  repo:
+    description: 'Github repository name'
+    required: true
+  name:
+    description: 'File name'
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Get version
+      shell: bash
+      id: vsix
+      run: |
+        file=$(ls ${{ inputs.name }}-[0-9]*.[0-9]*.[0-9]*.vsix)
+        fileName=${file##*-}
+        version=${fileName%.*}
+        extension=${{ inputs.name }}
+        extensionName="$(echo "$extension" | sed 's/.*/\u&/')"
+        echo "vsixName=$file" >> $GITHUB_OUTPUT
+        echo "version=$version" >> $GITHUB_OUTPUT
+        echo "extensionName=$extensionName" >> $GITHUB_OUTPUT
+
+    - name: Create a release in ${{ inputs.repo }} repo
+      shell: bash
+      run: |
+        createResponse=`curl -X POST  -H "Accept: application/vnd.github.v3+json" \
+        -H "Authorization: Bearer ${{ github.token }}" -d '{"tag_name":"v${{ steps.vsix.outputs.version }}", \
+        "draft":false, "name": "Release v${{ steps.vsix.outputs.version }}", "prerelease":true}' \
+        https://api.github.com/repos/${{ inputs.repo }}/releases` \
+          && id=`echo "$createResponse" | sed -n -e 's/"id":\ \([0-9]\+\),/\1/p' | head -n 1 | sed 's/[[:blank:]]//g'` && \
+          uploadResponse=`curl -X POST -H "Authorization: Bearer ${{ github.token }}" -H "Content-Type:application/octet-stream" \
+          --data-binary @${{ steps.vsix.outputs.vsixName }} \
+          https://uploads.github.com/repos/${{ inputs.repo }}/releases/$id/assets?name=${{ steps.vsix.outputs.vsixName }}`
