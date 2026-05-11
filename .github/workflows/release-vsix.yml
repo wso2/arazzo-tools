@@ -24,6 +24,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   Build:
@@ -81,6 +82,11 @@ jobs:
     timeout-minutes: 45
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.CHOREO_BOT_TOKEN }}
+          fetch-depth: 0
+
       - name: Download VSIX
         uses: actions/download-artifact@v4
         with:
@@ -97,10 +103,20 @@ jobs:
           version=${fileName%.*}
           echo "vsixName=$file" >> $GITHUB_OUTPUT
           echo "version=$version" >> $GITHUB_OUTPUT
+          echo "releaseBranch=arazzo-visualizer-$version" >> $GITHUB_OUTPUT
 
-      - name: Set Chat API
-        id: chat
-        run: echo "chatAPI=${{ secrets.TOOLING_TEAM_CHAT_API }}" >> $GITHUB_OUTPUT
+      - name: Update Arazzo visualizer package version
+        if: ${{ github.event.inputs.arazzo == 'true' }}
+        env:
+          PACKAGE_VERSION: ${{ steps.vsix.outputs.version }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = 'extensions/arazzo-visualizer/arazzo-designer-extension/package.json';
+          const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
+          pkg.version = process.env.PACKAGE_VERSION;
+          fs.writeFileSync(path, `${JSON.stringify(pkg, null, 2)}\n`);
+          NODE
 
       - name: Create a release in wso2/arazzo-tools repo for arazzo
         if: ${{ github.event.inputs.arazzo == 'true' }}
@@ -113,7 +129,14 @@ jobs:
 
       - name: Release Notification
         if: ${{ github.event.inputs.arazzo == 'true' }}
+        env:
+          CHAT_API: ${{ secrets.TOOLING_TEAM_CHAT_API }}
         run: |
+          if [ -z "$CHAT_API" ]; then
+            echo "TOOLING_TEAM_CHAT_API is not configured. Skipping release notification."
+            exit 0
+          fi
+
           body=$(cat << EOF
           {
             "cards": [
@@ -157,5 +180,18 @@ jobs:
           curl \
             -X POST \
             -H 'Content-Type: application/json' \
-            "${{ steps.chat.outputs.chatAPI }}" \
+            "$CHAT_API" \
             -d "$body"
+
+      - name: Create PR and notify
+        uses: ./.github/actions/pr
+        with:
+          version: ${{ steps.vsix.outputs.releaseBranch }}
+          packageVersion: ${{ steps.vsix.outputs.version }}
+          isPreRelease: ${{ github.event.inputs.isPreRelease }}
+          bot_username: ${{ secrets.CHOREO_BOT_USERNAME }}
+          bot_email: ${{ secrets.CHOREO_BOT_EMAIL }}
+          bot_token: ${{ secrets.CHOREO_BOT_TOKEN }}
+          ref_name: ${{ github.ref_name }}
+          arazzo: ${{ inputs.arazzo }}
+          chatAPI: ${{ secrets.TOOLING_TEAM_CHAT_API }}
