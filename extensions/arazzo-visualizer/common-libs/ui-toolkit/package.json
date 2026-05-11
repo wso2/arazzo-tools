@@ -2,7 +2,7 @@
   "name": "@wso2/ui-toolkit",
   "version": "2.0.24050215",
   "description": "Common ui-toolkit for other components",
-  "homepage": "http://wso2.github.io/vscode-extensions.git",
+  "homepage": "http://github.com/wso2/arazzo-tools.git",
   "files": [
     "lib"
   ],

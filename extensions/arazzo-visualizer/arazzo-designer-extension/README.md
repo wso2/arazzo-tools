@@ -56,7 +56,7 @@ Copilot can also control the runner engine for you. Ask it to start the server, 
 
 > "Disable TLS validation and try again."
 
-![Sample Demo](https://raw.githubusercontent.com/wso2/vscode-extensions/arazzo-extension/workspaces/arazzo/arazzo-designer-extension/assets/v3_visualizer_demo.gif)
+![Sample Demo](https://raw.githubusercontent.com/wso2/arazzo-tools/main/extensions/arazzo-visualizer/arazzo-designer-extension/assets/v3_visualizer_demo.gif)
 
 ### Run Workflows
 
@@ -72,7 +72,7 @@ Use it to execute an Arazzo workflow from VS Code and see how each API call beha
 - **Review what happened:** Use the execution logs and trace details to understand failures, slow steps, and unexpected results.
 - **No separate setup:** The runner is packaged with the extension, so you do not need to install another tool to try a workflow.
 
-![Execution Demo](https://raw.githubusercontent.com/wso2/vscode-extensions/arazzo-extension/workspaces/arazzo/arazzo-designer-extension/assets/v3_execution_demo.gif)
+![Execution Demo](https://raw.githubusercontent.com/wso2/arazzo-tools/main/extensions/arazzo-visualizer/arazzo-designer-extension/assets/v3_execution_demo.gif)
 
 ### Try with curl
 
@@ -84,7 +84,7 @@ When you click it, the extension builds the curl request for you, displays the r
 - **TLS validation:** If a run fails because of a certificate error, the extension detects it and offers a one-click shortcut to disable TLS validation in your workspace settings (or you can toggle it manually in **Settings -> Extensions -> Arazzo Visualizer**).
 - **Server control:** A stop button is available in the editor toolbar while the server is running, so you can shut it down at any time without leaving the editor.
 
-![Try with curl Demo](https://raw.githubusercontent.com/wso2/vscode-extensions/arazzo-extension/workspaces/arazzo/arazzo-designer-extension/assets/v3_curl_demo.gif)
+![Try with curl Demo](https://raw.githubusercontent.com/wso2/arazzo-tools/main/extensions/arazzo-visualizer/arazzo-designer-extension/assets/v3_curl_demo.gif)
 
 ### Execution Logs
 

@@ -2,6 +2,14 @@
 
 All notable changes to the "arazzo-visualizer" extension will be documented in this file.
 
+## 0.3.1
+
+### Fixed
+- **Operation resolution**: Fixed runner support for Arazzo operation references scoped through source descriptions.
+  - `operationPath` now supports expressions such as `{$sourceDescriptions.<name>.url}#/paths/...`
+  - `operationPath` can resolve path-item pointers without an explicit HTTP method when the path has a single operation
+  - `operationId` now supports qualified references such as `$sourceDescriptions.<name>.<operationId>`
+
 ## 0.3.0
 
 ### Added
