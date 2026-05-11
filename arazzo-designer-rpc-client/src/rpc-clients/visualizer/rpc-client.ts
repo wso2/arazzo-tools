@@ -1,0 +1,92 @@
+/**
+ * Copyright (c) 2025, WSO2 LLC. (https://www.wso2.com) All Rights Reserved.
+ *
+ * WSO2 LLC. licenses this file to you under the Apache License,
+ * Version 2.0 (the "License"); you may not use this file except
+ * in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ * 
+ * THIS FILE INCLUDES AUTO GENERATED CODE
+ */
+import {
+    VisualizerAPI,
+    GetArazzoModelRequest,
+    GetArazzoModelResponse,
+    GoToSourceRequest,
+    HistoryEntry,
+    HistoryEntryResponse,
+    OpenViewRequest,
+    RunWorkflowRequest,
+    GetWorkflowRunInputsRequest,
+    GetWorkflowRunInputsResponse,
+    SaveWorkflowRunInputsRequest,
+    addToHistory,
+    getHistory,
+    getArazzoModel,
+    goBack,
+    goHome,
+    goToSource,
+    openView,
+    runWorkflow,
+    getWorkflowRunInputs,
+    saveWorkflowRunInputs,
+} from "@wso2/arazzo-designer-core";
+import { HOST_EXTENSION } from "vscode-messenger-common";
+import { Messenger } from "vscode-messenger-webview";
+
+export class VisualizerRpcClient implements VisualizerAPI {
+    private _messenger: Messenger;
+
+    constructor(messenger: Messenger) {
+        this._messenger = messenger;
+    }
+
+    openView(params: OpenViewRequest): void {
+        return this._messenger.sendNotification(openView, HOST_EXTENSION, params);
+    }
+
+    goBack(): void {
+        return this._messenger.sendNotification(goBack, HOST_EXTENSION);
+    }
+
+    getHistory(): Promise<HistoryEntryResponse> {
+        return this._messenger.sendRequest(getHistory, HOST_EXTENSION);
+    }
+
+    addToHistory(params: HistoryEntry): void {
+        return this._messenger.sendNotification(addToHistory, HOST_EXTENSION, params);
+    }
+
+    goHome(): void {
+        return this._messenger.sendNotification(goHome, HOST_EXTENSION);
+    }
+
+    goToSource(params: GoToSourceRequest): void {
+        return this._messenger.sendNotification(goToSource, HOST_EXTENSION, params);
+    }
+
+    getArazzoModel(params: GetArazzoModelRequest): Promise<GetArazzoModelResponse> {
+        return this._messenger.sendRequest(getArazzoModel, HOST_EXTENSION, params);
+    }
+
+    runWorkflow(params: RunWorkflowRequest): void {
+        return this._messenger.sendNotification(runWorkflow, HOST_EXTENSION, params);
+    }
+
+    getWorkflowRunInputs(params: GetWorkflowRunInputsRequest): Promise<GetWorkflowRunInputsResponse> {
+        return this._messenger.sendRequest(getWorkflowRunInputs, HOST_EXTENSION, params);
+    }
+
+    saveWorkflowRunInputs(params: SaveWorkflowRunInputsRequest): void {
+        return this._messenger.sendNotification(saveWorkflowRunInputs, HOST_EXTENSION, params);
+    }
+}

@@ -1,0 +1,402 @@
+/**
+ * Copyright (c) 2025, WSO2 LLC. (https://www.wso2.com) All Rights Reserved.
+ *
+ * WSO2 LLC. licenses this file to you under the Apache License,
+ * Version 2.0 (the "License"); you may not use this file except
+ * in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+import { FlowNode } from '../utils/types';
+import { Node, Edge, MarkerType } from '@xyflow/react';
+import * as C from '../constants/nodeConstants';
+import { DepthSearch } from './DepthSearch_v2';
+import { ThemeColors } from '@wso2/ui-toolkit';
+import { MODERN } from '../constants';
+import { ArazzoDefinition } from '@wso2/arazzo-designer-core';
+import { resolveReference } from '../utils/referenceUtils';
+
+interface Rect {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+}
+
+/**
+ * PortalCreator V2: Smart portal creation for vertical "Happy Path" layout.
+ * 
+ * Portal Rules:
+ * 1. Failure path → Main path: CREATE PORTAL (no direct edge back to spine)
+ * 2. Main path branch → Main path merge: NO PORTAL (direct edge, simple merge)
+ * 3. Failure path → Failure-only node: NO PORTAL (direct edge within failure context)
+ */
+export class PortalCreator_v2 {
+    private reactNodes: Node[] = [];
+    private reactEdges: Edge[] = [];
+    private visited: Set<string> = new Set();
+    private portalCounter: number = 0;
+    private mainPathNodes: Set<string>;
+    private failurePathNodes: Set<string> = new Set();
+    private positionedNodeRects: Rect[] = [];
+    private readonly portalApproxWidth = 90;
+    private readonly portalApproxHeight = 28;
+    private definition?: ArazzoDefinition;
+
+    constructor(private depthSearch: DepthSearch, definition?: ArazzoDefinition) {
+        this.mainPathNodes = depthSearch.getHappyPathNodes();
+        this.definition = definition;
+    }
+
+    /**
+     * Create portals for the workflow tree.
+     * First pass: identify failure path nodes.
+     * Second pass: create portals where needed.
+     */
+    public createPortals(root: FlowNode) {
+        // Reset state
+        this.reactNodes = [];
+        this.reactEdges = [];
+        this.visited = new Set();
+        this.portalCounter = 0;
+        this.failurePathNodes.clear();
+        this.positionedNodeRects = this.collectAllNodeRects(root);
+
+        // Pass 1: Mark all nodes reachable via failure paths
+        this.markFailurePaths(root);
+
+        console.log('[PortalCreator V2] Main path nodes:', Array.from(this.mainPathNodes));
+        console.log('[PortalCreator V2] Failure path nodes:', Array.from(this.failurePathNodes));
+
+        // Pass 2: Traverse and create portals where needed
+        this.visited.clear();
+        this.traverse(root, false);
+
+        return { nodes: this.reactNodes, edges: this.reactEdges };
+    }
+
+    private collectAllNodeRects(root: FlowNode): Rect[] {
+        const rects: Rect[] = [];
+        const visited = new Set<string>();
+
+        const walk = (node: FlowNode) => {
+            if (!node || visited.has(node.id)) return;
+            visited.add(node.id);
+
+            if (Number.isFinite(node.viewState.x) && Number.isFinite(node.viewState.y) && Number.isFinite(node.viewState.w) && Number.isFinite(node.viewState.h)) {
+                rects.push({
+                    x: node.viewState.x,
+                    y: node.viewState.y,
+                    w: node.viewState.w,
+                    h: node.viewState.h,
+                });
+            }
+
+            node.children.forEach(walk);
+            if (node.failureNode) walk(node.failureNode);
+            node.branches?.forEach(branch => {
+                if (branch.length > 0) walk(branch[0]);
+            });
+        };
+
+        walk(root);
+        return rects;
+    }
+
+    private rectsOverlap(a: Rect, b: Rect): boolean {
+        return !(
+            a.x + a.w <= b.x ||
+            b.x + b.w <= a.x ||
+            a.y + a.h <= b.y ||
+            b.y + b.h <= a.y
+        );
+    }
+
+    private isPortalSlotOccupied(portalX: number, portalY: number): boolean {
+        const portalRect: Rect = {
+            x: portalX,
+            y: portalY,
+            w: this.portalApproxWidth,
+            h: this.portalApproxHeight,
+        };
+
+        for (const rect of this.positionedNodeRects) {
+            if (this.rectsOverlap(portalRect, rect)) {
+                return true;
+            }
+        }
+
+        // Also avoid collisions with already placed portals.
+        for (const p of this.reactNodes) {
+            const px = (p.position as any)?.x;
+            const py = (p.position as any)?.y;
+            if (!Number.isFinite(px) || !Number.isFinite(py)) continue;
+
+            const existingPortalRect: Rect = {
+                x: px,
+                y: py,
+                w: this.portalApproxWidth,
+                h: this.portalApproxHeight,
+            };
+            if (this.rectsOverlap(portalRect, existingPortalRect)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private findNearestAvailablePortalPosition(baseX: number, baseY: number): { x: number; y: number } {
+        const stepX = C.NODE_WIDTH + C.NODE_GAP_X_Vertical;
+        let candidateX = baseX;
+        let attempts = 0;
+
+        while (this.isPortalSlotOccupied(candidateX, baseY) && attempts < 30) {
+            candidateX += stepX;
+            attempts++;
+        }
+
+        return { x: candidateX, y: baseY };
+    }
+
+    /**
+     * Mark all nodes that are reachable via failure paths.
+     */
+    private markFailurePaths(node: FlowNode, isInFailurePath: boolean = false, visited: Set<string> = new Set()): void {
+        if (visited.has(node.id)) return;
+        visited.add(node.id);
+
+        // Mark this node if we're in a failure path
+        if (isInFailurePath) {
+            this.failurePathNodes.add(node.id);
+        }
+
+        // Continue marking children (maintain current context)
+        node.children.forEach(child => this.markFailurePaths(child, isInFailurePath, visited));
+
+        // Failure node: switch to failure path context
+        if (node.failureNode) {
+            this.markFailurePaths(node.failureNode, true, visited);
+        }
+
+        // Branches: maintain current context (branches inherit parent's context)
+        node.branches?.forEach(branch => {
+            if (branch.length > 0) {
+                this.markFailurePaths(branch[0], isInFailurePath, visited);
+            }
+        });
+    }
+
+    /**
+     * Traverse tree and create portals according to the rules.
+     */
+    private traverse(node: FlowNode, isInFailurePath: boolean): void {
+        if (this.visited.has(node.id)) return;
+        this.visited.add(node.id);
+
+        // Update failure path context
+        const currentlyInFailurePath = isInFailurePath || this.failurePathNodes.has(node.id);
+
+        // Process success children
+        node.children.forEach(child => {
+            this.createPortalIfNeeded(node, child, 'success', currentlyInFailurePath);
+            this.traverse(child, currentlyInFailurePath);
+        });
+
+        // Process failure node (enter failure path context)
+        if (node.failureNode) {
+            this.createPortalIfNeeded(node, node.failureNode, 'failure', true);
+            this.traverse(node.failureNode, true);
+        }
+
+        // Process branches
+        node.branches?.forEach((branch, branchIndex) => {
+            if (branch.length > 0) {
+                const head = branch[0];
+                this.createPortalIfNeeded(node, head, 'success', currentlyInFailurePath, branchIndex);
+                this.traverse(head, currentlyInFailurePath);
+            }
+        });
+    }
+
+    /**
+     * Determine if a portal is needed based on the rules.
+     */
+    private createPortalIfNeeded(
+        source: FlowNode, 
+        target: FlowNode, 
+        edgeType: 'success' | 'failure',
+        sourceIsInFailurePath: boolean,
+        branchIndex?: number
+    ): void {
+        const targetIsOnMainPath = this.mainPathNodes.has(target.id);
+        const targetIsInFailurePath = this.failurePathNodes.has(target.id);
+        
+        // Check if this is a goto to an already-positioned node (not a direct child in tree)
+        // Portal should only be created if target is to the LEFT (backward horizontally)
+        const isBackwardJump = target.viewState.y < source.viewState.y;
+        // Compare centers: the edge connects to node centers, so check center X positions
+        const sourceCenterX = source.viewState.x + source.viewState.w / 2;
+        const targetCenterX = target.viewState.x + target.viewState.w / 2;
+        const isLeftwardJump = targetCenterX < sourceCenterX; // Target center is to the left of source center
+        const isForwardGoto = target.viewState.y > source.viewState.y + source.viewState.h + 100; // Significant gap
+
+        // Rule 1: Failure path → existing positioned step via leftward goto = CREATE PORTAL
+        // Only create a portal when the target is to the LEFT of source AND the target
+        // is already an existing positioned node (on main path or failure path).
+        // If the goto targets a *new* node (not on main/failure paths), create a direct edge instead.
+        if (sourceIsInFailurePath && isLeftwardJump && (targetIsOnMainPath || targetIsInFailurePath)) {
+            const reason = 'failure path goto (leftward to positioned node)';
+            console.log(`[PortalCreator V2] Creating portal: ${source.id} → ${target.id} (${reason})`);
+            this.createPortal(source, target, edgeType, reason, branchIndex);
+            return;
+        }
+
+        // Rule 2: Main path/alternative branch backward jump to main path = CREATE PORTAL
+        // In vertical layout, any backward jump (target.y < source.y) to an already-positioned
+        // node (main or failure path) should create a portal, regardless of X position.
+        if (!sourceIsInFailurePath && isBackwardJump && (targetIsOnMainPath || targetIsInFailurePath)) {
+            const reason = 'backward jump to positioned node';
+            console.log(`[PortalCreator V2] Creating portal: ${source.id} → ${target.id} (${reason})`);
+            this.createPortal(source, target, edgeType, reason, branchIndex);
+            return;
+        }
+
+        // Rule 3: Main path branch → Main path merge (forward, close proximity) = NO PORTAL
+        // Direct edge handled by NodeFactory
+        console.log(`[PortalCreator V2] No portal: ${source.id} → ${target.id} (direct flow)`);
+    }
+
+    /**
+     * Create a portal node and edges.
+     */
+    private createPortal(source: FlowNode, target: FlowNode, edgeType: 'success' | 'failure', reason?: string, branchIndex?: number): void {
+        const portalId = `portal_out_${source.id}_to_${target.id}_${this.portalCounter}`;
+        this.portalCounter++;
+
+        // Extract condition label from source node data
+        let conditionLabel: string | undefined = undefined;
+        if (source.type === 'CONDITION' && branchIndex !== undefined) {
+            const successAction = source.data?.onSuccess?.[branchIndex];
+            const failureAction = source.data?.onFailure?.[branchIndex];
+            const action = successAction || failureAction;
+
+            if (action && typeof action === 'object' && 'name' in action) {
+                conditionLabel = action.name;
+            } else if (action && typeof action === 'object' && 'reference' in action && typeof action.reference === 'string') {
+                const resolved = resolveReference(action.reference, this.definition);
+                conditionLabel = resolved?.name || `Branch ${branchIndex + 1}`;
+            } else {
+                conditionLabel = `Branch ${branchIndex + 1}`;
+            }
+        }
+
+        // Position portal.
+        // Requirement: when source is a CONDITION, align portal placement with condition branch slots:
+        //   branch#1 below condition, branch#2 to the right, branch#3 further right, etc.
+        // For non-condition sources (or when branch index can't be resolved), keep legacy positioning.
+        let portalX = source.viewState.x + source.viewState.w + 20;
+        let portalY = source.viewState.y;
+
+        if (source.type === 'CONDITION') {
+            const useBranchIndex = branchIndex ?? source.branches?.findIndex(branch => branch[0]?.id === target.id) ?? -1;
+
+            if (useBranchIndex !== -1) {
+                const sourceCenterX = source.viewState.x + (source.viewState.w / 2);
+                const isRetryTarget = target.type === 'RETRY';
+                const baseBranchY = isRetryTarget
+                    ? source.viewState.y + source.viewState.h + C.RETRY_GAP_Y_ConditionBranch
+                    : source.viewState.y + source.viewState.h + C.NODE_GAP_Y_AFTERCONDITION;
+
+                // branchIndex: 0 => below condition, 1 => first slot to the right, 2 => next slot, ...
+                const branchCenterX = sourceCenterX + (C.NODE_WIDTH + C.NODE_GAP_X_Vertical) * useBranchIndex;
+
+                // Portal node width is dynamic; use the dedicated horizontal offset constant for centering.
+                portalX = branchCenterX - C.PORTALNODE_GAP_X;
+                portalY = baseBranchY;
+            }
+        }
+
+        // Avoid overlap with existing positioned nodes/portals.
+        const resolvedPosition = this.findNearestAvailablePortalPosition(portalX, portalY);
+        portalX = resolvedPosition.x;
+        portalY = resolvedPosition.y;
+
+        // Target center coordinates for navigation
+        const targetCenterX = target.viewState.x + (target.viewState.w / 2);
+        const targetCenterY = target.viewState.y + (target.viewState.h / 2);
+
+        // Create portal node
+        this.reactNodes.push({
+            id: portalId,
+            type: 'portalNode',
+            position: { x: portalX, y: portalY },
+            data: {
+                label: `→ ${target.label}`,
+                gotoLabel: target.label,
+                gotoNodeId: target.id,
+                sourceNodeId: source.id,
+                gotoX: targetCenterX,
+                gotoY: targetCenterY
+            },
+            connectable: false
+        });
+
+        // Log portal created with reason
+        console.log(`[PortalCreator V2] Portal created: ${portalId} from ${source.id} → ${target.id}` + (reason ? ` (reason=${reason})` : ''));
+
+        // Determine source handle based on edge type
+        const sourceHandleId = edgeType === 'failure' ? 'h-right-source' : 'h-bottom';
+        const edgeStyle = edgeType === 'failure' 
+            ? { stroke: MODERN ? 'red' : 'var(--vscode-editor-foreground)', strokeWidth: C.STROKE_WIDTH, strokeLinecap: 'round' } 
+            : { stroke: MODERN ? ThemeColors.PRIMARY : 'var(--vscode-editor-foreground)', strokeWidth: C.STROKE_WIDTH, strokeLinecap: 'round' };
+
+        // Edge: source → portal
+        this.reactEdges.push({
+            id: `e_${source.id}-${portalId}`,
+            source: source.id,
+            target: portalId,
+            sourceHandle: sourceHandleId,
+            targetHandle: 'h-top-target',
+            type: 'plannedPath',
+            data: {
+                lineType: 'branch',
+                ...(conditionLabel ? { 
+                    label: conditionLabel, 
+                    labelPos: 0.5,
+                    labelOffset: { x: 0, y: -10 }
+                } : {})
+            },
+            markerEnd: { type: MarkerType.ArrowClosed },
+            style: edgeStyle
+        });
+
+        // Note: We don't create the portal → target edge here
+        // The portal node itself handles navigation via click interaction
+    }
+
+    /**
+     * Get the set of source→target pairs that are handled by portals.
+     * NodeFactory can use this to skip creating duplicate direct edges.
+     */
+    public getPortalEdgePairs(): Set<string> {
+        const pairs = new Set<string>();
+        this.reactNodes.forEach(portal => {
+            if (portal.data.sourceNodeId && portal.data.gotoNodeId) {
+                pairs.add(`${portal.data.sourceNodeId}::${portal.data.gotoNodeId}`);
+            }
+        });
+        return pairs;
+    }
+}
+
+export default PortalCreator_v2;
