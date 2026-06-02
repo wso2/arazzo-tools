@@ -98,6 +98,16 @@ func (c *CompletionProvider) detectContext(lines []string, currentLine int) stri
 				return "parameters"
 			} else if strings.HasPrefix(trimmed, "components:") {
 				return "components"
+			} else if strings.HasPrefix(trimmed, "requestBody:") {
+				return "requestBody"
+			} else if strings.HasPrefix(trimmed, "replacements:") {
+				return "replacements"
+			} else if strings.HasPrefix(trimmed, "onSuccess:") {
+				return "onSuccess"
+			} else if strings.HasPrefix(trimmed, "onFailure:") {
+				return "onFailure"
+			} else if strings.HasPrefix(trimmed, "successCriteria:") {
+				return "successCriteria"
 			} else if strings.Contains(trimmed, "- ") {
 				// We're in an array, continue searching for the parent
 				currentIndent = lineIndent
@@ -176,6 +186,48 @@ func (c *CompletionProvider) getRuntimeExpressionCompletions() []protocol.Comple
 			Documentation: "The request body sent to the API",
 			InsertText:    "request.body",
 		},
+		{
+			Label:         "self",
+			Kind:          protocol.CompletionItemKindVariable,
+			Detail:        "Reference to this Arazzo document (v1.1.0)",
+			Documentation: "A URI-reference identifying this Arazzo document",
+			InsertText:    "self",
+		},
+		{
+			Label:         "message.payload",
+			Kind:          protocol.CompletionItemKindVariable,
+			Detail:        "AsyncAPI message payload (v1.1.0)",
+			Documentation: "The payload of the received AsyncAPI message",
+			InsertText:    "message.payload",
+		},
+		{
+			Label:         "message.header.",
+			Kind:          protocol.CompletionItemKindVariable,
+			Detail:        "AsyncAPI message header (v1.1.0)",
+			Documentation: "A header from the AsyncAPI message (append header name)",
+			InsertText:    "message.header.",
+		},
+		{
+			Label:         "sourceDescriptions.",
+			Kind:          protocol.CompletionItemKindVariable,
+			Detail:        "Reference to a source description attribute",
+			Documentation: "Access attributes of a named source description (e.g. $sourceDescriptions.petstore.url)",
+			InsertText:    "sourceDescriptions.",
+		},
+		{
+			Label:         "components.successActions.",
+			Kind:          protocol.CompletionItemKindVariable,
+			Detail:        "Reference to a reusable success action (v1.1.0)",
+			Documentation: "Access a reusable success action from components",
+			InsertText:    "components.successActions.",
+		},
+		{
+			Label:         "components.failureActions.",
+			Kind:          protocol.CompletionItemKindVariable,
+			Detail:        "Reference to a reusable failure action (v1.1.0)",
+			Documentation: "Access a reusable failure action from components",
+			InsertText:    "components.failureActions.",
+		},
 	}
 }
 
@@ -219,6 +271,14 @@ func (c *CompletionProvider) getWorkflowReferenceCompletions(doc *parser.ArazzoD
 // getFieldValueCompletions returns completions for field values
 func (c *CompletionProvider) getFieldValueCompletions(beforeCursor string) []protocol.CompletionItem {
 	var items []protocol.CompletionItem
+
+	if strings.Contains(beforeCursor, "arazzo:") {
+		items = append(items,
+			protocol.CompletionItem{Label: "\"1.1.0\"", Kind: protocol.CompletionItemKindValue, Detail: "Latest version (recommended)", InsertText: "\"1.1.0\""},
+			protocol.CompletionItem{Label: "\"1.0.1\"", Kind: protocol.CompletionItemKindValue, InsertText: "\"1.0.1\""},
+			protocol.CompletionItem{Label: "\"1.0.0\"", Kind: protocol.CompletionItemKindValue, InsertText: "\"1.0.0\""},
+		)
+	}
 
 	if strings.Contains(beforeCursor, "type:") {
 		items = append(items,
@@ -370,6 +430,54 @@ func (c *CompletionProvider) getContextualCompletions(context string, beforeCurs
 			protocol.CompletionItem{Label: "parameters", Kind: protocol.CompletionItemKindField, Detail: "Reusable parameters", InsertText: "parameters:\n  "},
 			protocol.CompletionItem{Label: "successActions", Kind: protocol.CompletionItemKindField, Detail: "Reusable success actions", InsertText: "successActions:\n  "},
 			protocol.CompletionItem{Label: "failureActions", Kind: protocol.CompletionItemKindField, Detail: "Reusable failure actions", InsertText: "failureActions:\n  "},
+		)
+
+	case "requestBody":
+		// Request body fields
+		items = append(items,
+			protocol.CompletionItem{Label: "contentType", Kind: protocol.CompletionItemKindField, Detail: "Media type of the request body", InsertText: "contentType: application/json"},
+			protocol.CompletionItem{Label: "payload", Kind: protocol.CompletionItemKindField, Detail: "Request body payload", InsertText: "payload:\n  "},
+			protocol.CompletionItem{Label: "replacements", Kind: protocol.CompletionItemKindField, Detail: "Payload replacements (v1.1.0)", InsertText: "replacements:\n  - target: \n    value: "},
+		)
+
+	case "replacements":
+		// Payload Replacement Object fields (v1.1.0 spec §5.8.12)
+		items = append(items,
+			protocol.CompletionItem{Label: "target", Kind: protocol.CompletionItemKindField, Detail: "JSON Pointer, XPath, or JSONPath to the location to replace (REQUIRED)", InsertText: "target: "},
+			protocol.CompletionItem{Label: "value", Kind: protocol.CompletionItemKindField, Detail: "Replacement value: constant, expression, or Selector Object (REQUIRED)", InsertText: "value: "},
+			protocol.CompletionItem{Label: "targetSelectorType", Kind: protocol.CompletionItemKindField, Detail: "Selector type for the target pointer (v1.1.0)", InsertText: "targetSelectorType: "},
+		)
+
+	case "onSuccess":
+		// Success Action Object fields (spec §5.8.7)
+		items = append(items,
+			protocol.CompletionItem{Label: "name", Kind: protocol.CompletionItemKindField, Detail: "Action name (REQUIRED)", InsertText: "name: "},
+			protocol.CompletionItem{Label: "type", Kind: protocol.CompletionItemKindField, Detail: "Action type: goto or end (REQUIRED)", InsertText: "type: "},
+			protocol.CompletionItem{Label: "stepId", Kind: protocol.CompletionItemKindField, Detail: "Target step ID (for goto — mutually exclusive with workflowId)", InsertText: "stepId: "},
+			protocol.CompletionItem{Label: "workflowId", Kind: protocol.CompletionItemKindField, Detail: "Target workflow ID (for goto — mutually exclusive with stepId)", InsertText: "workflowId: "},
+			protocol.CompletionItem{Label: "criteria", Kind: protocol.CompletionItemKindField, Detail: "Conditions that must be met for this action to apply", InsertText: "criteria:\n  - condition: "},
+			protocol.CompletionItem{Label: "parameters", Kind: protocol.CompletionItemKindField, Detail: "Parameters for referenced workflow (workflowId only) — 'in' MUST NOT be used (spec §5.8.7.1)", InsertText: "parameters:\n  - name: \n    value: "},
+		)
+
+	case "onFailure":
+		// Failure Action Object fields (spec §5.8.8)
+		items = append(items,
+			protocol.CompletionItem{Label: "name", Kind: protocol.CompletionItemKindField, Detail: "Action name (REQUIRED)", InsertText: "name: "},
+			protocol.CompletionItem{Label: "type", Kind: protocol.CompletionItemKindField, Detail: "Action type: retry, goto, or end (REQUIRED)", InsertText: "type: "},
+			protocol.CompletionItem{Label: "stepId", Kind: protocol.CompletionItemKindField, Detail: "Target step ID (for goto — mutually exclusive with workflowId)", InsertText: "stepId: "},
+			protocol.CompletionItem{Label: "workflowId", Kind: protocol.CompletionItemKindField, Detail: "Target workflow ID (for goto/retry — mutually exclusive with stepId)", InsertText: "workflowId: "},
+			protocol.CompletionItem{Label: "retryAfter", Kind: protocol.CompletionItemKindField, Detail: "Seconds to wait before retrying (for retry)", InsertText: "retryAfter: "},
+			protocol.CompletionItem{Label: "retryLimit", Kind: protocol.CompletionItemKindField, Detail: "Maximum number of retry attempts (for retry)", InsertText: "retryLimit: "},
+			protocol.CompletionItem{Label: "criteria", Kind: protocol.CompletionItemKindField, Detail: "Conditions that must be met for this action to apply", InsertText: "criteria:\n  - condition: "},
+			protocol.CompletionItem{Label: "parameters", Kind: protocol.CompletionItemKindField, Detail: "Parameters for referenced workflow (workflowId only) — 'in' MUST NOT be used (spec §5.8.8.1)", InsertText: "parameters:\n  - name: \n    value: "},
+		)
+
+	case "successCriteria":
+		// Criterion Object fields (spec §5.8.11)
+		items = append(items,
+			protocol.CompletionItem{Label: "condition", Kind: protocol.CompletionItemKindField, Detail: "Condition expression to evaluate (REQUIRED)", InsertText: "condition: "},
+			protocol.CompletionItem{Label: "context", Kind: protocol.CompletionItemKindField, Detail: "Runtime expression defining the evaluation context", InsertText: "context: "},
+			protocol.CompletionItem{Label: "type", Kind: protocol.CompletionItemKindField, Detail: "Criterion type: simple, regex, jsonpath, or xpath (default: simple)", InsertText: "type: simple"},
 		)
 
 	case "root":

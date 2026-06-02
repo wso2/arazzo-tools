@@ -126,20 +126,18 @@ workflows:
           - name: proceedToProfile
             type: goto
             stepId: createProfile
-            # v1.1.0: parameters on success action (passed to the next step's workflow context)
-            parameters:
-              - name: userId
-                in: path
-                value: $steps.createAccount.outputs.userId
+            # No parameters — stepId goto shares the workflow context; parameters do not apply
         onFailure:
-          - name: retryVerification
+          - name: retryThenCleanup
             type: retry
             retryAfter: 10
             retryLimit: 2
-            # v1.1.0: parameters on failure action
+            # v1.1.0: on retry exhaustion transfer to deleteUserWorkflow to clean up the partial user
+            # parameters are ONLY valid when workflowId is set (spec §5.8.8.1)
+            # 'in' MUST NOT be used — parameters map to workflow inputs, not HTTP fields
+            workflowId: deleteUserWorkflow
             parameters:
               - name: userId
-                in: path
                 value: $steps.createAccount.outputs.userId
         outputs:
           verificationSent: $response.body.sent
