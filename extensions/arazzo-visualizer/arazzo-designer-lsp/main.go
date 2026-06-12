@@ -23,8 +23,8 @@ func main() {
 	// Print version and exit if requested
 	if *version {
 		fmt.Println("Arazzo Language Server v0.1.0")
-		fmt.Println("Supports Arazzo Specification 1.0.0, 1.0.1 (backward compatible)")
-		fmt.Println("Spec: https://spec.openapis.org/arazzo/v1.0.1.html")
+		fmt.Println("Supports Arazzo Specification 1.1.0 (1.0.0, 1.0.1 backward compatible)")
+		fmt.Println("Spec: https://spec.openapis.org/arazzo/latest.html")
 		os.Exit(0)
 	}
 
@@ -37,7 +37,7 @@ func main() {
 
 	utils.LogInfo("Arazzo Language Server starting...")
 	utils.LogInfo("Debug mode: %v", *debugMode)
-	utils.LogInfo("Supported Arazzo versions: 1.0.0, 1.0.1")
+	utils.LogInfo("Supported Arazzo versions: 1.0.0, 1.0.1, 1.1.0")
 
 	// Create LSP server
 	lspServer := server.NewServer()

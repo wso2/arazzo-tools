@@ -58,9 +58,8 @@ workflows:
         channelPath: sensorBus#/channels/device~1{deviceId}~1commands
         # v1.1.0: action specifies the direction — we are SENDING a message
         action: send
-        # v1.1.0: correlationId — runtime expression identifying the correlation field
-        correlationId: $message.payload.correlationId
         # v1.1.0: timeout — 10 seconds to deliver the command
+        # (correlationId is only applicable on the matching 'receive' step, per spec §5.8.5)
         timeout: 10000
         parameters:
           - name: deviceId
@@ -166,7 +165,6 @@ workflows:
           payload:
             message: $inputs.message
             severity: $inputs.severity
-            timestamp: $now
         successCriteria:
           - condition: $statusCode == 202
         outputs:

@@ -49,6 +49,8 @@ func (d *DiagnosticsProvider) ProvideDiagnostics(content string) []protocol.Diag
 
 	// Validate the document
 	validationErrors := d.validator.Validate(doc)
+	// Warn about unknown/misspelled fields the struct-based parser silently ignores
+	validationErrors = append(validationErrors, d.validator.ValidateUnknownFields(content)...)
 	utils.LogDebug("DiagnosticsProvider: Validation completed, found %d errors", len(validationErrors))
 
 	// Convert validation errors to LSP diagnostics

@@ -1,536 +1,369 @@
 # Arazzo v1.1.0 Support Plan
 
+> **Revision note (audited 2026-06-13).** This plan was originally written as if the
+> repository had *no* v1.1.0 support. A full code + spec audit shows that is no longer
+> true: the **data-model layer, LSP validation/completion, syntax highlighting, and test
+> fixtures for v1.1.0 are already implemented and present in the repo.** The remaining
+> work is almost entirely in the **runtime/execution layer** (the Go CLI runner + evaluator)
+> and the **visualizer**. This revision corrects the false "everything is missing" premise,
+> records what is actually done, and rescopes each phase to the real remaining work.
+>
+> Three specific claims in the original plan were verified **FALSE** and have been removed:
+> 1. *"TypeScript `CriterionExpressionObject` has a bug naming the field `expression` instead of `version`."* — There is no such interface anymore; it is correctly named `ExpressionTypeObject` with a `version` field ([arazzoInterface.ts:186](arazzo-designer-core/src/interfaces/arazzoInterface.ts)). No lingering `CriterionExpression` name exists in core, LSP, or CLI.
+> 2. *"LSP `RequestBody` struct is missing `Replacements`."* — It is present ([parser/ast.go:75](arazzo-designer-lsp/parser/ast.go)).
+> 3. *"`$self`, `channelPath`, `timeout`, `correlationId`, `action`, step-level `dependsOn`, `querystring`, and action `parameters` are missing."* — All are present in TypeScript, LSP, and CLI models with explicit `// v1.1.0` annotations.
+
 ## Summary
 
-Support Arazzo `1.1.0` across the full extension product: shared TypeScript models, Go LSP parser/validator/completions/navigation, visualizer, CLI/MCP runner, and tests, while preserving `1.0.0` and `1.0.1` compatibility.
+Deliver full Arazzo `1.1.0` support across the product: shared TypeScript models,
+Go LSP (parser/validator/completion/navigation), visualizer, CLI/MCP runner, and tests —
+while preserving `1.0.0` / `1.0.1` compatibility.
 
 Sources checked:
-- Arazzo v1.1.0 latest: https://spec.openapis.org/arazzo/latest.html
+- Arazzo v1.1.0 (latest, dated 17 May 2026): https://spec.openapis.org/arazzo/latest.html
 - Arazzo v1.0.1: https://spec.openapis.org/arazzo/v1.0.1.html
 
-Current repo is missing several v1.1.0 fields and behaviors:
-- `$self`
-- `asyncapi` source descriptions
-- `channelPath`
-- `timeout`
-- `correlationId`
-- `action: send | receive`
-- step-level `dependsOn`
-- `querystring`
-- Selector Object
-- expanded Expression Type Object
-- `$message`
-- richer `$sourceDescriptions` / `$components` runtime expressions
-- JSONPath/XPath/JSON Pointer selector and replacement behavior
-- AsyncAPI runtime adapter architecture
-- message serialization layer for JSON now and Avro/Protobuf/etc. later
+The **authoring/static** half of v1.1.0 is done. The **executing/dynamic** half is not.
+Concretely, the runtime does not yet: resolve `$self`/base-URI references, evaluate Selector
+Objects, evaluate the new runtime-expression roots (`$message`, `$self`, `$sourceDescriptions`,
+`$components`) or compound boolean criteria, perform JSONPath/XPath payload replacement, honor
+step `dependsOn` ordering, or execute any AsyncAPI `send`/`receive` step. The visualizer does
+not yet render async metadata or dependency edges.
+
+---
+
+## Current Implementation Status (Audit — 2026-06-13)
+
+Legend: ✅ done · 🟡 partial · ❌ not started
+
+### Model / schema layer — ✅ DONE
+| Item | TS core | LSP `ast.go` | CLI `models` |
+|---|---|---|---|
+| `arazzo: "1.1.0"` accepted | ✅ [arazzoInterface.ts:21](arazzo-designer-core/src/interfaces/arazzoInterface.ts) | ✅ | ✅ [arazzo.go:6](../../arazzo-designer-cli/internal/models/arazzo.go) |
+| Root `$self` | ✅ | ✅ `Self` | ✅ `Self` |
+| `sourceDescriptions.type` incl. `asyncapi` | ✅ | ✅ | ✅ |
+| Step `channelPath` / `action` / `correlationId` / `timeout` / `dependsOn` | ✅ | ✅ | ✅ |
+| Parameter `in: querystring` | ✅ | ✅ | ✅ |
+| `SuccessAction`/`FailureAction` `parameters` | ✅ | ✅ | ✅ (`Action.Parameters`) |
+| `ExpressionTypeObject` (renamed, `version` field, `jsonpointer`) | ✅ | ✅ (via `interface{}`) | ✅ (via `interface{}`) |
+| `SelectorObject` type | ✅ | ✅ | 🟡 (modeled as `interface{}`, no dedicated struct) |
+| `RequestBody.replacements` + `PayloadReplacementObject.targetSelectorType` | ✅ | ✅ | ✅ |
+| Widened `outputs` / `value` to accept Selector Objects | ✅ | ✅ | ✅ |
+
+### LSP authoring layer — ✅ DONE (verify-only)
+- Version validation accepts `1.0.0`/`1.0.1`/`1.1.0` ([validator.go:75](arazzo-designer-lsp/validator/validator.go)).
+- Completions for new fields/enums (`$self`, `asyncapi`, `channelPath`, `action`→`send`/`receive`, `timeout`, `correlationId`, `dependsOn`, `querystring`, all three versions).
+- Validations implemented in [validator.go](arazzo-designer-lsp/validator/validator.go):
+  - `validateSelf` — `$self` MUST NOT contain a fragment (`:428`).
+  - `validateDependsOn` — three reference forms (`:481`).
+  - `action` enum `send`/`receive`; `channelPath` mutual exclusivity & AsyncAPI source check.
+  - `timeout` non-negative integer (`:304`).
+  - `correlationId` warning when no `channelPath` (`:317`).
+  - **Empty `successCriteria` rejected** (`:326`).
+  - `validateActionParameters` — `in` MUST NOT be used on action params (`:602`, called `:340`/`:347`).
+  - `validateComponentKeys` — `^[a-zA-Z0-9\.\-_]+$` (`:444`).
+- Syntax highlighting (`arazzo.tmLanguage.json`) highlights the new keywords (per `examples/async_test/README.md`).
+- Test fixtures exist: [examples/async_test/](../../examples/async_test) (`v110-openapi-new-fields`, `v110-asyncapi-channel`, `v101-backward-compat`, `invalid-v110`).
+
+**Phase 1 & 2 verification pass (completed 2026-06-13).** A full correctness audit was run and
+the gaps it found were fixed:
+- Completion: `type:` value completion is now context-aware (source vs action vs criterion);
+  removed the invalid `body` parameter location; added a root `$self` field completion.
+- Validation added: `action` requires `channelPath`; `correlationId` requires `action: receive`;
+  parameter `in` enum; success/failure action `type` enum + `stepId`/`workflowId` exclusivity;
+  reusable-object `reference` resolution against `components`.
+- New **unknown-field detection** ([validator/unknown_fields.go](arazzo-designer-lsp/validator/unknown_fields.go)) walks the YAML tree and warns on
+  misspelled/unrecognized keys (e.g. `chanelPath`, or OpenAPI `$ref` where Arazzo wants `reference`),
+  allowing `x-` extensions. Wired into diagnostics.
+- Fixtures corrected: `$ref` → `reference`; removed a spec-invalid `correlationId` on a `send`
+  step and a bogus `$now` expression.
+- `main.go` banner now advertises 1.1.0.
+- Added Go unit tests: [validator/validator_test.go](arazzo-designer-lsp/validator/validator_test.go) (version/selector/action/dependsOn/`$self`/
+  source-type/`in`/reference/unknown-field cases + a fixtures test asserting zero diagnostics on
+  the valid files) and [parser/parser_test.go](arazzo-designer-lsp/parser/parser_test.go) (v1.1.0 field round-trip + backward compat).
+  `go build`/`go vet`/`go test ./...` all green.
+
+**Remaining minor gaps (acceptable, fold into later phases):**
+- `validateRuntimeExpressions` only checks `$steps`/`$workflows` roots ([validator.go](arazzo-designer-lsp/validator/validator.go)); it
+  does not yet know `$message`/`$self`/`$sourceDescriptions`/`$components` (tighten in Phase 5).
+- Workflow-level and component-level action/parameter checks are lighter than step-level (the
+  unknown-field pass still catches typos there). `ExpressionTypeObject.version` validation is
+  deferred to Phase 4 by design.
+
+### Runtime / execution layer (Go CLI) — ❌ MOSTLY NOT STARTED
+- Evaluator ([evaluator.go](../../arazzo-designer-cli/internal/evaluator/evaluator.go)) supports `$statusCode`, `$response.header/.body`, `$response`, `$inputs`, `$steps`, `$dependencies`, and JSON-Pointer (`#/…`). Comments at `:112‑114` explicitly mark `$workflows`/`$url`/`$method`/`$components` as **not implemented**. No `$message`, `$self`, or `$sourceDescriptions.<name>.<id>` resolution. Boolean criteria support only the six comparison operators (`==,!=,>,<,>=,<=`); **no `&&`/`||`/`!`/parentheses**.
+- Loader ([loader.go](../../arazzo-designer-cli/internal/loader/loader.go)) has **no `$self` / base-URI / RFC3986 resolution** logic.
+- Selector Objects in outputs are **preserved as-is, not evaluated** ([output_extractor.go:67](../../arazzo-designer-cli/internal/runner/executor/output_extractor.go)). No shared selector-evaluation service exists.
+- Payload replacement supports **JSON Pointer targets only** via `setJSONPointer` ([parameter_processor.go:236](../../arazzo-designer-cli/internal/runner/executor/parameter_processor.go)); no JSONPath/XPath targets, no Selector-Object values.
+- Runner ([runner.go](../../arazzo-designer-cli/internal/runner/runner.go)) executes steps **sequentially**; it consumes only the `goto`/`end`/`retry`/`continue` *action types* and **never reads `Step.Action`, `Step.ChannelPath`, `Step.CorrelationID`, `Step.DependsOn`, or `Step.Timeout`.** No AsyncAPI execution, no adapter/serialization/broker code anywhere in the repo.
+
+### Visualizer — 🟡 PARTIAL
+- Renders `goto`/`retry`/`end` action edges and workflow-level `dependsOn` ([InitVisitor_v2.ts](arazzo-designer-visualizer/src/visitors/InitVisitor_v2.ts), [WorkflowView.tsx:305](arazzo-designer-visualizer/src/views/WorkflowView/WorkflowView.tsx)).
+- **No** rendering for async metadata (`channelPath`, `action`, `correlationId`, `timeout`), `$self`/source-type badges, distinct `send`/`receive` nodes, or **step-level** `dependsOn` edges.
+
+---
 
 ## Implementation Phases
 
-### Phase 1: Version, Schema, And Compatibility Foundation
+> Phases 1–2 are **already implemented**; they are retained as **verification checklists**
+> so an implementing AI confirms (and does not re-create) the existing work, then closes the
+> small documented gaps. Phases 3–12 are the **real remaining work**.
 
-Goal: make the repo understand the Arazzo `1.1.0` document shape without changing execution behavior yet.
+### Phase 1: Version, Schema, And Compatibility Foundation — ✅ DONE (verify-only)
 
-Changes:
-- Update all TypeScript and Go Arazzo models to accept `arazzo: "1.1.0"` while keeping `1.0.0` and `1.0.1`.
-- Add root `$self?: string`.
-- Extend `sourceDescriptions.type` from `openapi | arazzo` to `openapi | asyncapi | arazzo`.
-- Add new step fields:
-  - `channelPath?: string`
-  - `timeout?: integer` (non-negative integer, milliseconds — not a float/number)
-  - `correlationId?: string`
-  - `action?: "send" | "receive"`
-  - `dependsOn?: string[]`
-- Add `querystring` as a valid parameter location.
-- Widen output, parameter value, request body payload, and replacement value types so they can later accept Selector Objects.
-- Add new `parameters` field to `SuccessActionObject` (new in v1.1.0): a list of `Parameter Object | Reusable Object` to be passed to a workflow referenced by `workflowId`. The `in` field MUST NOT be used on parameters in this context. This field does not exist on `SuccessActionObject` in v1.0.1 and is absent from the current TypeScript interfaces and LSP structs.
-- Add new `parameters` field to `FailureActionObject` (new in v1.1.0, spec §5.8.8.1): identical semantics to `SuccessActionObject.parameters` — a list of `Parameter Object | Reusable Object` passed to the workflow referenced by `workflowId`. The `in` field MUST NOT be used. This field is absent from all current models (TypeScript `FailureActionObject`, LSP `FailureAction`, and CLI `Action` structs).
-- Rename `CriterionExpressionObject` / `Criterion Expression Type Object` (v1.0.1 name) to `ExpressionTypeObject` throughout all TypeScript interfaces, LSP parser structs, completion code, and validation code. The v1.1.0 spec renames this object and also adds `jsonpointer` as a new allowed `type` value (v1.0.1 only had `jsonpath` and `xpath`). Additionally: the **existing TypeScript `CriterionExpressionObject` interface has a bug — it names the field `expression` instead of the spec-correct `version`** (this is wrong in both v1.0.1 and v1.1.0 — the spec has always called this field `version`). The rename and field correction must happen together. Audit every reference to the old object name AND the old field name `expression` across `arazzo-designer-core`, `arazzo-designer-lsp`, and the CLI Go models.
-- Centralize or closely align the schema shape across:
-  - `arazzo-designer-core` TypeScript interfaces
-  - LSP parser structs
-  - CLI runner Go models
-  - visualizer data assumptions
-- Note pre-existing LSP gap to fix in this phase: the LSP parser `RequestBody` Go struct (`arazzo-designer-lsp/parser/ast.go`) is missing the `Replacements []Replacement` field that already exists in the CLI model and the TypeScript interfaces. Add it now so the LSP is consistent before Phase 6 extends the replacement object.
+Goal: the repo understands the v1.1.0 document shape without changing execution behavior.
 
-Validation in this phase:
-- Accept `arazzo: 1.1.0`.
-- Accept `$self`.
-- Accept `asyncapi`.
-- Accept the new fields syntactically.
-- Enforce that a step has exactly one target selector:
-  - `operationId`
-  - `operationPath`
-  - `channelPath`
-  - `workflowId`
+**Already implemented** (see audit above): all three model layers accept `1.1.0`, carry
+`$self`, `asyncapi`, `channelPath`, `timeout`, `correlationId`, `action`, step `dependsOn`,
+`querystring`, action `parameters`, `ExpressionTypeObject`, `SelectorObject`,
+`PayloadReplacementObject.targetSelectorType`, and widened `outputs`/`value` types.
 
-Tests:
-- Existing `1.0.0` and `1.0.1` files still parse.
-- A minimal `1.1.0` file parses.
-- A `1.1.0` file with all new fields parses.
-- Invalid versions still fail.
-- A step with both `operationId` and `channelPath` fails validation.
+Verification tasks (no new modeling expected):
+- Confirm the three model layers stay structurally aligned (TS ↔ LSP ↔ CLI). The one
+  intentional divergence to keep in mind: the CLI models Selector/Expression-Type objects
+  as `interface{}` rather than typed structs — fine for parsing, but Phase 4/5 will need a
+  typed shape or a decode helper.
+- Confirm `1.0.0`/`1.0.1` fixtures still parse and the `invalid-v110` fixture still fails.
+- Confirm a step with two of `operationId`/`operationPath`/`channelPath`/`workflowId` is rejected.
 
-Checkpoint:
-- The extension can open a v1.1.0 file without breaking.
-- No AsyncAPI execution yet.
+Exit check: a v1.1.0 file opens without breakage (already true via `examples/async_test`).
 
-### Phase 2: LSP Authoring Support
+### Phase 2: LSP Authoring Support — ✅ DONE (verify + close minor gaps)
 
-Goal: make v1.1.0 pleasant to write in VS Code.
+Goal: v1.1.0 is pleasant and correct to author in VS Code.
+
+**Already implemented**: completions and validations enumerated in the audit
+(`validateSelf`, `validateDependsOn`, `action` enum, `timeout`, `correlationId`,
+empty-`successCriteria`, `validateActionParameters`, `validateComponentKeys`).
+
+Remaining small tasks — **completed in the 2026-06-13 verification pass** (see audit section
+above): `main.go` banner updated; completion/validation gaps closed; unknown-field detection
+added; unit tests added. The only deliberately-deferred item is tightening
+`validateRuntimeExpressions` for the new expression roots, which belongs with Phase 5.
+
+Verification tests (most already exist under `examples/async_test`): bad `$self` (fragment),
+bad `action`, negative `timeout`, invalid source `type`, duplicate target selectors,
+empty `successCriteria`, action-param with `in`, `dependsOn` cross-workflow form.
+
+### Phase 3: `$self` And Source Resolution — ❌ NOT STARTED
+
+Goal: correctly resolve source documents in v1.1.0. **Current loader has no `$self`/base-URI logic.**
 
 Changes:
-- Update LSP completions:
-  - default new snippets to `arazzo: "1.1.0"`
+- Enforce full-document parse before any reference resolution (spec §5.5.1) in the LSP loader,
+  CLI loader, and RPC client.
+- Establish the base URI per RFC3986 §5.1.1–5.1.4 priority:
+  - `$self` absolute → use directly as base URI.
+  - `$self` relative → resolve against the next base source (retrieval URI / encapsulating
+    entity / application default), then use the resulting absolute URI.
+  - `$self` absent → use the retrieval URI (file path or HTTP URL) as base URI.
+- Resolve relative `sourceDescriptions.url` against that base URI.
+- Identity-based matching for external Arazzo refs: if the target has `$self`, the reference
+  MUST match the `$self` URI, not just the retrieval location (spec §5.5.2). See spec
+  Appendix B ("Examples of Base URI Determination and Reference Resolution") for worked cases.
+- Preserve current local-relative behavior for v1.0.x (no `$self` → file path is base URI).
+
+Tests: relative source with `$self` absent; with absolute `$self`; relative `$self` resolved
+against retrieval URI; remote-style `$self` + relative source URL; two docs sharing a `$self`
+treated as one; full parse before resolution; existing examples still load.
+
+### Phase 4: Selector Objects And Expression Types — ❌ NOT STARTED
+
+Goal: support the new structured-extraction model. **Currently Selector Objects are preserved
+verbatim and never evaluated.**
+
+Changes:
+- Add a typed `SelectorObject` decode (`context`, `selector`, `type`) on the CLI side (today
+  it is `interface{}`), plus an `ExpressionTypeObject` decode (`type` REQUIRED, `version`
+  REQUIRED — reject the object if `version` is omitted).
+  - Allowed `version` per `type`: `jsonpath` → `rfc9535` | `draft-goessner-dispatch-jsonpath-00`;
+    `xpath` → `xpath-31` | `xpath-30` | `xpath-20` | `xpath-10`; `jsonpointer` → `rfc6901`.
+  - When the Expression-Type Object is **absent**, tooling applies defaults
+    (`jsonpath`→`rfc9535`, `xpath`→`xpath-31`, `jsonpointer`→`rfc6901`). These are *tooling*
+    defaults, not object defaults — the object itself always requires both fields.
+- Build a **shared selector-evaluation service** used by all runner components:
+  - `jsonpointer` → RFC6901 (reuse existing `ResolveJSONPointer`).
+  - `jsonpath` → reuse the existing `ojg` RFC9535 JSONPath ([jsonpath.go](../../arazzo-designer-cli/internal/evaluator/jsonpath.go)).
+  - `xpath` → add XML/XPath support behind the same service.
+  - Unsupported type/version → clear validation/runtime error.
+- Wire Selector Objects everywhere v1.1.0 permits: workflow outputs, step outputs, parameter
+  values, request-body payload values, payload replacement values (replacing the current
+  "preserve as-is" path in `output_extractor.go`).
+- Keep existing string runtime-expression behavior intact.
+
+Tests: selector from `$response.body`; from `$message.payload`; JSON Pointer; JSONPath; XPath
+on XML; unsupported type/version fails clearly.
+
+### Phase 5: Runtime Expression Upgrade — ❌ NOT STARTED
+
+Goal: bring the evaluator to v1.1.0. **Current evaluator lacks `$message`/`$self`/`$sourceDescriptions`/`$components` and compound boolean criteria.**
+
+Changes:
+- Add expression roots to [evaluator.go](../../arazzo-designer-cli/internal/evaluator/evaluator.go):
+  - `$message.header.*`, `$message.payload`, `$message.payload#/…`
   - `$self`
-  - `asyncapi`
-  - `channelPath`
-  - `action`
-  - `send`
-  - `receive`
-  - `timeout`
-  - `correlationId`
-  - step-level `dependsOn`
-  - `querystring`
-  - `targetSelectorType`
-  - `$message.payload`
-  - `$message.header`
-  - `$self`
-  - `parameters` on `SuccessActionObject`
-  - `parameters` on `FailureActionObject`
-- Update LSP validation:
-  - validate `$self` as a URI-reference without a fragment (spec §5.8.1.1: `$self` MUST NOT contain a fragment identifier).
-  - validate `sourceDescriptions.type`.
-  - validate `action` is only `send` or `receive`.
-  - validate `timeout` is a non-negative integer in milliseconds.
-  - validate `dependsOn` step references — three valid forms are accepted: (1) bare `stepId` (local workflow step), (2) `$workflows.<workflowId>.steps.<stepId>` (step in another workflow in this document), (3) `$sourceDescriptions.<name>.<workflowId>.steps.<stepId>` (step in an external Arazzo document). Any other form is invalid.
-  - validate `channelPath` is used for AsyncAPI references.
-  - validate `correlationId` is meaningful for AsyncAPI receive-style steps.
-  - validate component key naming rules from the spec (`^[a-zA-Z0-9\.\-_]+$`).
-  - validate that `successCriteria`, when present, contains at least one Criterion Object (empty array is invalid — new MUST in v1.1.0 §5.8.5.1).
-  - validate `SuccessActionObject.parameters`: the `in` field MUST NOT be set on any parameter in this list.
-  - validate `FailureActionObject.parameters`: the `in` field MUST NOT be set on any parameter in this list (same rule as SuccessActionObject — spec §5.8.8.1).
+  - `$sourceDescriptions.<name>.<id>` — implement the two-step priority of spec §5.9.2:
+    (1) match `<id>` against an `operationId`/`workflowId` in the named source; (2) only if no
+    match, treat `<id>` as a field of the Source Description Object (e.g. `url`). Implement the
+    priority explicitly; do not allow ambiguous resolution.
+  - `$components.successActions.*`, `$components.failureActions.*`
+  - (also fill the already-stubbed `$workflows`/`$url`/`$method` noted at `evaluator.go:112`)
+- Embedded-expression serialization: primitives embed as strings; objects/arrays serialize
+  consistently (normally JSON); unresolved expressions produce useful, context-aware warnings.
+- Replace the simple comparison parser with a real expression evaluator supporting
+  `!`, `&&`, `||`, parentheses, property dereference, array indexing, numeric & string
+  comparison, and case-insensitive comparison where the spec requires it.
 
-Tests:
-- Completion tests for every new field and enum value.
-- Validation tests for bad `$self`, bad `action`, bad `timeout`, invalid source type, and duplicate target selectors.
-- `dependsOn` with a bare local stepId that exists passes; a non-existent stepId fails.
-- `dependsOn` with `$workflows.<wf>.steps.<s>` cross-workflow form is accepted and validated.
-- `dependsOn` with an unrecognized form (e.g. plain string that is not a valid stepId or expression) fails.
-- Empty `successCriteria: []` fails validation.
-- `SuccessActionObject.parameters` entry with `in: query` fails validation.
-- `FailureActionObject.parameters` entry with `in: header` fails validation.
+Tests: `$message.payload.status == "confirmed"`; `$message.header.correlationId`; `$self`
+resolves; `$sourceDescriptions.petstore.url` resolves; object/array embedded serialization;
+compound criteria with `&&`/`||`/`!`/parentheses/indexing.
 
-Checkpoint:
-- Users can author v1.1.0 files with useful completions and correct diagnostics.
-- Runtime still behaves like before for OpenAPI.
+### Phase 6: Payload Replacement Upgrade — ❌ NOT STARTED
 
-### Phase 3: `$self` And Source Resolution
-
-Goal: correctly resolve source documents in v1.1.0.
+Goal: support v1.1.0 replacement targets/values. **Currently JSON-Pointer targets only (`setJSONPointer`).**
 
 Changes:
-- Enforce full-document parsing before resolving any references (spec §5.5.1: implementations MUST parse entire documents before resolving references; fragmentary parsing produces undefined behavior). The entire Arazzo document must be loaded and parsed so that `$self` and all source description `url` fields are known before any reference resolution begins. This applies to the LSP loader, the CLI loader, and the RPC client.
-- Establish the base URI using RFC3986 §5.1.1–5.1.4 priority order:
-  - If `$self` is present and is an **absolute** URI: use it directly as the base URI.
-  - If `$self` is present and is a **relative** URI-reference: first resolve it against the next applicable base URI source (retrieval URI, encapsulating entity, or application default per RFC3986 §5.1.2–5.1.4), then use the resulting absolute URI as the base URI.
-  - If `$self` is absent: use the retrieval URI (file path or HTTP URL) as the base URI.
-- Resolve relative `sourceDescriptions.url` values against the base URI established above.
-- When referencing external Arazzo documents, use identity-based matching: if the target document has a `$self` field, the reference MUST match the `$self` URI, not just the retrieval location (spec §5.5.2).
-- Preserve current local relative file behavior for v1.0.x files (no `$self` → use file path as base URI).
+- Extend replacement with `targetSelectorType` and JSONPath / XPath / JSON-Pointer targets.
+- Allow Selector-Object replacement values.
+- Preserve existing JSON-Pointer replacement behavior.
+- Route target lookup and value resolution through the Phase 4 shared selector service.
 
-Tests:
-- Relative OpenAPI source resolved from local file path when `$self` is absent.
-- Relative source resolved correctly when `$self` is an absolute URI.
-- Relative `$self` is first resolved against the retrieval URI, and the resulting absolute URI is then used as the base URI for further relative references.
-- Remote-style `$self` plus relative source URL produces the expected absolute URI.
-- Two documents referencing the same `$self` URI are treated as the same document (identity over location).
-- A document is fully parsed before any reference within it is resolved.
-- Existing examples still load.
+Tests: existing JSON-Pointer replacement still works; JSONPath target; XPath target on XML;
+replacement value as literal / runtime expression / Selector Object.
 
-Checkpoint:
-- v1.1.0 source loading is deterministic.
-- This prepares for AsyncAPI loading but does not execute AsyncAPI yet.
+### Phase 7: OpenAPI Runtime Preservation And Step Dependencies — ❌ NOT STARTED
 
-### Phase 4: Selector Objects And Expression Types
-
-Goal: support the new extraction model used by v1.1.0.
+Goal: dependency-aware ordering without breaking current REST flows. **Runner currently ignores `Step.DependsOn` and runs steps sequentially.**
 
 Changes:
-- Add `SelectorObject`:
-  - `context`
-  - `selector`
-  - `type`
-- Add `ExpressionTypeObject` (renamed from `Criterion Expression Type Object` in v1.0.1; also adds `jsonpointer` as a new `type` value):
-  - `type: "jsonpath" | "xpath" | "jsonpointer"` (REQUIRED)
-  - `version: string` (REQUIRED when this object is used — validation must reject an ExpressionTypeObject that omits `version`)
-  - Allowed `version` values per `type`:
-    - `jsonpath`: `rfc9535`, `draft-goessner-dispatch-jsonpath-00`
-    - `xpath`: `xpath-31`, `xpath-30`, `xpath-20`, `xpath-10`
-    - `jsonpointer`: `rfc6901`
-  - When the ExpressionTypeObject is **not present at all**, tooling applies these defaults automatically (these are not defaults within the object — the object always requires both fields):
-    - JSONPath default: `rfc9535`
-    - XPath default: `xpath-31`
-    - JSON Pointer default: `rfc6901`
-- Allow Selector Objects anywhere v1.1.0 permits them:
-  - workflow outputs
-  - step outputs
-  - parameter values
-  - request body payload values
-  - payload replacement values
-- Add a shared selector evaluation service used by runner components.
-- Keep existing string runtime-expression behavior working.
+- Keep current sequential execution when no dependencies are declared.
+- Honor explicit step `dependsOn`; infer dependencies from `$steps.<id>.outputs.*` where safe.
+- Detect impossible graphs: missing step id (local, `$workflows.*` cross-workflow,
+  `$sourceDescriptions.*` cross-document), cycles, never-completing deps.
+- `dependsOn` is a **prerequisite relationship only** — it does not *trigger* the referenced
+  step and must not re-execute an already-completed prerequisite; the runner waits if needed.
+- Keep `onSuccess`/`onFailure`/`goto`/`end`/`retry` behavior compatible; clarify precedence
+  between retry exhaustion and following failure actions.
 
-Selector behavior:
-- `jsonpointer` uses RFC6901 pointer semantics.
-- `jsonpath` uses the current RFC9535-compatible JSONPath library already present in the CLI.
-- `xpath` requires XML/XPath support and should be implemented behind the same selector service.
-- Unsupported selector versions should produce clear validation/runtime errors.
+Tests: existing OpenAPI examples still run; explicit `dependsOn` waits; cross-workflow
+`$workflows.<wf>.steps.<s>` resolves & waits; completed step not re-executed; implicit
+`$steps.x.outputs.y` dependency respected; cycle fails clearly; retry still works.
 
-Tests:
-- Selector Object extracts from `$response.body`.
-- Selector Object extracts from `$message.payload` using test message context.
-- JSON Pointer selector works.
-- JSONPath selector works.
-- XPath selector works on XML payload.
-- Unsupported selector type/version fails clearly.
+### Phase 8: AsyncAPI Model Resolution And Visualization — ❌ NOT STARTED
 
-Checkpoint:
-- The runner can evaluate structured selectors independently of AsyncAPI broker execution.
-
-### Phase 5: Runtime Expression Upgrade
-
-Goal: update the evaluator to support v1.1.0 expressions and more complete criteria logic.
+Goal: understand AsyncAPI sources and show them before real broker execution.
 
 Changes:
-- Add support for:
-  - `$message.header.*`
-  - `$message.payload`
-  - `$message.payload#/...`
-  - `$self`
-  - `$sourceDescriptions.<name>.<id>` — implement the two-step resolution priority defined in spec §5.9.2: (1) match `<id>` against operationId or workflowId in the named source description; (2) only if no match, treat `<id>` as a field name on the Source Description Object itself (e.g., `url`). This priority must be implemented explicitly in the evaluator; ambiguous resolution is not permitted.
-  - `$components.successActions.*`
-  - `$components.failureActions.*`
-- Add embedded expression serialization rules:
-  - primitives embed as strings.
-  - objects/arrays should serialize consistently, normally as JSON.
-  - unresolved expressions should produce useful warnings/errors based on context.
-- Replace the simple condition parser with a real expression evaluator supporting:
-  - `!`
-  - `&&`
-  - `||`
-  - grouping with parentheses
-  - property dereference
-  - array indexing
-  - numeric comparison
-  - string comparison
-  - case-insensitive string comparison where the spec requires it
+- Load AsyncAPI source docs from `sourceDescriptions`; index operations & channels.
+- Resolve AsyncAPI refs from `operationId`, scoped ids (`$sourceDescriptions.orderEvents.placeOrder`),
+  and `channelPath`.
+- Navigation: keep OpenAPI op nav; add AsyncAPI operation nav and `channelPath` channel nav.
+- Visualizer ([arazzo-designer-visualizer](arazzo-designer-visualizer)):
+  - show `$self` in overview; source-type badges (OpenAPI / AsyncAPI / Arazzo).
+  - render `send`/`receive` steps distinctly.
+  - show `channelPath`/`action`/`correlationId`/`timeout`/`dependsOn` in the properties panel.
+  - draw **step-level** `dependsOn` edges (workflow-level already drawn).
 
-Tests:
-- `$message.payload.status == "confirmed"`.
-- `$message.header.correlationId`.
-- `$self` resolves.
-- `$sourceDescriptions.petstore.url` resolves.
-- object/array embedded expression serialization.
-- compound criteria with `&&`, `||`, `!`, parentheses, and indexing.
+Tests: AsyncAPI source loads; op/channel indexed; `channelPath` navigation resolves; async
+metadata shown; dependency edges render without breaking success/failure/goto edges.
 
-Checkpoint:
-- Runtime expressions are v1.1.0-ready for both OpenAPI and future AsyncAPI steps.
+### Phase 9: AsyncAPI Adapter Interface — ❌ NOT STARTED
 
-### Phase 6: Payload Replacement Upgrade
+Goal: a runtime boundary to send/receive messages without hard-coding any broker.
 
-Goal: support v1.1.0 replacement targets and replacement values.
+Key idea: the runner implements **adapters/connectors**, not brokers. Kafka/RabbitMQ/MQTT/NATS/
+WebSocket/cloud queues are external systems.
 
-Changes:
-- Extend replacement object support with:
-  - `targetSelectorType`
-  - JSON Pointer targets
-  - JSONPath targets
-  - XPath targets
-  - Selector Object values
-- Preserve old JSON Pointer replacement behavior.
-- Use the shared selector service for target lookup and replacement values.
-
-Tests:
-- Existing JSON Pointer replacement still works.
-- JSONPath target replacement works.
-- XPath target replacement works for XML payload.
-- Replacement value can be:
-  - literal
-  - runtime expression
-  - Selector Object
-
-Checkpoint:
-- Request body transformation supports v1.1.0 selector semantics.
-
-### Phase 7: OpenAPI Runtime Preservation And Step Dependencies
-
-Goal: upgrade execution ordering without breaking current REST/OpenAPI workflows.
-
-Changes:
-- Preserve current sequential execution when no dependencies are declared.
-- Honor explicit step `dependsOn`.
-- Infer dependencies from expressions like `$steps.<stepId>.outputs.<name>` where safe.
-- Detect impossible dependency graphs:
-  - missing step ID (local, cross-workflow via `$workflows.*`, or cross-document via `$sourceDescriptions.*`)
-  - circular dependencies
-  - dependency that never completes
-- Note: `dependsOn` establishes a prerequisite relationship only — it does NOT trigger execution of the referenced steps. The runner must not re-execute an already-completed prerequisite step when a later step's `dependsOn` lists it. The runner waits for the depended-on step to complete if it has not yet done so.
-- Keep `onSuccess`, `onFailure`, `goto`, `end`, and `retry` behavior compatible with current behavior.
-- Clarify precedence between retry exhaustion and following failure actions.
-
-Tests:
-- Existing OpenAPI examples still run.
-- Explicit `dependsOn` waits for required steps.
-- `dependsOn` with a cross-workflow reference (`$workflows.<wf>.steps.<s>`) resolves and waits correctly.
-- An already-completed step is not re-executed when another step lists it in `dependsOn`.
-- Implicit `$steps.x.outputs.y` dependency is respected.
-- Circular dependency fails clearly.
-- Retry behavior still works.
-
-Checkpoint:
-- REST workflows are still stable.
-- Execution engine is ready for async send/receive dependencies.
-
-### Phase 8: AsyncAPI Model Resolution And Visualization
-
-Goal: understand AsyncAPI sources and show them correctly before real broker execution.
-
-Changes:
-- Load AsyncAPI source documents from `sourceDescriptions`.
-- Index AsyncAPI operations and channels.
-- Resolve AsyncAPI references from:
-  - `operationId`
-  - scoped operation IDs such as `$sourceDescriptions.orderEvents.placeOrder`
-  - `channelPath`
-- Update navigation:
-  - OpenAPI operation navigation still works.
-  - AsyncAPI operation navigation works.
-  - AsyncAPI channel navigation works for `channelPath`.
-- Update visualizer:
-  - show `$self` in overview.
-  - show source type badges: OpenAPI, AsyncAPI, Arazzo.
-  - render `send` and `receive` steps distinctly.
-  - show `channelPath`, `action`, `correlationId`, `timeout`, and `dependsOn` in the properties panel.
-  - draw dependency edges for step `dependsOn`.
-
-Tests:
-- AsyncAPI source loads.
-- AsyncAPI operation/channel is indexed.
-- `channelPath` navigation resolves to the AsyncAPI source.
-- Visualizer shows async metadata.
-- Dependency edges render without breaking existing success/failure/goto edges.
-
-Checkpoint:
-- AsyncAPI files are authorable, navigable, and visualized.
-- Real message transport is still not required.
-
-### Phase 9: AsyncAPI Adapter Interface
-
-Goal: add the runtime boundary that lets the runner send and receive messages without hard-coding Kafka/MQTT/RabbitMQ/etc.
-
-Important concept:
-- The runner does not implement brokers.
-- Kafka, RabbitMQ, MQTT, NATS, WebSocket servers, and cloud queues are external systems.
-- The runner only needs adapters/connectors that know how to talk to those systems.
-
-Core interface:
-- `Send(channel, message, options)`.
-- `Receive(channel, correlationId, timeout, options)`.
-- Return a normalized message object with:
-  - headers
-  - payload
-  - raw body/bytes when needed
-  - content type
-  - metadata such as topic/queue/channel name
+Core interface: `Send(channel, message, options)` and
+`Receive(channel, correlationId, timeout, options)`, returning a normalized message
+(headers, payload, raw bytes, content type, metadata like topic/queue/channel).
 
 Runner behavior:
-- For `action: send`:
-  - resolve AsyncAPI operation/channel.
-  - evaluate parameters and request body.
-  - serialize message.
-  - call adapter `Send`.
-  - store send metadata.
-- For `action: receive`:
-  - resolve AsyncAPI operation/channel.
-  - evaluate `correlationId`.
-  - call adapter `Receive`.
-  - enforce `timeout`.
-  - expose received message as `$message`.
-  - evaluate `successCriteria`.
-  - extract outputs from `$message`.
+- `action: send` → resolve op/channel, evaluate params & body, serialize, `Send`, store send metadata.
+- `action: receive` → resolve op/channel, evaluate `correlationId`, `Receive`, enforce
+  `timeout`, expose `$message`, evaluate `successCriteria`, extract outputs from `$message`.
 
-Initial adapters:
-- Add an in-memory/test adapter.
-- Add clear runtime error when a real broker adapter is required but not configured:
-  `AsyncAPI execution requires a configured adapter for this protocol`.
+Initial adapters: in-memory/test adapter; clear error when a real broker adapter is required
+but unconfigured: `AsyncAPI execution requires a configured adapter for this protocol`.
 
-Tests:
-- In-memory send succeeds.
-- In-memory receive gets a matching message.
-- Receive ignores non-matching correlation IDs.
-- Receive times out.
-- `$message.payload` criteria and outputs work.
+Tests: in-memory send; in-memory receive matches; receive ignores non-matching correlation ids;
+receive times out; `$message.payload` criteria & outputs work.
 
-Checkpoint:
-- AsyncAPI execution can be tested end-to-end without Kafka/MQTT/RabbitMQ.
-- Production broker support is ready to be added as separate adapters.
+### Phase 10: Message Serialization Layer — ❌ NOT STARTED
 
-### Phase 10: Message Serialization Layer
+Goal: separate message shape from wire format so adapters don't each reinvent serialization.
 
-Goal: separate message shape from wire format so broker adapters do not each invent serialization logic.
+Architecture: step builds a logical message (headers/payload/correlationId/contentType) →
+serializer → bytes/string → adapter Send/Receive → deserializer → `$message.payload`.
 
-Architecture:
-- Arazzo step builds a logical message:
-  - headers
-  - payload
-  - correlation ID
-  - content type
-- Serializer turns the logical payload into bytes/string.
-- Broker adapter sends or receives the bytes/string.
-- Deserializer turns received bytes/string back into `$message.payload`.
+Initial: JSON first; plain text if trivial; binary passthrough only when explicitly configured.
+Future: Avro, Protobuf, CloudEvents, custom — via a **serializer registry** keyed by content
+type / AsyncAPI message binding (`application/json`→JSON, `text/plain`→text,
+`application/x-protobuf`→Protobuf, `application/avro`→Avro). Protobuf needs `.proto`/descriptor
+info; Avro needs a schema/registry — both are adapter/serializer config, and runtime should
+fail clearly rather than guess when schema info is absent.
 
-Initial serializer support:
-- JSON first.
-- Plain text second if trivial.
-- Binary passthrough only when explicitly configured.
+Tests: JSON send serializes; JSON receive deserializes into `$message.payload`; unsupported
+content type fails clearly; registry selects the right serializer; placeholder tests document
+Protobuf/Avro expectations until implemented.
 
-Future serializer support:
-- Avro.
-- Protobuf.
-- CloudEvents.
-- Custom content types through a serializer registry.
+### Phase 11: First Real Broker Adapter — ❌ NOT STARTED
 
-Serializer registry:
-- Map content type or AsyncAPI message binding metadata to a serializer.
-- Example:
-  - `application/json` -> JSON serializer.
-  - `text/plain` -> text serializer.
-  - `application/x-protobuf` -> Protobuf serializer.
-  - `application/avro` -> Avro serializer.
+Goal: one production-grade adapter after the generic runtime is proven. Candidates: WebSocket
+(easiest demo), Kafka (enterprise streaming), MQTT (IoT). Responsibilities per adapter: map
+AsyncAPI channel → topic/exchange, publish & consume, match `correlationId` from headers/payload,
+use the serializer registry, support auth/TLS (and consumer groups / QoS / routing keys as
+applicable).
 
-Protobuf notes:
-- Protobuf requires schema/message type information.
-- The adapter/serializer must know where the `.proto` descriptor or generated type comes from.
-- If the AsyncAPI document does not provide enough schema information, runtime should fail clearly instead of guessing.
+Tests: integration tests behind opt-in env vars; unit tests with mocked broker clients;
+end-to-end sample for the chosen broker.
 
-Avro notes:
-- Avro requires an Avro schema or schema registry.
-- Schema registry configuration should be adapter/serializer configuration, not core runner logic.
-
-Tests:
-- JSON send serializes payload correctly.
-- JSON receive deserializes into `$message.payload`.
-- Unsupported content type fails clearly.
-- Serializer registry selects the correct serializer.
-- Placeholder tests document expected behavior for Protobuf/Avro until implemented.
-
-Checkpoint:
-- AsyncAPI runtime has the right architecture for JSON now and Protobuf/Avro later.
-
-### Phase 11: First Real Broker Adapter
-
-Goal: add one production-grade broker adapter after the generic runtime is proven.
-
-Recommended first adapter:
-- Choose based on target users.
-- Good candidates:
-  - WebSocket: easiest for demos and local testing.
-  - Kafka: common enterprise event-streaming case.
-  - MQTT: useful for IoT/event scenarios.
-
-Kafka adapter responsibilities:
-- Map AsyncAPI channel to Kafka topic.
-- Publish messages to topic.
-- Consume messages from topic.
-- Support consumer group configuration.
-- Match `correlationId` from headers or payload.
-- Use serializer registry.
-- Support auth/TLS configuration.
-
-MQTT adapter responsibilities:
-- Map AsyncAPI channel to MQTT topic.
-- Publish to topic.
-- Subscribe to topic.
-- Match `correlationId`.
-- Support QoS where configured.
-- Use serializer registry.
-- Support auth/TLS configuration.
-
-RabbitMQ adapter responsibilities:
-- Map AsyncAPI channel to exchange/routing key/queue.
-- Publish AMQP message.
-- Consume from queue.
-- Match `correlationId`.
-- Use serializer registry.
-- Support auth/TLS configuration.
-
-Tests:
-- Adapter-specific integration tests behind opt-in environment variables.
-- Unit tests with mocked broker clients.
-- End-to-end sample workflow for the chosen broker.
-
-Checkpoint:
-- One real AsyncAPI protocol works in production-like conditions.
-
-### Phase 12: CLI, MCP, Documentation, And Samples
+### Phase 12: CLI, MCP, Documentation, And Samples — ❌ NOT STARTED (partial samples exist)
 
 Goal: make the feature usable and explainable.
 
 Changes:
-- Update CLI workflow details to include:
-  - Arazzo version
-  - `$self`
-  - source types
-  - async channel/action metadata
-  - adapter configuration status
-- Update MCP responses:
-  - include async metadata.
-  - surface unsupported adapter errors clearly.
-  - show timeout/correlation errors clearly.
-- Add examples:
-  - minimal v1.1.0 OpenAPI-only workflow.
-  - v1.1.0 AsyncAPI send/receive workflow using in-memory adapter.
-  - selector object examples.
-  - JSONPath/XPath replacement examples.
-  - future broker adapter example once one real adapter exists.
-- Update user docs:
-  - REST vs AsyncAPI explanation.
-  - `send` / `receive` explanation.
-  - channels explanation.
-  - broker vs adapter explanation.
-  - serializer explanation.
+- CLI workflow details: Arazzo version, `$self`, source types, async channel/action metadata,
+  adapter-config status.
+- MCP responses: include async metadata; surface unsupported-adapter and timeout/correlation
+  errors clearly.
+- Examples: minimal v1.1.0 OpenAPI-only; v1.1.0 AsyncAPI send/receive on in-memory adapter;
+  selector-object examples; JSONPath/XPath replacement examples; a real-broker example once one
+  exists. (Note: `examples/async_test` already holds Phase-1 *parsing* fixtures — extend rather
+  than duplicate.)
+- Docs: REST vs AsyncAPI; `send`/`receive`; channels; broker vs adapter; serializer.
 
-Tests:
-- CLI still lists/runs old workflows.
-- CLI reports async adapter errors clearly.
-- MCP tool output remains stable for old workflows.
-- New examples parse and validate.
+Tests: CLI still lists/runs old workflows; CLI reports async adapter errors clearly; MCP output
+stable for old workflows; new examples parse and validate.
 
-Checkpoint:
-- Users can understand and try v1.1.0 features safely.
+---
 
 ## Final Acceptance Criteria
 
-- `arazzo: 1.1.0` is accepted everywhere.
-- Old `1.0.0` and `1.0.1` files still work.
-- `$self` and v1.1.0 source resolution work.
-- `asyncapi` sources load.
-- `channelPath`, `action`, `correlationId`, `timeout`, `dependsOn`, and `querystring` are modeled, validated, completed, and visualized.
-- Selector Objects and Expression Type Objects work in supported locations.
-- JSONPath, XPath, and JSON Pointer selectors/replacements are supported.
+- `arazzo: 1.1.0` accepted everywhere; `1.0.0`/`1.0.1` still work. *(model layer ✅)*
+- `$self` and v1.1.0 source resolution work. *(model ✅ / runtime ❌)*
+- `asyncapi` sources load and resolve.
+- `channelPath`/`action`/`correlationId`/`timeout`/`dependsOn`/`querystring` modeled, validated,
+  completed *(✅)*, and **executed/visualized** *(❌)*.
+- Selector Objects & Expression Type Objects work in supported locations *(modeled ✅ / evaluated ❌)*.
+- JSONPath, XPath, JSON Pointer selectors/replacements supported.
 - `$message` expressions work for AsyncAPI receive steps.
 - OpenAPI execution remains stable.
-- AsyncAPI execution works through the in-memory/test adapter.
-- Missing real broker adapter errors are clear.
-- Serialization is separated from adapters and supports JSON first.
-- Protobuf/Avro support is planned through serializer registry, not hard-coded into broker adapters.
+- AsyncAPI execution works through the in-memory/test adapter; missing-real-broker errors are clear.
+- Serialization separated from adapters, JSON first; Protobuf/Avro via registry, not hard-coded.
 
 ## Assumptions
 
-- Scope is full product support: editor, validation, visualization, CLI runner, MCP execution, and tests.
-- AsyncAPI execution will be pluggable, not hard-coded to a specific broker in the initial upgrade.
-- Real broker adapters will be added incrementally after the adapter interface and serialization layer are stable.
-- JSON is the first supported message serialization format.
-- Protobuf, Avro, CloudEvents, and custom content types are follow-up serializer implementations.
-- Existing Arazzo `1.0.0` and `1.0.1` behavior must remain backward compatible.
+- Scope is full-product support: editor, validation, visualization, CLI runner, MCP, tests.
+- AsyncAPI execution is pluggable, not hard-coded to a specific broker initially.
+- Real broker adapters are added incrementally after the adapter interface + serialization are stable.
+- JSON is the first serialization format; Protobuf/Avro/CloudEvents/custom are follow-ups.
+- Existing `1.0.0`/`1.0.1` behavior stays backward compatible.
+
+## Suggested Execution Order
+
+The model/LSP work (Phases 1–2) is done, so an implementing AI should start at **Phase 3** and
+proceed 3 → 12. Phases 4 and 5 share the selector/expression service and are best done together;
+Phase 6 depends on Phase 4; Phase 7 is independent and can be parallelized with 4–6; Phases
+8–11 form the AsyncAPI runtime track and depend on 3 (resolution) + 4–5 (evaluation) + 9
+(adapter) before 10–11. Phase 12 closes out docs/samples last.

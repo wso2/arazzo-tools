@@ -252,7 +252,7 @@ func (v *Validator) validateSteps(workflow *parser.Workflow, doc *parser.ArazzoD
 			})
 		}
 
-		// Validate action enum: if set, must be "send" or "receive" (spec §5.8.3)
+		// Validate action enum: if set, must be "send" or "receive" (spec §5.8.5)
 		if step.Action != "" && step.Action != "send" && step.Action != "receive" {
 			errors = append(errors, ValidationError{
 				Line:     step.LineNumber,
@@ -262,7 +262,17 @@ func (v *Validator) validateSteps(workflow *parser.Workflow, doc *parser.ArazzoD
 			})
 		}
 
-		// Validate channelPath format and source description type (spec §5.8.3)
+		// 'action' is only applicable to AsyncAPI steps (spec §5.8.5: "Only applicable for asyncapi steps").
+		if step.Action != "" && step.ChannelPath == "" {
+			errors = append(errors, ValidationError{
+				Line:     step.LineNumber,
+				Column:   0,
+				Message:  fmt.Sprintf("Step '%s': 'action' is only applicable to AsyncAPI steps ('channelPath' must also be set)", step.StepID),
+				Severity: "warning",
+			})
+		}
+
+		// Validate channelPath format and source description type (spec §5.8.5)
 		if step.ChannelPath != "" {
 			parts := strings.SplitN(step.ChannelPath, "#", 2)
 			if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
@@ -300,7 +310,7 @@ func (v *Validator) validateSteps(workflow *parser.Workflow, doc *parser.ArazzoD
 			}
 		}
 
-		// Validate timeout is non-negative (spec §5.8.3)
+		// Validate timeout is non-negative (spec §5.8.5)
 		if step.Timeout < 0 {
 			errors = append(errors, ValidationError{
 				Line:     step.LineNumber,
@@ -310,17 +320,34 @@ func (v *Validator) validateSteps(workflow *parser.Workflow, doc *parser.ArazzoD
 			})
 		}
 
-		// Validate dependsOn references (spec §5.8.3)
+		// Validate dependsOn references (spec §5.8.5)
 		errors = append(errors, v.validateDependsOn(&step, workflow, doc)...)
 
-		// Warn if correlationId is set on a non-AsyncAPI step (no channelPath)
-		if step.CorrelationID != "" && step.ChannelPath == "" {
-			errors = append(errors, ValidationError{
-				Line:     step.LineNumber,
-				Column:   0,
-				Message:  fmt.Sprintf("Step '%s': 'correlationId' is only meaningful on AsyncAPI steps (channelPath must also be set)", step.StepID),
-				Severity: "warning",
-			})
+		// 'correlationId' is only applicable to AsyncAPI steps with action 'receive' (spec §5.8.5).
+		if step.CorrelationID != "" {
+			if step.ChannelPath == "" {
+				errors = append(errors, ValidationError{
+					Line:     step.LineNumber,
+					Column:   0,
+					Message:  fmt.Sprintf("Step '%s': 'correlationId' is only meaningful on AsyncAPI steps (channelPath must also be set)", step.StepID),
+					Severity: "warning",
+				})
+			} else if step.Action != "receive" {
+				errors = append(errors, ValidationError{
+					Line:     step.LineNumber,
+					Column:   0,
+					Message:  fmt.Sprintf("Step '%s': 'correlationId' is only applicable to AsyncAPI steps with action 'receive'", step.StepID),
+					Severity: "warning",
+				})
+			}
+		}
+
+		// Validate parameter 'in' locations (spec §5.8.6)
+		errors = append(errors, v.validateParameterLocations(step.Parameters, step.StepID, step.LineNumber)...)
+
+		// Validate reusable-object references on step parameters resolve to a component
+		for _, p := range step.Parameters {
+			errors = append(errors, v.validateComponentReference(p.Reference, doc, step.StepID, step.LineNumber)...)
 		}
 
 		// Validate successCriteria is non-empty when the key is present (spec §5.8.5.1)
@@ -333,18 +360,28 @@ func (v *Validator) validateSteps(workflow *parser.Workflow, doc *parser.ArazzoD
 			})
 		}
 
-		// Validate onSuccess action parameters (spec §5.8.7.1):
-		//   - parameters only valid when workflowId is set
-		//   - 'in' MUST NOT be used
+		// Validate onSuccess actions (spec §5.8.7): type enum {goto,end}, target exclusivity,
+		// reusable references, and parameter rules (§5.8.7.1).
 		for i, action := range step.OnSuccess {
-			errors = append(errors, v.validateActionParameters(action.Parameters, action.WorkflowID, "Arazzo spec section 5.8.7.1", fmt.Sprintf("onSuccess[%d]", i), step.StepID, step.LineNumber)...)
+			ref := fmt.Sprintf("onSuccess[%d]", i)
+			errors = append(errors, v.validateComponentReference(action.Reference, doc, step.StepID, step.LineNumber)...)
+			if action.Reference == "" {
+				errors = append(errors, v.validateActionType(action.Type, []string{"goto", "end"}, ref, step.StepID, step.LineNumber)...)
+				errors = append(errors, v.validateActionTarget(action.StepID, action.WorkflowID, ref, step.StepID, step.LineNumber)...)
+			}
+			errors = append(errors, v.validateActionParameters(action.Parameters, action.WorkflowID, "Arazzo spec section 5.8.7.1", ref, step.StepID, step.LineNumber)...)
 		}
 
-		// Validate onFailure action parameters (spec §5.8.8.1):
-		//   - parameters only valid when workflowId is set
-		//   - 'in' MUST NOT be used
+		// Validate onFailure actions (spec §5.8.8): type enum {goto,end,retry}, target exclusivity,
+		// reusable references, and parameter rules (§5.8.8.1).
 		for i, action := range step.OnFailure {
-			errors = append(errors, v.validateActionParameters(action.Parameters, action.WorkflowID, "Arazzo spec section 5.8.8.1", fmt.Sprintf("onFailure[%d]", i), step.StepID, step.LineNumber)...)
+			ref := fmt.Sprintf("onFailure[%d]", i)
+			errors = append(errors, v.validateComponentReference(action.Reference, doc, step.StepID, step.LineNumber)...)
+			if action.Reference == "" {
+				errors = append(errors, v.validateActionType(action.Type, []string{"goto", "end", "retry"}, ref, step.StepID, step.LineNumber)...)
+				errors = append(errors, v.validateActionTarget(action.StepID, action.WorkflowID, ref, step.StepID, step.LineNumber)...)
+			}
+			errors = append(errors, v.validateActionParameters(action.Parameters, action.WorkflowID, "Arazzo spec section 5.8.8.1", ref, step.StepID, step.LineNumber)...)
 		}
 
 		// Validate runtime expressions
@@ -624,4 +661,129 @@ func (v *Validator) validateActionParameters(params []parser.Parameter, workflow
 		}
 	}
 	return errors
+}
+
+// validParameterLocations are the allowed Parameter Object 'in' values (spec §5.8.6).
+// 'querystring' was added in v1.1.0. Note: 'body' is NOT valid — use requestBody instead.
+var validParameterLocations = map[string]bool{
+	"path": true, "query": true, "querystring": true, "header": true, "cookie": true,
+}
+
+// validateParameterLocations checks that each parameter's 'in' value (when present) is a
+// valid Arazzo parameter location. Reusable-object references (no inline 'in') are skipped.
+func (v *Validator) validateParameterLocations(params []parser.Parameter, stepID string, lineNumber int) []ValidationError {
+	var errors []ValidationError
+	for _, param := range params {
+		if param.In == "" {
+			continue
+		}
+		if !validParameterLocations[param.In] {
+			errors = append(errors, ValidationError{
+				Line:     lineNumber,
+				Column:   0,
+				Message:  fmt.Sprintf("Step '%s': parameter '%s' has invalid 'in' value '%s' (must be 'path', 'query', 'querystring', 'header', or 'cookie')", stepID, param.Name, param.In),
+				Severity: "error",
+			})
+		}
+	}
+	return errors
+}
+
+// validateActionType checks a Success/Failure Action 'type' against the allowed set.
+func (v *Validator) validateActionType(actionType string, allowed []string, actionRef, stepID string, lineNumber int) []ValidationError {
+	if actionType == "" {
+		return []ValidationError{{
+			Line:     lineNumber,
+			Column:   0,
+			Message:  fmt.Sprintf("Step '%s': %s is missing required field 'type'", stepID, actionRef),
+			Severity: "error",
+		}}
+	}
+	for _, a := range allowed {
+		if actionType == a {
+			return nil
+		}
+	}
+	return []ValidationError{{
+		Line:     lineNumber,
+		Column:   0,
+		Message:  fmt.Sprintf("Step '%s': %s has invalid type '%s' (must be one of %s)", stepID, actionRef, actionType, strings.Join(allowed, ", ")),
+		Severity: "error",
+	}}
+}
+
+// validateActionTarget enforces that 'stepId' and 'workflowId' are mutually exclusive on an action.
+func (v *Validator) validateActionTarget(stepIDTarget, workflowID, actionRef, stepID string, lineNumber int) []ValidationError {
+	if stepIDTarget != "" && workflowID != "" {
+		return []ValidationError{{
+			Line:     lineNumber,
+			Column:   0,
+			Message:  fmt.Sprintf("Step '%s': %s has both 'stepId' and 'workflowId' (they are mutually exclusive)", stepID, actionRef),
+			Severity: "error",
+		}}
+	}
+	return nil
+}
+
+// validateComponentReference checks that a Reusable Object 'reference' resolves to an existing
+// component. References use the runtime expression form '$components.<section>.<key>'
+// (spec §5.8.10 Reusable Object). Empty references are ignored (inline objects).
+func (v *Validator) validateComponentReference(reference string, doc *parser.ArazzoDocument, stepID string, lineNumber int) []ValidationError {
+	if reference == "" {
+		return nil
+	}
+	if !strings.HasPrefix(reference, "$components.") {
+		return []ValidationError{{
+			Line:     lineNumber,
+			Column:   0,
+			Message:  fmt.Sprintf("Step '%s': reusable-object reference '%s' must be a runtime expression of the form '$components.<section>.<key>'", stepID, reference),
+			Severity: "warning",
+		}}
+	}
+	rest := strings.TrimPrefix(reference, "$components.")
+	dot := strings.Index(rest, ".")
+	if dot <= 0 || dot == len(rest)-1 {
+		return []ValidationError{{
+			Line:     lineNumber,
+			Column:   0,
+			Message:  fmt.Sprintf("Step '%s': malformed component reference '%s' (expected '$components.<section>.<key>')", stepID, reference),
+			Severity: "error",
+		}}
+	}
+	section, key := rest[:dot], rest[dot+1:]
+	if doc.Components == nil {
+		return []ValidationError{{
+			Line:     lineNumber,
+			Column:   0,
+			Message:  fmt.Sprintf("Step '%s': reference '%s' but the document has no 'components' section", stepID, reference),
+			Severity: "error",
+		}}
+	}
+	exists := false
+	switch section {
+	case "inputs":
+		_, exists = doc.Components.Inputs[key]
+	case "parameters":
+		_, exists = doc.Components.Parameters[key]
+	case "successActions":
+		_, exists = doc.Components.SuccessActions[key]
+	case "failureActions":
+		_, exists = doc.Components.FailureActions[key]
+	default:
+		return []ValidationError{{
+			Line:     lineNumber,
+			Column:   0,
+			Message:  fmt.Sprintf("Step '%s': reference '%s' uses unknown components section '%s' (expected inputs, parameters, successActions, or failureActions)", stepID, reference, section),
+			Severity: "error",
+		}}
+	}
+	if !exists {
+		return []ValidationError{{
+			Line:     lineNumber,
+			Column:   0,
+			Message:  fmt.Sprintf("Step '%s': reference '%s' does not resolve — no '%s' named '%s' in components", stepID, reference, section, key),
+			Severity: "error",
+		}}
+	}
+	return nil
 }

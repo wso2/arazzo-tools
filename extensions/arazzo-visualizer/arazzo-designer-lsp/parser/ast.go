@@ -67,7 +67,7 @@ type Step struct {
 type Parameter struct {
 	Reference string      `yaml:"reference,omitempty" json:"reference,omitempty"` // Arazzo reusable-object reference, e.g. $components.parameters.RequestId
 	Name      string      `yaml:"name,omitempty" json:"name,omitempty"`
-	In        string      `yaml:"in,omitempty" json:"in,omitempty"`       // query, header, path, cookie, body
+	In        string      `yaml:"in,omitempty" json:"in,omitempty"`       // path, query, querystring, header, cookie (spec §5.8.6; 'querystring' added v1.1.0)
 	Value     interface{} `yaml:"value,omitempty" json:"value,omitempty"` // Can be a literal value or runtime expression
 }
 
