@@ -22,10 +22,11 @@ func buildTestServer(workflows []interface{}) *MCPServer {
 	}
 	mcpSrv := server.NewMCPServer("arazzo-test", "1.0.0")
 	return &MCPServer{
-		Runner:    arazzoRunner,
-		MCPServer: mcpSrv,
-		Port:      0,
-		Sink:      &telemetry.NoopSink{},
+		Runner:      arazzoRunner,
+		MCPServer:   mcpSrv,
+		Port:        0,
+		Sink:        &telemetry.NoopSink{},
+		lastResults: make(map[string]RunResponse),
 	}
 }
 
