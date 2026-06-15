@@ -75,7 +75,6 @@ func LoadSourceDescriptions(doc *models.ArazzoDoc, arazzoPath string) (map[strin
 	sources := make(map[string]interface{})
 
 	baseURI := ResolveBaseURI(doc.Self, arazzoPath)
-	baseDir := filepath.Dir(baseURI)
 
 	// cache maps a resolved target location to its parsed spec so that two source
 	// descriptions resolving to the same document are loaded only once (identity over location).
@@ -97,7 +96,13 @@ func LoadSourceDescriptions(doc *models.ArazzoDoc, arazzoPath string) (map[strin
 		if isRemote {
 			spec, err = loadRemoteSpec(target)
 		} else {
-			// Preserve the existing candidate-based local loading, anchored at the base directory.
+			// Local loading is anchored at the base document's directory. When the base URI is a
+			// remote URL (absolute $self), it has no meaningful local directory, so fall back to
+			// the Arazzo file's own directory.
+			baseDir := filepath.Dir(baseURI)
+			if IsRemoteURL(baseURI) {
+				baseDir = filepath.Dir(arazzoPath)
+			}
 			spec, err = loadLocalSpec(src.URL, baseDir)
 		}
 
@@ -105,9 +110,13 @@ func LoadSourceDescriptions(doc *models.ArazzoDoc, arazzoPath string) (map[strin
 			return nil, fmt.Errorf("error loading source description %s: %w", src.Name, err)
 		}
 
-		// Store the original source URL for relative server URL resolution (unchanged behavior).
+		// Store the RESOLVED source location for relative server-URL resolution. Using the resolved
+		// target (not the raw src.URL) means that when an absolute remote $self turns a relative
+		// source into a remote URL, server resolution still has a usable absolute base.
+		// For local sources the target is a file path (non-http), which downstream ignores — same
+		// effective behavior as before.
 		if specMap, ok := spec.(map[string]interface{}); ok {
-			specMap["_source_url"] = src.URL
+			specMap["_source_url"] = target
 		}
 
 		cache[target] = spec

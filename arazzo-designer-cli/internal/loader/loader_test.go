@@ -101,6 +101,12 @@ func TestLoadSources_RemoteSelf_AndDedup(t *testing.T) {
 	if got := atomic.LoadInt32(&hits); got != 1 {
 		t.Errorf("expected the remote spec to be fetched once (dedup), got %d hits", got)
 	}
+	// _source_url must be the RESOLVED absolute URL (not the raw "./api.yaml"), so that
+	// downstream relative server-URL resolution still has a usable absolute base.
+	wantSourceURL := srv.URL + "/wf/api.yaml"
+	if got := sources["api"].(map[string]interface{})["_source_url"]; got != wantSourceURL {
+		t.Errorf("_source_url = %v, want resolved %q", got, wantSourceURL)
+	}
 }
 
 // Backward compatibility: an absolute remote source URL is fetched as-is regardless of $self.
