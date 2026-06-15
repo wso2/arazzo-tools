@@ -87,11 +87,11 @@ func checkWorkflow(node *yaml.Node) []ValidationError {
 			})
 		case "successActions":
 			forEachSeqItem(val, func(_ int, item *yaml.Node) {
-				errors = append(errors, checkKeys(item, successActionKeys, "a success action")...)
+				errors = append(errors, checkAction(item, successActionKeys, "a success action")...)
 			})
 		case "failureActions":
 			forEachSeqItem(val, func(_ int, item *yaml.Node) {
-				errors = append(errors, checkKeys(item, failureActionKeys, "a failure action")...)
+				errors = append(errors, checkAction(item, failureActionKeys, "a failure action")...)
 			})
 		}
 	})
