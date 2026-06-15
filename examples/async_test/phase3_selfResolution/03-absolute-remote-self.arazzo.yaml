@@ -1,0 +1,50 @@
+# Phase 3 — Scenario 3: ABSOLUTE REMOTE $self (relative source becomes REMOTE).
+#
+# $self is an absolute web URL. That makes the base URI a web address. So the RELATIVE source
+# '../docs' is resolved against it into a full web URL and FETCHED OVER HTTP:
+#
+#   base $self : https://api.practicesoftwaretesting.com/workflows/orders.arazzo.yaml
+#   source     : ../docs
+#   resolves to: https://api.practicesoftwaretesting.com/docs   ← fetched remotely
+#
+# This is the headline Phase 3 behavior: an absolute $self turns a relative source into a remote one.
+# Needs internet (it downloads the OpenAPI spec from the URL above, then calls the API).
+
+arazzo: "1.1.0"
+$self: https://api.practicesoftwaretesting.com/workflows/orders.arazzo.yaml
+
+info:
+  title: "Phase 3 - Absolute remote $self"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ../docs                          # relative → resolves to https://api.practicesoftwaretesting.com/docs
+    type: openapi
+
+workflows:
+  - workflowId: brandsFlow
+    summary: List brands, then fetch the first brand by id.
+    steps:
+      - stepId: listBrands
+        operationId: getBrands
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          firstBrandId: "$response.body#/0/id"
+          firstBrandName: "$response.body#/0/name"
+
+      - stepId: getOneBrand
+        operationId: getBrand
+        parameters:
+          - name: brandId
+            in: path
+            value: "$steps.listBrands.outputs.firstBrandId"
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          verifiedName: "$response.body#/name"
+
+    outputs:
+      firstBrandId: "$steps.listBrands.outputs.firstBrandId"
+      verifiedName: "$steps.getOneBrand.outputs.verifiedName"
