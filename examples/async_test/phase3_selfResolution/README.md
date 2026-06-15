@@ -24,7 +24,7 @@ resolution were broken, the source wouldn't be found and the run would fail to l
 Run them the **same way you run `examples/go-runner-test/toolshop`** — open a file in VS Code with
 the Arazzo extension and run the workflow. Under the hood that launches the CLI runner:
 
-```
+```bash
 arazzo-designer-cli serve -f 01-no-self-local.arazzo.yaml
 ```
 
