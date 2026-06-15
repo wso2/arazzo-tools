@@ -1,0 +1,100 @@
+# Phase 2 — RED ERRORS.
+# EXPECT: each step (or field) marked below produces a RED error underline.
+#
+# Note on WHERE the underline appears: step-level errors are drawn on the step's `stepId:` line,
+# and document-level errors ($self, source type) are drawn at the top of the file (line 1).
+# The error MESSAGE (hover over the squiggle) names the exact problem.
+
+arazzo: "1.1.0"
+$self: https://example.com/wf.yaml#section     # ERROR: $self MUST NOT contain a fragment ('#')
+
+info:
+  title: Phase 2 Errors
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+  - name: orderBus
+    url: ./orders.asyncapi.yaml
+    type: asyncapi                               # valid (so channelPath refs to it are clean)
+  - name: badSource
+    url: ./whatever.yaml
+    type: grpc                                   # ERROR: invalid source type (openapi/asyncapi/arazzo)
+
+components:
+  successActions:
+    RealAction:
+      name: RealAction
+      type: end
+
+workflows:
+  - workflowId: errorFlow
+    steps:
+      - stepId: noTarget                          # ERROR: must have one of operationId/operationPath/channelPath/workflowId
+        successCriteria:
+          - condition: $statusCode == 200
+
+      - stepId: twoTargets                        # ERROR: can only have ONE target (operationId + channelPath both set)
+        operationId: getBrands
+        channelPath: orderBus#/channels/x
+        action: receive
+
+      - stepId: badAction                         # ERROR: invalid action 'publish' (must be send/receive)
+        channelPath: orderBus#/channels/x
+        action: publish
+
+      - stepId: channelOnRestSource               # ERROR: channelPath points at 'toolshop' which is openapi, must be asyncapi
+        channelPath: toolshop#/channels/x
+        action: send
+
+      - stepId: negativeTimeout                   # ERROR: timeout must be non-negative
+        operationId: getBrands
+        timeout: -10
+
+      - stepId: emptyCriteria                     # ERROR: successCriteria is present but empty
+        operationId: getBrands
+        successCriteria: []
+
+      - stepId: badParamIn                        # ERROR: invalid 'in' value 'body'
+        operationId: getBrands
+        parameters:
+          - name: data
+            in: body
+            value: x
+
+      - stepId: badDependsOn                      # ERROR: dependsOn references unknown step 'ghostStep'
+        operationId: getBrands
+        dependsOn:
+          - ghostStep
+
+      - stepId: badActionType                     # ERROR: invalid action type 'jump' (must be goto/end)
+        operationId: getBrands
+        onSuccess:
+          - name: a
+            type: jump
+
+      - stepId: bothActionTargets                 # ERROR: action has both stepId and workflowId (mutually exclusive)
+        operationId: getBrands
+        onSuccess:
+          - name: a
+            type: goto
+            stepId: negativeTimeout
+            workflowId: errorFlow
+
+      - stepId: actionParamWithIn                 # ERROR: 'in' MUST NOT be used on action parameters
+        operationId: getBrands
+        onSuccess:
+          - name: a
+            type: goto
+            workflowId: errorFlow
+            parameters:
+              - name: p
+                in: query
+                value: x
+
+      - stepId: missingReference                  # ERROR: reference does not resolve to a component
+        operationId: getBrands
+        onSuccess:
+          - reference: $components.successActions.DoesNotExist
