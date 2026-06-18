@@ -25,6 +25,15 @@ func ResolveBaseURI(self, retrievalPath string) string {
 	if self == "" {
 		return retrievalPath
 	}
+	// Per RFC3986 §5.1 a base URI excludes any fragment, and the v1.1.0 spec forbids a fragment in
+	// $self (§5.8.1.1). Strip it defensively so headless CLI runs behave spec-correctly even when
+	// the LSP validation that flags this to the author hasn't run.
+	if i := strings.Index(self, "#"); i >= 0 {
+		self = self[:i]
+	}
+	if self == "" {
+		return retrievalPath
+	}
 	if IsRemoteURL(self) || filepath.IsAbs(self) {
 		return self
 	}

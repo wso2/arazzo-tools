@@ -33,6 +33,8 @@ func TestResolveBaseURI(t *testing.T) {
 		{"absolute-remote", "https://api.example.com/wf.yaml", retrieval, "https://api.example.com/wf.yaml"},
 		{"relative-local", "nested/wf.yaml", retrieval, filepath.Join("a", "b", "nested", "wf.yaml")},
 		{"relative-against-remote-retrieval", "wf.yaml", "https://api.example.com/dir/root.yaml", "https://api.example.com/dir/wf.yaml"},
+		// $self MUST NOT contain a fragment (spec §5.8.1.1); the loader strips it (RFC3986 §5.1).
+		{"absolute-remote-with-fragment", "https://api.example.com/wf.yaml#/frag", retrieval, "https://api.example.com/wf.yaml"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
