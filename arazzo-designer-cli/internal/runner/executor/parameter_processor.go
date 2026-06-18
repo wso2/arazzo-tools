@@ -75,8 +75,17 @@ func (pp *ParameterProcessor) PrepareRequestBody(requestBody map[string]interfac
 	contentType, _ := requestBody["contentType"].(string)
 	payload := requestBody["payload"]
 
-	// Evaluate the entire payload to resolve expressions
-	if m, ok := payload.(map[string]interface{}); ok {
+	// Evaluate the entire payload to resolve expressions.
+	// Nested Selector Objects inside a map/array are handled by Process*Expressions; a payload
+	// that is itself a Selector Object is evaluated here.
+	if evaluator.IsSelectorObject(payload) {
+		selMap, _ := payload.(map[string]interface{})
+		if value, err := evaluator.EvaluateSelectorObject(selMap, state, pp.SourceDescriptions, nil); err == nil {
+			payload = value
+		} else {
+			log.Printf("Warning: payload selector failed: %v", err)
+		}
+	} else if m, ok := payload.(map[string]interface{}); ok {
 		payload = evaluator.ProcessObjectExpressions(m, state, pp.SourceDescriptions)
 	} else if arr, ok := payload.([]interface{}); ok {
 		payload = evaluator.ProcessArrayExpressions(arr, state, pp.SourceDescriptions)
@@ -148,6 +157,15 @@ func (pp *ParameterProcessor) resolveParameterValue(value interface{}, state *mo
 		return v
 
 	case map[string]interface{}:
+		// A v1.1.0 Selector Object is evaluated as a whole; a plain object is recursed into.
+		if evaluator.IsSelectorObject(v) {
+			if value, err := evaluator.EvaluateSelectorObject(v, state, pp.SourceDescriptions, nil); err == nil {
+				return value
+			} else {
+				log.Printf("Warning: parameter selector failed: %v", err)
+				return v
+			}
+		}
 		return evaluator.ProcessObjectExpressions(v, state, pp.SourceDescriptions)
 
 	case []interface{}:
@@ -219,8 +237,15 @@ func applyReplacements(payload interface{}, replacements []interface{}, state *m
 		target, _ := rep["target"].(string)
 		value := rep["value"]
 
-		// Resolve expression values
-		if s, ok := value.(string); ok && strings.HasPrefix(s, "$") {
+		// Resolve the replacement value: Selector Object, runtime expression, or literal.
+		if evaluator.IsSelectorObject(value) {
+			selMap, _ := value.(map[string]interface{})
+			if resolved, err := evaluator.EvaluateSelectorObject(selMap, state, sourceDescs, nil); err == nil {
+				value = resolved
+			} else {
+				log.Printf("Warning: replacement selector failed: %v", err)
+			}
+		} else if s, ok := value.(string); ok && strings.HasPrefix(s, "$") {
 			value = evaluator.EvaluateExpression(s, state, sourceDescs, nil)
 		}
 
