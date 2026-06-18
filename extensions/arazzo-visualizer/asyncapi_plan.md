@@ -190,7 +190,30 @@ Tests: relative source with `$self` absent; with absolute `$self`; relative `$se
 against retrieval URI; remote-style `$self` + relative source URL; two docs sharing a `$self`
 treated as one; full parse before resolution; existing examples still load.
 
-### Phase 4: Selector Objects And Expression Types — ❌ NOT STARTED
+### Phase 4: Selector Objects And Expression Types — ✅ DONE except XPath (2026-06-17)
+
+**Implemented.** New shared selector-evaluation service [internal/evaluator/selector.go](../../arazzo-designer-cli/internal/evaluator/selector.go):
+`IsSelectorObject` (detects a `{context, selector, type}` map), `EvaluateSelectorObject`
+(resolves the `context` expression, then routes by dialect), `resolveExpressionType` (handles
+bare-string or Expression Type Object `type`, applies default versions, rejects unknown
+dialects/versions), and `EvaluateJSONPathValue` (value-returning JSONPath, complementing the
+existing bool criterion engine). Wired into all permitted spots: step outputs
+([output_extractor.go](../../arazzo-designer-cli/internal/runner/executor/output_extractor.go)), workflow outputs ([runner.go](../../arazzo-designer-cli/internal/runner/runner.go) `resolveWorkflowOutputs`),
+parameter values + request-body payloads (nested) + payload replacement values
+([parameter_processor.go](../../arazzo-designer-cli/internal/runner/executor/parameter_processor.go)), and the central `processValue` recursion. `jsonpointer` reuses
+`ResolveJSONPointer` (RFC 6901); `jsonpath` reuses the `ojg` engine (RFC 9535). **XPath returns
+a clear "not yet supported" error** (deferred to the next step). LSP: `validateExpressionType`
+([validator.go](../../arazzo-designer-cli/../arazzo-designer-lsp/validator/validator.go)) validates Expression Type Objects on criterion `type` (version required + valid per
+type). Plain string expressions are untouched. Tests: `evaluator/selector_test.go`,
+`executor/output_extractor_test.go`, `executor/parameter_processor_test.go`, and an LSP
+`TestExpressionType` — all green; full CLI + LSP suites green.
+
+**Remaining for the XPath follow-up:** add an XML/XPath engine and route `xpath` selectors to it
+(currently they error). Also a possible tightening: LSP validation of Expression Type Objects on
+Selector Objects / `targetSelectorType` inside outputs/payloads (currently runtime-validated only,
+since those are untyped maps in the LSP).
+
+Original spec-derived requirements (for reference):
 
 Goal: support the new structured-extraction model. **Currently Selector Objects are preserved
 verbatim and never evaluated.**
