@@ -381,6 +381,12 @@ func TestUnknownFields(t *testing.T) {
 	if has(errs, "warning", "Unknown field 'x-internal'") {
 		t.Errorf("x- extension should be allowed, got:%s", dump(errs))
 	}
+
+	// 'value' is only valid on a parameter Reusable Object — on an action it must be flagged.
+	errs = diagnose(t, docWith("", "      - stepId: s1\n        operationId: op\n        onSuccess:\n          - name: a\n            type: end\n            value: x\n"))
+	if !has(errs, "warning", "Unknown field 'value' in a success action") {
+		t.Errorf("expected unknown 'value' warning on an action, got:%s", dump(errs))
+	}
 }
 
 // ---- Example fixtures ----
