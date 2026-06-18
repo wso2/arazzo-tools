@@ -57,7 +57,7 @@ func (c *CompletionProvider) ProvideCompletion(content string, line, character i
 
 	case isAfterColon(beforeCursor):
 		// Field value completions
-		items = append(items, c.getFieldValueCompletions(beforeCursor)...)
+		items = append(items, c.getFieldValueCompletions(beforeCursor, context)...)
 
 	default:
 		// Field name completions based on context
@@ -268,8 +268,10 @@ func (c *CompletionProvider) getWorkflowReferenceCompletions(doc *parser.ArazzoD
 	return items
 }
 
-// getFieldValueCompletions returns completions for field values
-func (c *CompletionProvider) getFieldValueCompletions(beforeCursor string) []protocol.CompletionItem {
+// getFieldValueCompletions returns completions for field values.
+// The yaml context (from detectContext) disambiguates 'type:' — which is reused by
+// sourceDescriptions, success/failure actions, and criteria with different value sets.
+func (c *CompletionProvider) getFieldValueCompletions(beforeCursor string, context string) []protocol.CompletionItem {
 	var items []protocol.CompletionItem
 
 	if strings.Contains(beforeCursor, "arazzo:") {
@@ -281,11 +283,33 @@ func (c *CompletionProvider) getFieldValueCompletions(beforeCursor string) []pro
 	}
 
 	if strings.Contains(beforeCursor, "type:") {
-		items = append(items,
-			protocol.CompletionItem{Label: "openapi", Kind: protocol.CompletionItemKindValue, InsertText: "openapi"},
-			protocol.CompletionItem{Label: "asyncapi", Kind: protocol.CompletionItemKindValue, InsertText: "asyncapi"},
-			protocol.CompletionItem{Label: "arazzo", Kind: protocol.CompletionItemKindValue, InsertText: "arazzo"},
-		)
+		switch context {
+		case "sourceDescriptions":
+			items = append(items,
+				protocol.CompletionItem{Label: "openapi", Kind: protocol.CompletionItemKindValue, InsertText: "openapi"},
+				protocol.CompletionItem{Label: "asyncapi", Kind: protocol.CompletionItemKindValue, InsertText: "asyncapi"},
+				protocol.CompletionItem{Label: "arazzo", Kind: protocol.CompletionItemKindValue, InsertText: "arazzo"},
+			)
+		case "onSuccess":
+			items = append(items,
+				protocol.CompletionItem{Label: "end", Kind: protocol.CompletionItemKindValue, InsertText: "end"},
+				protocol.CompletionItem{Label: "goto", Kind: protocol.CompletionItemKindValue, InsertText: "goto"},
+			)
+		case "onFailure":
+			items = append(items,
+				protocol.CompletionItem{Label: "end", Kind: protocol.CompletionItemKindValue, InsertText: "end"},
+				protocol.CompletionItem{Label: "goto", Kind: protocol.CompletionItemKindValue, InsertText: "goto"},
+				protocol.CompletionItem{Label: "retry", Kind: protocol.CompletionItemKindValue, InsertText: "retry"},
+			)
+		case "successCriteria":
+			items = append(items,
+				protocol.CompletionItem{Label: "simple", Kind: protocol.CompletionItemKindValue, InsertText: "simple"},
+				protocol.CompletionItem{Label: "regex", Kind: protocol.CompletionItemKindValue, InsertText: "regex"},
+				protocol.CompletionItem{Label: "jsonpath", Kind: protocol.CompletionItemKindValue, InsertText: "jsonpath"},
+				protocol.CompletionItem{Label: "xpath", Kind: protocol.CompletionItemKindValue, InsertText: "xpath"},
+				protocol.CompletionItem{Label: "jsonpointer", Kind: protocol.CompletionItemKindValue, Detail: "v1.1.0 (use via Expression Type Object)", InsertText: "jsonpointer"},
+			)
+		}
 	}
 
 	if strings.Contains(beforeCursor, "action:") {
@@ -296,13 +320,13 @@ func (c *CompletionProvider) getFieldValueCompletions(beforeCursor string) []pro
 	}
 
 	if strings.Contains(beforeCursor, "in:") {
+		// Valid Arazzo parameter locations (spec §5.8.6). Note: 'body' is NOT valid — use requestBody.
 		items = append(items,
-			protocol.CompletionItem{Label: "query", Kind: protocol.CompletionItemKindValue, InsertText: "query"},
-			protocol.CompletionItem{Label: "querystring", Kind: protocol.CompletionItemKindValue, InsertText: "querystring"},
-			protocol.CompletionItem{Label: "header", Kind: protocol.CompletionItemKindValue, InsertText: "header"},
 			protocol.CompletionItem{Label: "path", Kind: protocol.CompletionItemKindValue, InsertText: "path"},
+			protocol.CompletionItem{Label: "query", Kind: protocol.CompletionItemKindValue, InsertText: "query"},
+			protocol.CompletionItem{Label: "querystring", Kind: protocol.CompletionItemKindValue, Detail: "v1.1.0", InsertText: "querystring"},
+			protocol.CompletionItem{Label: "header", Kind: protocol.CompletionItemKindValue, InsertText: "header"},
 			protocol.CompletionItem{Label: "cookie", Kind: protocol.CompletionItemKindValue, InsertText: "cookie"},
-			protocol.CompletionItem{Label: "body", Kind: protocol.CompletionItemKindValue, InsertText: "body"},
 		)
 	}
 
@@ -313,6 +337,7 @@ func (c *CompletionProvider) getFieldValueCompletions(beforeCursor string) []pro
 func (c *CompletionProvider) getTopLevelCompletions() []protocol.CompletionItem {
 	return []protocol.CompletionItem{
 		{Label: "arazzo", Kind: protocol.CompletionItemKindField, Detail: "Arazzo version", InsertText: "arazzo: \"1.1.0\""},
+		{Label: "$self", Kind: protocol.CompletionItemKindField, Detail: "Self URI of this Arazzo Description (v1.1.0) — base URI; MUST NOT contain a fragment", InsertText: "$self: "},
 		{Label: "info", Kind: protocol.CompletionItemKindField, Detail: "Metadata about the document", InsertText: "info:\n  title: \n  version: "},
 		{Label: "sourceDescriptions", Kind: protocol.CompletionItemKindField, Detail: "API descriptions", InsertText: "sourceDescriptions:\n  - name: \n    url: \n    type: openapi"},
 		{Label: "workflows", Kind: protocol.CompletionItemKindField, Detail: "Workflow definitions", InsertText: "workflows:\n  - workflowId: \n    steps:\n      - stepId: "},
@@ -374,7 +399,7 @@ func (c *CompletionProvider) getContextualCompletions(context string, beforeCurs
 		items = append(items,
 			protocol.CompletionItem{Label: "name", Kind: protocol.CompletionItemKindField, Detail: "Name of the source", InsertText: "name: "},
 			protocol.CompletionItem{Label: "url", Kind: protocol.CompletionItemKindField, Detail: "URL to the source document", InsertText: "url: "},
-			protocol.CompletionItem{Label: "type", Kind: protocol.CompletionItemKindField, Detail: "Type of source (openapi or arazzo)", InsertText: "type: "},
+			protocol.CompletionItem{Label: "type", Kind: protocol.CompletionItemKindField, Detail: "Type of source (openapi, asyncapi, or arazzo)", InsertText: "type: "},
 			protocol.CompletionItem{Label: "x-", Kind: protocol.CompletionItemKindField, Detail: "Extension field", InsertText: "x-"},
 		)
 
@@ -441,7 +466,7 @@ func (c *CompletionProvider) getContextualCompletions(context string, beforeCurs
 		)
 
 	case "replacements":
-		// Payload Replacement Object fields (v1.1.0 spec §5.8.12)
+		// Payload Replacement Object fields (v1.1.0)
 		items = append(items,
 			protocol.CompletionItem{Label: "target", Kind: protocol.CompletionItemKindField, Detail: "JSON Pointer, XPath, or JSONPath to the location to replace (REQUIRED)", InsertText: "target: "},
 			protocol.CompletionItem{Label: "value", Kind: protocol.CompletionItemKindField, Detail: "Replacement value: constant, expression, or Selector Object (REQUIRED)", InsertText: "value: "},

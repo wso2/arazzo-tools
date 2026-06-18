@@ -70,7 +70,7 @@ workflows:
         - email
         - token
     parameters:
-      - $ref: $components.parameters.AuthHeader
+      - reference: $components.parameters.AuthHeader
 
     # workflow-level dependsOn (already supported in v1.0.x — preserved)
     dependsOn: []
@@ -164,7 +164,7 @@ workflows:
               type: jsonpath
               version: draft-goessner-dispatch-jsonpath-00
         onSuccess:
-          - $ref: $components.successActions.LogAndEnd
+          - reference: $components.successActions.LogAndEnd
         timeout: 15000
         outputs:
           profileId: $response.body.profileId
@@ -197,7 +197,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 204
         onFailure:
-          - $ref: $components.failureActions.RetryOnTimeout
+          - reference: $components.failureActions.RetryOnTimeout
         outputs: {}
 
     outputs:
