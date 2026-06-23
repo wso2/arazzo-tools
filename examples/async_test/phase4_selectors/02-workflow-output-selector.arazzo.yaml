@@ -1,0 +1,40 @@
+# Phase 4 — Scenario 2: Selector Objects in WORKFLOW OUTPUTS.
+#
+# A step stashes the whole response body as an output; the workflow-level outputs then use
+# Selector Objects whose `context` is that stored step output ($steps.<id>.outputs.<name>).
+# This exercises selector evaluation in resolveWorkflowOutputs (not the response context).
+#
+# Runs against the live Toolshop API (needs internet).
+
+arazzo: "1.1.0"
+
+info:
+  title: "Phase 4 - Selector Objects in workflow outputs"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: workflowOutputSelectors
+    steps:
+      - stepId: listBrands
+        operationId: getBrands
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          brandsBody: "$response.body"   # stash the entire array
+
+    outputs:
+      # Selector Object against a stored step output — JSON Pointer
+      firstBrandId:
+        context: $steps.listBrands.outputs.brandsBody
+        selector: /0/id
+        type: jsonpointer
+      # Selector Object against a stored step output — JSONPath
+      secondBrandName:
+        context: $steps.listBrands.outputs.brandsBody
+        selector: $[1].name
+        type: jsonpath

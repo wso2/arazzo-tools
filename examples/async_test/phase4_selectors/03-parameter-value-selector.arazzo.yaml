@@ -1,0 +1,46 @@
+# Phase 4 — Scenario 3: a Selector Object as a PARAMETER VALUE.
+#
+# listBrands stashes the brands array; getOneBrand's `brandId` path parameter is a Selector
+# Object that picks the first brand's id out of that stored body. This exercises selector
+# evaluation in parameter preparation (resolveParameterValue).
+#
+# Runs against the live Toolshop API (needs internet).
+
+arazzo: "1.1.0"
+
+info:
+  title: "Phase 4 - Selector Object as a parameter value"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: parameterValueSelector
+    steps:
+      - stepId: listBrands
+        operationId: getBrands
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          brandsBody: "$response.body"
+
+      - stepId: getOneBrand
+        operationId: getBrand
+        parameters:
+          - name: brandId
+            in: path
+            value:
+              context: $steps.listBrands.outputs.brandsBody
+              selector: /0/id
+              type: jsonpointer
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          verifiedName: "$response.body#/name"
+          verifiedSlug: "$response.body#/slug"
+
+    outputs:
+      verifiedName: $steps.getOneBrand.outputs.verifiedName

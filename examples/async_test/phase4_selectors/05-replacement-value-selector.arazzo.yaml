@@ -1,0 +1,65 @@
+# Phase 4 — Scenario 5: a Selector Object as a PAYLOAD REPLACEMENT value.
+#
+# Same cart flow, but the addItem payload is built with a placeholder product_id, then a
+# replacement targets /product_id and supplies its value via a Selector Object (the first
+# product's id from the stored products body). This exercises selector evaluation in
+# applyReplacements.
+#
+# Runs against the live Toolshop API (needs internet).
+
+arazzo: "1.1.0"
+
+info:
+  title: "Phase 4 - Selector Object as a replacement value"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: replacementValueSelector
+    inputs:
+      type: object
+      properties:
+        quantity:
+          type: integer
+    steps:
+      - stepId: listProducts
+        operationId: getProducts
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          productsBody: "$response.body"
+
+      - stepId: createCart
+        operationId: createCart
+        outputs:
+          cartId: "$response.body#/id"
+
+      - stepId: addProductToCart
+        operationId: addItem
+        parameters:
+          - name: cartId
+            in: path
+            value: "$steps.createCart.outputs.cartId"
+        requestBody:
+          contentType: application/json
+          payload:
+            product_id: "PLACEHOLDER"     # overwritten by the replacement below
+            quantity: "$inputs.quantity"
+          replacements:
+            - target: /product_id
+              value:
+                context: $steps.listProducts.outputs.productsBody
+                selector: /data/0/id
+                type: jsonpointer
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          addResult: "$response.body#/result"
+
+    outputs:
+      cartId: $steps.createCart.outputs.cartId
+      addResult: $steps.addProductToCart.outputs.addResult
