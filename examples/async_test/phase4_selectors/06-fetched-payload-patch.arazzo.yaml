@@ -1,0 +1,70 @@
+# Phase 4 — Scenario 6: a REALISTIC replacement — patch a payload you didn't write field-by-field.
+#
+# Unlike scenario 5 (a contrived PLACEHOLDER), here the request body is supplied *as a whole object*
+# by the caller via `$inputs.order` — you never write its fields out in this file. A replacement
+# then patches one field (`/product_id`) with a guaranteed-valid catalog id selected from a previous
+# step. This is when replacements actually earn their keep: the payload comes from elsewhere and you
+# only need to surgically tweak a spot in it.
+#
+# Run it with an input like:   order: { "product_id": "ignored", "quantity": 2 }
+# (product_id is overwritten by the replacement, so its input value doesn't matter.)
+#
+# Runs against the live Toolshop API (needs internet).
+
+arazzo: "1.1.0"
+
+info:
+  title: "Phase 4 - Patch a whole, externally-supplied payload"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: patchSuppliedPayload
+    inputs:
+      type: object
+      properties:
+        order:
+          type: object   # the caller hands us the entire request body: { product_id, quantity }
+      required:
+        - order
+    steps:
+      - stepId: listProducts
+        operationId: getProducts
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          productsBody: "$response.body"
+
+      - stepId: createCart
+        operationId: createCart
+        outputs:
+          cartId: "$response.body#/id"
+
+      - stepId: addProductToCart
+        operationId: addItem
+        parameters:
+          - name: cartId
+            in: path
+            value: "$steps.createCart.outputs.cartId"
+        requestBody:
+          contentType: application/json
+          payload: "$inputs.order"          # the WHOLE body comes from the caller — not written here
+          replacements:
+            # patch just /product_id with a real catalog id (a Selector Object value)
+            - target: /product_id
+              value:
+                context: $steps.listProducts.outputs.productsBody
+                selector: /data/0/id
+                type: jsonpointer
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          addResult: "$response.body#/result"
+
+    outputs:
+      cartId: $steps.createCart.outputs.cartId
+      addResult: $steps.addProductToCart.outputs.addResult

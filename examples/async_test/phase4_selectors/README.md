@@ -15,7 +15,8 @@ evaluation working there.
 | `02-workflow-output-selector.arazzo.yaml` | **workflow outputs** | `runner.go` (`resolveWorkflowOutputs`) |
 | `03-parameter-value-selector.arazzo.yaml` | **parameter value** | `parameter_processor.go` (`resolveParameterValue`) |
 | `04-payload-field-selector.arazzo.yaml` | **request-body payload field** (nested) | `parameter_processor.go` → `evaluator.processValue` |
-| `05-replacement-value-selector.arazzo.yaml` | **payload replacement value** | `parameter_processor.go` (`applyReplacements`) |
+| `05-replacement-value-selector.arazzo.yaml` | **payload replacement value** (contrived: PLACEHOLDER payload) | `parameter_processor.go` (`applyReplacements`) |
+| `06-fetched-payload-patch.arazzo.yaml` | **payload replacement value** (realistic: patch a payload supplied via `$inputs.order`) | `parameter_processor.go` (`applyReplacements`) |
 
 Each one uses both selector dialects somewhere: **JSON Pointer** (`type: jsonpointer`, e.g. `/0/id`)
 and **JSONPath** (`type: jsonpath`, e.g. `$[0].name`, `$[*].name`, `$.data[0].id`). Scenario 1 also
@@ -32,6 +33,15 @@ Arazzo extension and run the workflow (under the hood: `arazzo-designer-cli serv
 - `01`, `02`, `03` use only **GET** endpoints (brands) — no inputs needed.
 - `04`, `05` use the **cart flow** (`getProducts` → `createCart` → `addItem`), mirroring
   `go-runner-test/toolshop/01-basic-sequential`. Provide an input **`quantity`** (e.g. `1`) when running.
+- `06` is the **realistic replacement**: the whole body is supplied via an input **`order`**
+  (e.g. `{ "product_id": "ignored", "quantity": 2 }`), and a replacement patches `/product_id` with a
+  real catalog id — so the `order` input doesn't even need a valid product id.
+
+### 05 vs 06 — why two replacement examples?
+`05` is **contrived** on purpose: the payload is only a `PLACEHOLDER` so you can see the replacement
+machinery in isolation — in real life you'd just write that field inline (like `04`). `06` shows where
+replacements are *actually* the right tool: the payload arrives **as a whole object you didn't type
+out** (here from `$inputs.order`), and you only need to surgically patch one field in it.
 
 ## What "working" looks like
 
