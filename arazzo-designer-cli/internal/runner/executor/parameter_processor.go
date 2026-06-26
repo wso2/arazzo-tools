@@ -249,9 +249,34 @@ func applyReplacements(payload interface{}, replacements []interface{}, state *m
 			value = evaluator.EvaluateExpression(s, state, sourceDescs, nil)
 		}
 
-		// Apply the replacement using JSON Pointer
-		if strings.HasPrefix(target, "/") {
-			payload = setJSONPointer(payload, target, value)
+		// Determine the target dialect from targetSelectorType (spec §5.8.15).
+		// Default when omitted: JSON Pointer (the spec default for JSON payloads).
+		dialect := "jsonpointer"
+		if tst := rep["targetSelectorType"]; tst != nil {
+			d, _, err := evaluator.ResolveExpressionType(tst)
+			if err != nil {
+				log.Printf("Warning: replacement 'targetSelectorType' invalid: %v", err)
+				continue
+			}
+			dialect = d
+		}
+
+		// Apply the replacement at the target, interpreting it per the dialect.
+		switch dialect {
+		case "jsonpointer":
+			if strings.HasPrefix(target, "/") {
+				payload = setJSONPointer(payload, target, value)
+			} else {
+				log.Printf("Warning: JSON Pointer replacement target %q must start with '/'", target)
+			}
+		case "jsonpath":
+			if updated, err := evaluator.SetJSONPath(payload, target, value); err == nil {
+				payload = updated
+			} else {
+				log.Printf("Warning: JSONPath replacement target failed: %v", err)
+			}
+		case "xpath":
+			log.Printf("Warning: XPath replacement targets are not yet supported (target %q)", target)
 		}
 	}
 	return payload
