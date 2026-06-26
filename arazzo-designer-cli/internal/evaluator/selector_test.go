@@ -52,7 +52,7 @@ func TestResolveExpressionType(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			d, v, err := resolveExpressionType(tc.in)
+			d, v, err := ResolveExpressionType(tc.in)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("expected error, got dialect=%q version=%q", d, v)
@@ -90,6 +90,44 @@ func TestEvaluateJSONPathValue(t *testing.T) {
 	// no match → nil
 	if v, err := EvaluateJSONPathValue(body, "$.data[99].id"); err != nil || v != nil {
 		t.Errorf("no match: got %v, %v; want nil", v, err)
+	}
+}
+
+func TestSetJSONPath(t *testing.T) {
+	// set a flat field
+	data := map[string]interface{}{"product_id": "OLD", "quantity": 1.0}
+	out, err := SetJSONPath(data, "$.product_id", "NEW")
+	if err != nil {
+		t.Fatalf("set flat: %v", err)
+	}
+	m := out.(map[string]interface{})
+	if m["product_id"] != "NEW" {
+		t.Errorf("product_id = %v, want NEW", m["product_id"])
+	}
+	if m["quantity"] != 1.0 {
+		t.Errorf("quantity should be untouched, got %v", m["quantity"])
+	}
+
+	// set via a filter into an array (something a JSON Pointer can't do)
+	data2 := map[string]interface{}{"items": []interface{}{
+		map[string]interface{}{"sku": "A", "qty": 1.0},
+		map[string]interface{}{"sku": "B", "qty": 1.0},
+	}}
+	out2, err := SetJSONPath(data2, "$.items[?(@.sku == 'B')].qty", 5)
+	if err != nil {
+		t.Fatalf("set filter: %v", err)
+	}
+	items := out2.(map[string]interface{})["items"].([]interface{})
+	if got, _ := toFloat64(items[1].(map[string]interface{})["qty"]); got != 5 {
+		t.Errorf("items[1].qty = %v, want 5", items[1].(map[string]interface{})["qty"])
+	}
+	if items[0].(map[string]interface{})["qty"] != 1.0 {
+		t.Errorf("items[0].qty should be untouched, got %v", items[0].(map[string]interface{})["qty"])
+	}
+
+	// invalid JSONPath → error
+	if _, err := SetJSONPath(data, "$[", "x"); err == nil {
+		t.Error("expected an error for an invalid JSONPath target")
 	}
 }
 
