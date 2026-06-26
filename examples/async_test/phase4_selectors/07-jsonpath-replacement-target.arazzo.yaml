@@ -13,7 +13,7 @@
 #
 # Runs against the live Toolshop API (needs internet). Provide an input `quantity` (e.g. 1).
 
-arazzo: "1.1.0"
+arazzo: 1.1.0
 
 info:
   title: "Phase 4/6 - JSONPath replacement target (targetSelectorType: jsonpath)"
