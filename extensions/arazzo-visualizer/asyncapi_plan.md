@@ -208,10 +208,13 @@ type). Plain string expressions are untouched. Tests: `evaluator/selector_test.g
 `executor/output_extractor_test.go`, `executor/parameter_processor_test.go`, and an LSP
 `TestExpressionType` — all green; full CLI + LSP suites green.
 
-**Remaining for the XPath follow-up:** add an XML/XPath engine and route `xpath` selectors to it
-(currently they error). Also a possible tightening: LSP validation of Expression Type Objects on
-Selector Objects / `targetSelectorType` inside outputs/payloads (currently runtime-validated only,
-since those are untyped maps in the LSP).
+**Remaining for the XPath follow-up (do near the end, together with Phase 6's `targetSelectorType`):**
+add an XML/XPath engine and route `xpath` selectors to it (currently they error). The **same XPath
+engine also unblocks Phase 6's XPath replacement targets**, and `targetSelectorType` (JSONPath/XPath
+replacement targets) is likewise deferred there — so XPath-selectors (this phase) and the replacement
+target side (Phase 6) are best done as one final XPath/`targetSelectorType` push. Also a possible
+tightening: LSP validation of Expression Type Objects on Selector Objects / `targetSelectorType`
+inside outputs/payloads (currently runtime-validated only, since those are untyped maps in the LSP).
 
 Original spec-derived requirements (for reference):
 
@@ -264,18 +267,36 @@ Tests: `$message.payload.status == "confirmed"`; `$message.header.correlationId`
 resolves; `$sourceDescriptions.petstore.url` resolves; object/array embedded serialization;
 compound criteria with `&&`/`||`/`!`/parentheses/indexing.
 
-### Phase 6: Payload Replacement Upgrade — ❌ NOT STARTED
+### Phase 6: Payload Replacement Upgrade — the `targetSelectorType` / non-JSON-Pointer target side — ❌ NOT STARTED (deferred to the end)
 
-Goal: support v1.1.0 replacement targets/values. **Currently JSON-Pointer targets only (`setJSONPointer`).**
+Status: the **value side is already done in Phase 4** — a replacement `value` can be a literal, a
+runtime expression, or a Selector Object, and `applyReplacements` evaluates it. What remains is the
+**target side**: honoring `targetSelectorType` so a replacement `target` can be a JSONPath or XPath,
+not only a JSON Pointer.
 
-Changes:
-- Extend replacement with `targetSelectorType` and JSONPath / XPath / JSON-Pointer targets.
-- Allow Selector-Object replacement values.
-- Preserve existing JSON-Pointer replacement behavior.
-- Route target lookup and value resolution through the Phase 4 shared selector service.
+**Current runtime behavior / gotcha:** `applyReplacements` only applies a target that starts with `/`
+(a JSON Pointer, via `setJSONPointer`); it does **not** read `targetSelectorType`. A JSONPath/XPath
+target today is **silently skipped** (no patch, no error). The `targetSelectorType` field is parsed
+into the model and accepted by the LSP unknown-field check, but it is **unused at runtime and
+unvalidated**.
 
-Tests: existing JSON-Pointer replacement still works; JSONPath target; XPath target on XML;
-replacement value as literal / runtime expression / Selector Object.
+**Priority: low / do-at-the-end.** JSON Pointer is the common case and the spec's default target type
+for JSON payloads, so the current behavior covers typical usage. JSONPath/XPath targets are an edge
+feature, and the **XPath target depends on the XPath engine that Phase 4 also deferred** — so do XPath
+(the Phase 4 follow-up) and `targetSelectorType` **together, near the end** of the v1.1.0 work.
+
+Changes (when picked up):
+- Honor `targetSelectorType` (a string or an Expression Type Object): route the `target` to the right
+  engine — JSON Pointer (have it), JSONPath (have `ojg`), or XPath (needs the new engine).
+- Apply the spec defaults when `targetSelectorType` is omitted: JSON payload → JSON Pointer target;
+  XML payload → XPath target.
+- Optional interim guard: until then, emit a clear "JSONPath/XPath replacement targets not yet
+  supported" error for a non-JSON-Pointer target instead of silently skipping it.
+- LSP: validate `targetSelectorType` as an Expression Type Object (version required + valid per type).
+- Preserve existing JSON-Pointer replacement behavior; route target lookup through the shared selector service.
+
+Tests: existing JSON-Pointer replacement still works; JSONPath target; XPath target on XML.
+(Replacement value as literal / runtime expression / Selector Object is already covered by Phase 4.)
 
 ### Phase 7: OpenAPI Runtime Preservation And Step Dependencies — ❌ NOT STARTED
 
