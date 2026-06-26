@@ -50,7 +50,7 @@ func EvaluateSelectorObject(sel map[string]interface{}, state *models.ExecutionS
 	contextExpr, _ := sel["context"].(string)
 	selector, _ := sel["selector"].(string)
 
-	dialect, _, err := resolveExpressionType(sel["type"])
+	dialect, _, err := ResolveExpressionType(sel["type"])
 	if err != nil {
 		return nil, err
 	}
@@ -76,11 +76,12 @@ func EvaluateSelectorObject(sel map[string]interface{}, state *models.ExecutionS
 	}
 }
 
-// resolveExpressionType interprets a Selector Object / criterion `type`, which may be a bare
-// string (e.g. "jsonpath") or an Expression Type Object map ({type, version}). It returns the
-// dialect and the resolved version, applying defaults when the version is omitted and
-// rejecting unknown dialects or unsupported versions (spec §5.8.12).
-func resolveExpressionType(typeField interface{}) (dialect string, version string, err error) {
+// ResolveExpressionType interprets a `type` / `targetSelectorType` field — a bare string (e.g.
+// "jsonpath") or an Expression Type Object map ({type, version}) — into its dialect and version,
+// applying defaults when the version is omitted and rejecting unknown dialects or unsupported
+// versions (spec §5.8.12). Used for a Selector Object / criterion `type` AND for a payload
+// replacement's `targetSelectorType` (they share the same "expression type" concept).
+func ResolveExpressionType(typeField interface{}) (dialect string, version string, err error) {
 	switch t := typeField.(type) {
 	case string:
 		dialect = t
