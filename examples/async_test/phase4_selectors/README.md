@@ -7,7 +7,7 @@ evaluation working there.
 
 > All call the live API, so **internet is required**.
 
-## The five scenarios
+## The seven scenarios
 
 | File | Selector position | Where it's evaluated in the runner |
 |---|---|---|
@@ -61,5 +61,5 @@ out** (here from `$inputs.order`), and you only need to surgically patch one fie
 ## Already verified
 
 The selector strings in these files were checked against toolshop-shaped data (each one extracts the
-expected value, incl. the JSONPath-on-root-array cases), and all five files parse and resolve+load
+expected value, incl. the JSONPath-on-root-array cases), and all seven files parse and resolve+load
 their OpenAPI source. The live API calls themselves are what you'll confirm by running them.
