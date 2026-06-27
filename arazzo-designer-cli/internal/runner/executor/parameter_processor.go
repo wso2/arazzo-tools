@@ -292,6 +292,7 @@ func setJSONPointer(data interface{}, pointer string, value interface{}) interfa
 
 	m, ok := data.(map[string]interface{})
 	if !ok {
+		log.Printf("Warning: JSON Pointer target %q not applied: payload is not a JSON object", pointer)
 		return data
 	}
 
@@ -302,6 +303,10 @@ func setJSONPointer(data interface{}, pointer string, value interface{}) interfa
 		} else {
 			next, ok := current[part].(map[string]interface{})
 			if !ok {
+				// This map-only walker cannot descend into arrays, so array-indexed JSON Pointer
+				// targets (e.g. /data/0/price) are unsupported. Warn rather than silently no-op;
+				// use targetSelectorType: jsonpath for array-indexed targets.
+				log.Printf("Warning: JSON Pointer target %q not applied at segment %q (array indices / non-object nodes are unsupported; use targetSelectorType: jsonpath)", pointer, part)
 				return data
 			}
 			current = next
