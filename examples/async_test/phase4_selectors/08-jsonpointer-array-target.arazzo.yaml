@@ -1,0 +1,90 @@
+# Phase 4/6 — a JSON Pointer replacement TARGET that indexes into an ARRAY.
+#
+# The default replacement target type (JSON Pointer, RFC 6901) supports array indices, e.g.
+# `/line_items/0/product_id` — the `0` selects the first element of the `line_items` array.
+# This is the write-side counterpart of the reader, which already understood array indices.
+#
+# The payload carries a small `line_items` array purely to demonstrate this; the Toolshop
+# `addItem` endpoint ignores unknown fields (it only reads `product_id` + `quantity`) and still
+# returns 200, so the workflow runs green end-to-end. The star of the example is the FIRST
+# replacement below, whose target steps THROUGH an array index.
+#
+# Two replacements run:
+#   1. `/line_items/0/product_id`  → array-index target (the feature shown here)
+#   2. `/product_id`               → the flat field the API actually consumes
+# Both pull the first catalog product's id via a Selector Object.
+#
+# (Before this was added, an array-index JSON Pointer target was a silent no-op. JSONPath targets
+#  via `targetSelectorType: jsonpath` — see scenario 07 — could already reach into arrays.)
+#
+# Runs against the live Toolshop API (needs internet). Provide an input `quantity` (e.g. 1).
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 4/6 - JSON Pointer array-index replacement target"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: jsonPointerArrayTarget
+    inputs:
+      type: object
+      properties:
+        quantity:
+          type: integer
+    steps:
+      - stepId: listProducts
+        operationId: getProducts
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          productsBody: "$response.body"
+
+      - stepId: createCart
+        operationId: createCart
+        outputs:
+          cartId: "$response.body#/id"
+
+      - stepId: addProductToCart
+        operationId: addItem
+        parameters:
+          - name: cartId
+            in: path
+            value: "$steps.createCart.outputs.cartId"
+        requestBody:
+          contentType: application/json
+          payload:
+            product_id: "PLACEHOLDER"
+            quantity: "$inputs.quantity"
+            # An array the API ignores — present only to demonstrate array-index patching.
+            line_items:
+              - product_id: "PLACEHOLDER-0"
+                note: "first line"
+              - product_id: "PLACEHOLDER-1"
+                note: "second line"
+          replacements:
+            # 1) ARRAY-INDEX target: patch the first line item's product_id (the feature shown here).
+            - target: /line_items/0/product_id     # "0" indexes into the line_items array
+              value:
+                context: $steps.listProducts.outputs.productsBody
+                selector: /data/0/id
+                type: jsonpointer
+            # 2) the flat field addItem actually reads — patch it with the same catalog id.
+            - target: /product_id
+              value:
+                context: $steps.listProducts.outputs.productsBody
+                selector: /data/0/id
+                type: jsonpointer
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          addResult: "$response.body#/result"
+
+    outputs:
+      cartId: $steps.createCart.outputs.cartId
+      addResult: $steps.addProductToCart.outputs.addResult

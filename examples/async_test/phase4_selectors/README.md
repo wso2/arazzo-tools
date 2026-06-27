@@ -7,7 +7,7 @@ evaluation working there.
 
 > All call the live API, so **internet is required**.
 
-## The seven scenarios
+## The eight scenarios
 
 | File | Selector position | Where it's evaluated in the runner |
 |---|---|---|
@@ -18,6 +18,7 @@ evaluation working there.
 | `05-replacement-value-selector.arazzo.yaml` | **payload replacement value** (contrived: PLACEHOLDER payload) | `parameter_processor.go` (`applyReplacements`) |
 | `06-fetched-payload-patch.arazzo.yaml` | **payload replacement value** (realistic: patch a payload supplied via `$inputs.order`) | `parameter_processor.go` (`applyReplacements`) |
 | `07-jsonpath-replacement-target.arazzo.yaml` | **replacement TARGET via `targetSelectorType: jsonpath`** (the *where*, not just the *what*) | `parameter_processor.go` → `evaluator.SetJSONPath` |
+| `08-jsonpointer-array-target.arazzo.yaml` | **replacement TARGET that indexes into an ARRAY** via default JSON Pointer (`/line_items/0/product_id`) | `parameter_processor.go` → `setJSONPointer` |
 
 Each one uses both selector dialects somewhere: **JSON Pointer** (`type: jsonpointer`, e.g. `/0/id`)
 and **JSONPath** (`type: jsonpath`, e.g. `$[0].name`, `$[*].name`, `$.data[0].id`). Scenario 1 also
@@ -39,10 +40,13 @@ Arazzo extension and run the workflow (under the hood: `arazzo-designer-cli serv
   real catalog id — so the `order` input doesn't even need a valid product id.
 - `07` uses the **cart flow** with a **JSONPath replacement target** (`$.product_id`,
   `targetSelectorType: jsonpath`) instead of the default JSON Pointer. Provide an input **`quantity`**.
+- `08` uses the **cart flow** with a **JSON Pointer array-index target** (`/line_items/0/product_id`) —
+  the default target type reaching into an array. Provide an input **`quantity`**.
 
-> **Replacement targets:** the **default** target type is **JSON Pointer** (scenarios 04–06 use
-> `/...`). Set `targetSelectorType: jsonpath` to use a **JSONPath** target (scenario 07) — supported now.
-> **XPath** targets are **not yet** supported (they log a clear "not yet supported" warning).
+> **Replacement targets:** the **default** target type is **JSON Pointer** (scenarios 04–06, 08 use
+> `/...`), and it supports **array indices** (scenario 08, e.g. `/line_items/0/product_id`). Set
+> `targetSelectorType: jsonpath` to use a **JSONPath** target (scenario 07). **XPath** targets are
+> **not yet** supported (they log a clear "not yet supported" warning).
 
 ### 05 vs 06 — why two replacement examples?
 `05` is **contrived** on purpose: the payload is only a `PLACEHOLDER` so you can see the replacement
@@ -61,5 +65,5 @@ out** (here from `$inputs.order`), and you only need to surgically patch one fie
 ## Already verified
 
 The selector strings in these files were checked against toolshop-shaped data (each one extracts the
-expected value, incl. the JSONPath-on-root-array cases), and all seven files parse and resolve+load
+expected value, incl. the JSONPath-on-root-array cases), and all eight files parse and resolve+load
 their OpenAPI source. The live API calls themselves are what you'll confirm by running them.
