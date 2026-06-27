@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/wso2/arazzo-designer-cli/internal/evaluator"
@@ -282,38 +283,60 @@ func applyReplacements(payload interface{}, replacements []interface{}, state *m
 	return payload
 }
 
-// setJSONPointer sets a value at a JSON Pointer path in a data structure.
+// setJSONPointer sets a value at a JSON Pointer path (RFC 6901) within data, descending through
+// both JSON objects (map[string]interface{}) and JSON arrays ([]interface{}). It mirrors the read
+// side (evaluator.ResolveJSONPointer) so a target that can be READ can also be PATCHED — e.g.
+// /data/0/price, where "0" indexes into an array.
+//
+// The edit is made in place: Go maps and slices are reference types, so mutating a nested container
+// is visible through the returned data without rebuilding its parents. Unresolvable targets (a
+// missing object key, an array index out of range, a numeric segment against a non-array, or trying
+// to descend into a scalar) are left unchanged with a warning rather than a silent no-op.
 func setJSONPointer(data interface{}, pointer string, value interface{}) interface{} {
 	parts := strings.Split(pointer, "/")
 	if len(parts) < 2 {
 		return data
 	}
-	parts = parts[1:] // Skip the first empty element
+	parts = parts[1:] // Skip the leading empty element (the "" before the first '/').
 
-	m, ok := data.(map[string]interface{})
-	if !ok {
-		log.Printf("Warning: JSON Pointer target %q not applied: payload is not a JSON object", pointer)
-		return data
-	}
-
-	current := m
+	current := data
 	for i, part := range parts {
-		if i == len(parts)-1 {
-			current[part] = value
-		} else {
-			next, ok := current[part].(map[string]interface{})
+		// Decode JSON Pointer escapes: ~1 -> /, ~0 -> ~ (RFC 6901 §3).
+		part = strings.ReplaceAll(part, "~1", "/")
+		part = strings.ReplaceAll(part, "~0", "~")
+
+		last := i == len(parts)-1
+
+		switch node := current.(type) {
+		case map[string]interface{}:
+			if last {
+				node[part] = value
+				return data
+			}
+			next, ok := node[part]
 			if !ok {
-				// This map-only walker cannot descend into arrays, so array-indexed JSON Pointer
-				// targets (e.g. /data/0/price) are unsupported. Warn rather than silently no-op;
-				// use targetSelectorType: jsonpath for array-indexed targets.
-				log.Printf("Warning: JSON Pointer target %q not applied at segment %q (array indices / non-object nodes are unsupported; use targetSelectorType: jsonpath)", pointer, part)
+				log.Printf("Warning: JSON Pointer target %q not applied: missing object key %q", pointer, part)
 				return data
 			}
 			current = next
+		case []interface{}:
+			idx, err := strconv.Atoi(part)
+			if err != nil || idx < 0 || idx >= len(node) {
+				log.Printf("Warning: JSON Pointer target %q not applied: invalid array index %q (array length %d)", pointer, part, len(node))
+				return data
+			}
+			if last {
+				node[idx] = value
+				return data
+			}
+			current = node[idx]
+		default:
+			log.Printf("Warning: JSON Pointer target %q not applied: cannot descend into segment %q (node is neither object nor array)", pointer, part)
+			return data
 		}
 	}
 
-	return m
+	return data
 }
 
 // ensureParamMap ensures a parameter location map exists and returns it.
