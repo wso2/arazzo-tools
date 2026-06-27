@@ -404,6 +404,8 @@ components:
           type: string
         name:
           type: string
+        slug:
+          type: string
     Category:
       type: object
       properties:
