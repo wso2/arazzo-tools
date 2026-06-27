@@ -2,6 +2,10 @@
 
 Write-Host "Starting cross-compilation for Arazzo Go Runner..." -ForegroundColor Cyan
 
+# Always operate from this script's own directory (the arazzo-designer-cli project root) so the
+# relative paths below are correct regardless of where the script is invoked from.
+Set-Location -Path $PSScriptRoot
+
 # Ensure the local cli folder exists
 if (-Not (Test-Path "cli")) {
     New-Item -ItemType Directory -Path "cli" | Out-Null
@@ -43,7 +47,9 @@ $env:GOOS='windows'
 $env:GOARCH='amd64'
 
 # --- COPY TO EXTENSION FOLDER ---
-$destination = "..\arazzo-designer-extension\cli"
+# Must match the folder build-cli.js targets and the path the extension loads from at runtime
+# (mcpServerRunner.ts: <extensionPath>/cli/<binary>).
+$destination = "..\extensions\arazzo-visualizer\arazzo-designer-extension\cli"
 
 Write-Host "Copying binaries to the extension folder ($destination)..."
 if (-Not (Test-Path $destination)) {
