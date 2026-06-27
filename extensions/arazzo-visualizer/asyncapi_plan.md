@@ -424,3 +424,48 @@ proceed 3 → 12. Phases 4 and 5 share the selector/expression service and are b
 Phase 6 depends on Phase 4; Phase 7 is independent and can be parallelized with 4–6; Phases
 8–11 form the AsyncAPI runtime track and depend on 3 (resolution) + 4–5 (evaluation) + 9
 (adapter) before 10–11. Phase 12 closes out docs/samples last.
+
+## Known Issues / Bugs (separate from the v1.1.0 phases — fix independently)
+
+### BUG: stopping the Arazzo server doesn't reset the "server running" UI state
+**Not related to v1.1.0** — a pre-existing extension lifecycle bug; tracked here so it isn't lost.
+
+**Symptoms:**
+- Starting a server correctly shows the red **stop** icon + the yellow "Arazzo server: stop" status-bar
+  item; while running, the *Try with curl* / *Try with AI* CodeLenses appear and the webview buttons work.
+- Clicking stop shows "Arazzo server stopped." and the pseudo-terminal closes (correct), **but the UI
+  does not return to the not-running state**: the stop icons remain (the ▶ play button should be the
+  only control), the *Try with curl* CodeLenses are still shown, and *Try with curl / Try with AI* in
+  the webview no longer prompt "server not running — start it" (they behave as if it's still running).
+- For a file whose server was **never started**, all of the above is correct (no stop icon, no
+  CodeLenses, webview prompts to start) — so the problem is specifically that **stop doesn't
+  propagate the state change** that the never-started case has.
+
+**How it's wired (so the fix is targeted):** a single `notifyStateChange()`
+([mcpServerRunner.ts](arazzo-designer-extension/src/mcp/mcpServerRunner.ts) line ~66) drives the refresh — it fires the callback registered via
+`onMCPServerStateChange`, which in [extension.ts](arazzo-designer-extension/src/mcp/../extension.ts) (~line 146) does
+`setContext('arazzoServerRunning', <running>)`. That context key gates the play/stop status-bar items
+and the CodeLens `when` clauses, and the Run-workflow CodeLens provider also refreshes on it.
+- **Start** path calls `notifyStateChange()` directly (line ~270) → UI shows "running".
+- **Stop** (`stopMCPServer`, ~line 312) deliberately does *not* call it; it relies on the
+  **task-end listener** registered in `initializeMCPServerRunner` (~line 340) which, on `onDidEndTask`,
+  clears state and calls `notifyStateChange()`.
+
+**Suspected root cause(s) to investigate:**
+1. The task-end listener (`registerMCPTaskEndListener`) may not fire (or not match) when the task is
+   **terminated** via stop (vs. exiting on its own), so `notifyStateChange()` never runs on stop.
+2. Or it fires too early — while `isMCPServerRunning()` (`isMCPTaskRunning()`) still reports `true` —
+   so the `setContext('arazzoServerRunning', …)` callback recomputes "running = true" and nothing resets.
+3. The **webview's** running state (Try with curl/AI prompt) may be cached/driven separately from the
+   `arazzoServerRunning` context key, so even when the others reset, the webview isn't told the server stopped.
+
+**Fix direction:** ensure stop reliably flips the state to not-running — e.g. have `stopMCPServer`
+itself call `notifyStateChange()` after stopping (so it doesn't depend solely on the task-end event),
+make the `arazzoServerRunning` callback read the post-stop state, and ensure the webview is notified
+(or reads `isMCPServerRunning()` live) so its Try-with-curl/AI prompt resets. Then verify all three
+reset on stop: status-bar play/stop toggle, CodeLenses, and the webview prompt.
+
+**Files:** `arazzo-designer-extension/src/mcp/mcpServerRunner.ts` (`stopMCPServer`, `notifyStateChange`,
+`initializeMCPServerRunner`/task-end listener), `arazzo-designer-extension/src/extension.ts`
+(`arazzoServerRunning` context callback, status-bar items), `mcp/runWorkflowCodeLens.ts`,
+`mcp/mcpPlaygroundWebview.ts` (webview running state).
