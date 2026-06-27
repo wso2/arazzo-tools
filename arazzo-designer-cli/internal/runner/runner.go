@@ -570,12 +570,18 @@ func (r *ArazzoRunner) resolveWorkflowOutputs(wf map[string]interface{}, state *
 			// v1.1.0 Selector Object → evaluate; anything else is a literal.
 			if evaluator.IsSelectorObject(exprRaw) {
 				selMap, _ := exprRaw.(map[string]interface{})
-				if value, err := evaluator.EvaluateSelectorObject(selMap, state, r.SourceDescriptions, nil); err == nil {
+				value, err := evaluator.EvaluateSelectorObject(selMap, state, r.SourceDescriptions, nil)
+				switch {
+				case err == nil && value != nil:
 					outputs[name] = value
 					log.Printf("Workflow output %s: %v (selector)", name, value)
-				} else {
+				case err != nil:
+					// Mirror the string-expression path: an unresolved output is "(not available)".
 					outputs[name] = "(not available)"
 					log.Printf("Workflow output %s: selector failed: %v", name, err)
+				default:
+					outputs[name] = "(not available)"
+					log.Printf("Workflow output %s: selector resolved to nil", name)
 				}
 			} else {
 				outputs[name] = exprRaw
