@@ -78,14 +78,21 @@ func EvaluateSelectorObject(sel map[string]interface{}, state *models.ExecutionS
 
 // ResolveExpressionType interprets a `type` / `targetSelectorType` field — a bare string (e.g.
 // "jsonpath") or an Expression Type Object map ({type, version}) — into its dialect and version,
-// applying defaults when the version is omitted and rejecting unknown dialects or unsupported
-// versions (spec §5.8.12). Used for a Selector Object / criterion `type` AND for a payload
-// replacement's `targetSelectorType` (they share the same "expression type" concept).
+// rejecting unknown dialects or unsupported versions (spec §5.8.12). Used for a Selector Object /
+// criterion `type` AND for a payload replacement's `targetSelectorType` (they share the same
+// "expression type" concept).
+//
+// Version handling differs by form: the bare-string short form has no version, so the spec default
+// is applied; the Expression Type Object form REQUIRES an explicit `version` (spec §5.8.12.1), which
+// the LSP already flags — so the runtime rejects a missing version here too rather than silently
+// defaulting (otherwise headless CLI runs would accept documents the editor marks invalid).
 func ResolveExpressionType(typeField interface{}) (dialect string, version string, err error) {
+	isObject := false
 	switch t := typeField.(type) {
 	case string:
 		dialect = t
 	case map[string]interface{}:
+		isObject = true
 		dialect, _ = t["type"].(string)
 		version, _ = t["version"].(string)
 	default:
@@ -97,6 +104,10 @@ func ResolveExpressionType(typeField interface{}) (dialect string, version strin
 		return "", "", fmt.Errorf("unsupported selector type %q (must be jsonpath, xpath, or jsonpointer)", dialect)
 	}
 	if version == "" {
+		if isObject {
+			return "", "", fmt.Errorf("Expression Type Object is missing required 'version' for type %q", dialect)
+		}
+		// Bare-string short form: apply the spec default version for the dialect.
 		switch dialect {
 		case "jsonpath":
 			version = defaultJSONPathVersion

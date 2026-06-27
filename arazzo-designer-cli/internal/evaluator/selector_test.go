@@ -45,7 +45,7 @@ func TestResolveExpressionType(t *testing.T) {
 		{"string jsonpointer default", "jsonpointer", "jsonpointer", "rfc6901", false},
 		{"string xpath default", "xpath", "xpath", "xpath-31", false},
 		{"object explicit", map[string]interface{}{"type": "jsonpath", "version": "rfc9535"}, "jsonpath", "rfc9535", false},
-		{"object missing version → default", map[string]interface{}{"type": "jsonpath"}, "jsonpath", "rfc9535", false},
+		{"object missing version → error (spec §5.8.12.1)", map[string]interface{}{"type": "jsonpath"}, "", "", true},
 		{"object bad version", map[string]interface{}{"type": "jsonpath", "version": "nope"}, "", "", true},
 		{"unknown dialect string", "yaml", "", "", true},
 		{"unknown dialect object", map[string]interface{}{"type": "yaml"}, "", "", true},
