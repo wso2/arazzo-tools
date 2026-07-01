@@ -1,0 +1,37 @@
+# Phase 5 — Scenario 2: the $self runtime expression.
+#
+# $self resolves to the document's own `$self` field (its canonical URI, spec §5.9 / §5.8.1.1).
+# Phase 3 used the `$self` FIELD to compute the base URI for loading sources; Phase 5 lets you READ
+# it as an expression value (here, into a workflow output).
+#
+# NOTE on the value: we use a *relative* $self here ("./02-self-expression.arazzo.yaml") on purpose.
+# An ABSOLUTE $self (e.g. https://example.com/x) would make the relative `./toolshop-openapi.yaml`
+# source resolve as REMOTE (per §5.5) and fail to load locally. A relative $self keeps local loading
+# working while still demonstrating that `$self` resolves to the field's value.
+#
+# How to verify: run it — the workflow output `documentUri` equals the $self value below.
+#
+# Runs against the live Toolshop API (needs internet).
+
+arazzo: 1.1.0
+$self: ./02-self-expression.arazzo.yaml
+
+info:
+  title: "Phase 5 - $self expression"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: selfExpression
+    steps:
+      - stepId: ping
+        operationId: getBrands
+        successCriteria:
+          - condition: "$statusCode == 200"
+
+    outputs:
+      documentUri: "$self"        # -> "./02-self-expression.arazzo.yaml"

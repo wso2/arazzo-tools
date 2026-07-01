@@ -1,0 +1,39 @@
+# Phase 5 — Scenario 5: the $workflows.<workflowId>.<field> expression.
+#
+# $workflows reads a field of another workflow defined in this same document (spec §5.9). Here
+# `mainFlow` reads `helperFlow`'s summary.
+#
+# How to verify: run the **mainFlow** workflow — its output `helperSummary` equals helperFlow's
+# summary ("A reusable helper workflow").
+#
+# Runs against the live Toolshop API (needs internet).
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 5 - $workflows expression"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: helperFlow
+    summary: "A reusable helper workflow"
+    steps:
+      - stepId: ping
+        operationId: getBrands
+        successCriteria:
+          - condition: "$statusCode == 200"
+
+  - workflowId: mainFlow
+    steps:
+      - stepId: ping
+        operationId: getBrands
+        successCriteria:
+          - condition: "$statusCode == 200"
+
+    outputs:
+      helperSummary: "$workflows.helperFlow.summary"   # -> "A reusable helper workflow"

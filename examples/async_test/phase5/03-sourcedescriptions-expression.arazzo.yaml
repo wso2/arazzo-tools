@@ -1,0 +1,44 @@
+# Phase 5 — Scenario 3: the $sourceDescriptions.<name>.<reference> expression (spec §5.9.2).
+#
+# Resolution priority for <reference>:
+#   1. operationId (OpenAPI/AsyncAPI source) or workflowId (Arazzo source) match in the referenced
+#      document  -> resolves to that operation/workflow object.
+#   2. if no such match, <reference> is treated as a field of the Source Description Object (url, type).
+#
+# This is the GENERAL expression form. (Using $sourceDescriptions in `operationId` / `operationPath`
+# to target which operation a step calls already worked before Phase 5 — that's a different code path.)
+#
+# How to verify: run it and read the workflow outputs:
+#   matchedOperationId -> "getBrands"  (priority 1: operationId match, then .operationId field)
+#   operationSummary   -> the getBrands operation's summary text (navigating onto the matched op)
+#   sourceUrl          -> "./toolshop-openapi.yaml" (priority 2: Source Description Object field)
+#   sourceType         -> "openapi"                  (priority 2: field)
+#
+# Runs against the live Toolshop API (needs internet).
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 5 - $sourceDescriptions expression (§5.9.2)"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: sourceDescriptionsExpression
+    steps:
+      - stepId: ping
+        operationId: getBrands
+        successCriteria:
+          - condition: "$statusCode == 200"
+
+    outputs:
+      # priority 1 — operationId match returns the operation object; navigate onto its fields:
+      matchedOperationId: "$sourceDescriptions.toolshop.getBrands.operationId"
+      operationSummary: "$sourceDescriptions.toolshop.getBrands.summary"
+      # priority 2 — no operationId named "url"/"type", so these fall back to SD-Object fields:
+      sourceUrl: "$sourceDescriptions.toolshop.url"
+      sourceType: "$sourceDescriptions.toolshop.type"
