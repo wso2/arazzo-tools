@@ -7,7 +7,7 @@ you only need to open each file and look at the squiggly underlines in the edito
 | File | What it shows | Expected result |
 |---|---|---|
 | `00-valid.arazzo.yaml` | A fully-correct v1.1.0 document | **No diagnostics** — zero red, zero yellow |
-| `01-errors.arazzo.yaml` | One RED error per step/field | ~13 red errors (see comments in the file) |
+| `01-errors.arazzo.yaml` | One RED error per step/field | 14 red errors (see comments in the file) |
 | `02-warnings.arazzo.yaml` | YELLOW warnings | 4 yellow warnings |
 | `03-unknown-fields.arazzo.yaml` | Misspelled / wrong field names | 3 yellow "unknown field" warnings (and `x-` ignored) |
 
@@ -27,7 +27,7 @@ you only need to open each file and look at the squiggly underlines in the edito
 
 ## Quick reference — what each rule catches
 
-**Errors (red):** invalid `arazzo` version · `$self` containing `#` · invalid source `type` ·
+**Errors (red):** `$self` containing `#` · invalid source `type` ·
 step with zero or more-than-one target · invalid `action` value · `channelPath` not pointing at an
 `asyncapi` source · negative `timeout` · empty `successCriteria: []` · invalid parameter `in` value ·
 `dependsOn` to an unknown step · invalid action `type` · action with both `stepId` and `workflowId` ·
