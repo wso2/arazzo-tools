@@ -290,7 +290,7 @@ Tests: `$message.payload.status == "confirmed"`; `$message.header.correlationId`
 resolves; `$sourceDescriptions.petstore.url` resolves; object/array embedded serialization;
 compound criteria with `&&`/`||`/`!`/parentheses/indexing.
 
-### Phase 6: Payload Replacement Upgrade — 🟡 MOSTLY DONE (only XPath targets remain)
+### Phase 6: Payload Replacement Upgrade — ✅ DONE except XPath (deferred to the end-of-project XPath push)
 
 Status:
 - **Value side — ✅ done (Phase 4):** a replacement `value` can be a literal, a runtime expression,
@@ -298,12 +298,15 @@ Status:
 - **Target side — ✅ done for JSON Pointer + JSONPath:** `applyReplacements` now reads
   `targetSelectorType` (string or Expression Type Object, via `evaluator.ResolveExpressionType`) and
   routes the `target` accordingly — **JSON Pointer** (`setJSONPointer`, the default when omitted) and
-  **JSONPath** (`evaluator.SetJSONPath`, backed by `ojg`'s `Set`). Tests: `evaluator.TestSetJSONPath`
-  and `executor.TestApplyReplacements_JSONPathTarget`; example `phase4_selectors/07-jsonpath-replacement-target`.
+  **JSONPath** (`evaluator.SetJSONPath`, backed by `ojg`'s `Set`). **JSON Pointer targets support array
+  indices** (e.g. `/items/0/product_id`, mirroring the read side) and a failed/nil replacement value
+  is skipped rather than injecting garbage. Tests: `evaluator.TestSetJSONPath`,
+  `executor.TestApplyReplacements_JSONPathTarget`, `executor.TestApplyReplacements_JSONPointerArrayIndex`;
+  examples `phase4_selectors/07-jsonpath-replacement-target` and `08-jsonpointer-array-target`.
 - **Target side — ❌ XPath only:** an `xpath` `targetSelectorType` logs a clear "not yet supported"
   warning. This is the **only** remaining replacement gap and it **depends on the XPath engine that
-  Phase 4 also deferred** — so finish it together with the Phase 4 XPath selectors as one final
-  XPath push.
+  Phase 4 also deferred** — so finish it together with the Phase 4 XPath selectors as one final XPath
+  push (see the "End-of-project cleanup batch" note under Known Issues / Bugs).
 
 **Remaining for the XPath follow-up:**
 - Add the XML/XPath engine and route `xpath` replacement targets (and `xpath` selectors from Phase 4) to it.
