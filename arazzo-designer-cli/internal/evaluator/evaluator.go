@@ -685,7 +685,16 @@ func EvaluateSimpleCondition(condition string, state *models.ExecutionState, sou
 		return false
 	}
 	p := &condParser{s: condition, state: state, src: sourceDescs, ctx: context}
-	return p.parseOr()
+	result := p.parseOr()
+	p.skipWS()
+	// A well-formed condition is fully consumed with balanced parentheses. If not (trailing/unparsed
+	// input, or a missing closing paren), the condition is malformed — fail safe to false rather than
+	// returning a partial-parse result that could wrongly read as true.
+	if p.bad || p.pos != len(p.s) {
+		log.Printf("Warning: malformed condition %q (unparsed input or unbalanced parentheses); treating as false", condition)
+		return false
+	}
+	return result
 }
 
 // condParser is a small recursive-descent evaluator for boolean conditions. Precedence (lowest to
@@ -695,6 +704,7 @@ func EvaluateSimpleCondition(condition string, state *models.ExecutionState, sou
 type condParser struct {
 	s     string
 	pos   int
+	bad   bool // set when the condition is malformed (e.g. a missing closing parenthesis)
 	state *models.ExecutionState
 	src   map[string]interface{}
 	ctx   map[string]interface{}
@@ -748,6 +758,8 @@ func (p *condParser) parsePrimary() bool {
 		p.skipWS()
 		if p.pos < len(p.s) && p.s[p.pos] == ')' {
 			p.pos++
+		} else {
+			p.bad = true // opened '(' without a matching ')'
 		}
 		return v
 	}

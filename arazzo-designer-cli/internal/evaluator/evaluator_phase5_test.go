@@ -54,6 +54,27 @@ func TestEvaluateSimpleCondition_Compound(t *testing.T) {
 	}
 }
 
+// Malformed conditions must fail safe to false (not silently evaluate a partial parse).
+func TestEvaluateSimpleCondition_Malformed(t *testing.T) {
+	state := models.NewExecutionState("wf", nil, nil, nil)
+	ctx := map[string]interface{}{"statusCode": 200}
+	cases := []string{
+		"($statusCode == 200",         // missing closing paren
+		"$statusCode == 200)",         // stray closing paren / unbalanced
+		"$statusCode == 200 garbage",  // trailing unparsed input
+		"($statusCode == 200 && )",    // empty operand inside group
+	}
+	for _, c := range cases {
+		if EvaluateSimpleCondition(c, state, nil, ctx) {
+			t.Errorf("malformed condition %q should be false", c)
+		}
+	}
+	// sanity: the well-formed version is still true
+	if !EvaluateSimpleCondition("($statusCode == 200)", state, nil, ctx) {
+		t.Errorf("well-formed grouped condition should be true")
+	}
+}
+
 // ---- Phase 5: new runtime-expression roots ----
 
 func phase5State() *models.ExecutionState {
