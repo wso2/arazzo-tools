@@ -203,7 +203,7 @@ parameter values + request-body payloads (nested) + payload replacement values
 ([parameter_processor.go](../../arazzo-designer-cli/internal/runner/executor/parameter_processor.go)), and the central `processValue` recursion. `jsonpointer` reuses
 `ResolveJSONPointer` (RFC 6901); `jsonpath` reuses the `ojg` engine (RFC 9535). **XPath returns
 a clear "not yet supported" error** (deferred to the next step). LSP: `validateExpressionType`
-([validator.go](../../arazzo-designer-cli/../arazzo-designer-lsp/validator/validator.go)) validates Expression Type Objects on criterion `type` (version required + valid per
+([validator.go](arazzo-designer-lsp/validator/validator.go)) validates Expression Type Objects on criterion `type` (version required + valid per
 type). Plain string expressions are untouched. Tests: `evaluator/selector_test.go`,
 `executor/output_extractor_test.go`, `executor/parameter_processor_test.go`, and an LSP
 `TestExpressionType` — all green; full CLI + LSP suites green.
