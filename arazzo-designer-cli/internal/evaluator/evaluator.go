@@ -241,20 +241,21 @@ func evaluateSourceDescriptionsExpression(expr string, state *models.ExecutionSt
 
 	// Priority 1: operationId / workflowId match in the referenced document.
 	if spec != nil {
-		if sourceKind(state, name, spec) == "arazzo" {
-			if wf, ok := findWorkflowIDInSpec(spec, idSeg); ok {
-				if remainder == "" {
-					return wf
-				}
-				return navigatePath(wf, remainder)
+		var matched map[string]interface{}
+		var found bool
+		switch sourceKind(state, name, spec) {
+		case "arazzo":
+			matched, found = findWorkflowIDInSpec(spec, idSeg)
+		case "asyncapi":
+			matched, found = findAsyncAPIOperationIDInSpec(spec, idSeg)
+		default: // openapi
+			matched, found = findOperationIDInSpec(spec, idSeg)
+		}
+		if found {
+			if remainder == "" {
+				return matched
 			}
-		} else { // openapi / asyncapi
-			if op, ok := findOperationIDInSpec(spec, idSeg); ok {
-				if remainder == "" {
-					return op
-				}
-				return navigatePath(op, remainder)
-			}
+			return navigatePath(matched, remainder)
 		}
 	}
 
@@ -317,6 +318,20 @@ func findOperationIDInSpec(spec map[string]interface{}, opID string) (map[string
 		}
 	}
 	return nil, false
+}
+
+// findAsyncAPIOperationIDInSpec looks up an operation in an AsyncAPI 3.x spec, where the top-level
+// `operations` field is a map keyed by operation id.
+func findAsyncAPIOperationIDInSpec(spec map[string]interface{}, opID string) (map[string]interface{}, bool) {
+	ops, ok := spec["operations"].(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+	op, ok := ops[opID].(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+	return op, true
 }
 
 // findWorkflowIDInSpec searches an Arazzo spec's workflows for one with the given workflowId.

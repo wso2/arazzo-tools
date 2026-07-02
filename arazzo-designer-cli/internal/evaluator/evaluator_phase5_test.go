@@ -155,6 +155,34 @@ func TestEvaluate_SourceDescriptions(t *testing.T) {
 	}
 }
 
+func TestEvaluate_SourceDescriptions_AsyncAPI(t *testing.T) {
+	st := models.NewExecutionState("wf", nil, nil, nil)
+	st.SourceDescriptionObjects = map[string]interface{}{
+		"events": map[string]interface{}{"name": "events", "url": "./events.asyncapi.yaml", "type": "asyncapi"},
+	}
+	src := map[string]interface{}{
+		"events": map[string]interface{}{
+			"asyncapi": "3.0.0",
+			"operations": map[string]interface{}{ // AsyncAPI 3.x: operations keyed by id
+				"onOrderPlaced": map[string]interface{}{"action": "receive", "channel": "orders"},
+			},
+		},
+	}
+	// operationId match in an AsyncAPI source -> the operation object
+	op := EvaluateExpression("$sourceDescriptions.events.onOrderPlaced", st, src, nil)
+	if m, ok := op.(map[string]interface{}); !ok || m["action"] != "receive" {
+		t.Errorf("asyncapi op = %v, want the onOrderPlaced operation", op)
+	}
+	// navigation onto the matched operation
+	if v := EvaluateExpression("$sourceDescriptions.events.onOrderPlaced.action", st, src, nil); v != "receive" {
+		t.Errorf("asyncapi op.action = %v, want receive", v)
+	}
+	// field fallback still works for AsyncAPI sources
+	if v := EvaluateExpression("$sourceDescriptions.events.type", st, src, nil); v != "asyncapi" {
+		t.Errorf("asyncapi source type = %v, want asyncapi", v)
+	}
+}
+
 func TestEvaluate_Workflows(t *testing.T) {
 	st := phase5State()
 	if v := EvaluateExpression("$workflows.login.summary", st, nil, nil); v != "Log in" {
