@@ -9,7 +9,7 @@ success criteria** (`&&`, `||`, `!`, parentheses). Most run against the live **T
 
 | File | What it shows | How to verify |
 |---|---|---|
-| `01-compound-criteria.arazzo.yaml` | `&&`, `||`, `!`, parentheses in `successCriteria` | all steps pass → workflow succeeds |
+| `01-compound-criteria.arazzo.yaml` | `&&`, `\|\|`, `!`, parentheses in `successCriteria` | all steps pass → workflow succeeds |
 | `02-self-expression.arazzo.yaml` | `$self` resolves to the document's `$self` field | output `documentUri` = the `$self` value |
 | `03-sourcedescriptions-expression.arazzo.yaml` | `$sourceDescriptions.<name>.<ref>` with §5.9.2 priority | outputs `matchedOperationId`, `operationSummary`, `sourceUrl`, `sourceType` |
 | `04-components-expression.arazzo.yaml` | `$components.<type>.<name>` | outputs `configuredLimit` = "10", `paramName` = "limit" |
