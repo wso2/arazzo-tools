@@ -252,7 +252,13 @@ func applyReplacements(payload interface{}, replacements []interface{}, state *m
 			}
 			value = resolved
 		} else if s, ok := value.(string); ok && strings.HasPrefix(s, "$") {
-			value = evaluator.EvaluateExpression(s, state, sourceDescs, nil)
+			resolved := evaluator.EvaluateExpression(s, state, sourceDescs, nil)
+			if resolved == nil {
+				// Don't silently inject null: skip the replacement when its value doesn't resolve.
+				log.Printf("Warning: replacement value %q resolved to nil (target %q); skipping replacement", s, target)
+				continue
+			}
+			value = resolved
 		}
 
 		// Determine the target dialect from targetSelectorType (spec §5.8.15).
