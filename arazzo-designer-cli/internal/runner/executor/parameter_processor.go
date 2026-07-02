@@ -84,7 +84,9 @@ func (pp *ParameterProcessor) PrepareRequestBody(requestBody map[string]interfac
 		if value, err := evaluator.EvaluateSelectorObject(selMap, state, pp.SourceDescriptions, nil); err == nil {
 			payload = value
 		} else {
+			// Fail safe: don't ship the raw {context,selector,type} descriptor as the body.
 			log.Printf("Warning: payload selector failed: %v", err)
+			payload = nil
 		}
 	} else if m, ok := payload.(map[string]interface{}); ok {
 		payload = evaluator.ProcessObjectExpressions(m, state, pp.SourceDescriptions)
@@ -163,8 +165,9 @@ func (pp *ParameterProcessor) resolveParameterValue(value interface{}, state *mo
 			if value, err := evaluator.EvaluateSelectorObject(v, state, pp.SourceDescriptions, nil); err == nil {
 				return value
 			} else {
+				// Fail safe: don't leak the raw {context,selector,type} descriptor as the value.
 				log.Printf("Warning: parameter selector failed: %v", err)
-				return v
+				return nil
 			}
 		}
 		return evaluator.ProcessObjectExpressions(v, state, pp.SourceDescriptions)
@@ -241,11 +244,13 @@ func applyReplacements(payload interface{}, replacements []interface{}, state *m
 		// Resolve the replacement value: Selector Object, runtime expression, or literal.
 		if evaluator.IsSelectorObject(value) {
 			selMap, _ := value.(map[string]interface{})
-			if resolved, err := evaluator.EvaluateSelectorObject(selMap, state, sourceDescs, nil); err == nil {
-				value = resolved
-			} else {
-				log.Printf("Warning: replacement selector failed: %v", err)
+			resolved, err := evaluator.EvaluateSelectorObject(selMap, state, sourceDescs, nil)
+			if err != nil {
+				// Fail safe: skip the replacement rather than injecting the raw selector descriptor.
+				log.Printf("Warning: replacement selector failed (target %q): %v; skipping replacement", target, err)
+				continue
 			}
+			value = resolved
 		} else if s, ok := value.(string); ok && strings.HasPrefix(s, "$") {
 			value = evaluator.EvaluateExpression(s, state, sourceDescs, nil)
 		}

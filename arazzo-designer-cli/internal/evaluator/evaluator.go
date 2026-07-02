@@ -1022,8 +1022,9 @@ func processValue(value interface{}, state *models.ExecutionState, sourceDescs m
 		if IsSelectorObject(v) {
 			result, err := EvaluateSelectorObject(v, state, sourceDescs, nil)
 			if err != nil {
+				// Fail safe: don't leak the raw {context,selector,type} descriptor downstream.
 				log.Printf("Warning: selector object evaluation failed: %v", err)
-				return v
+				return nil
 			}
 			return result
 		}
