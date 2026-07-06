@@ -15,7 +15,8 @@ import (
 )
 
 // Default expression versions applied when a Selector Object's `type` is given as a bare
-// string (or when an Expression Type Object omits `version`). Per spec §5.8.12.
+// string (spec §5.8.12). The Expression Type Object form requires an explicit `version`;
+// ResolveExpressionType rejects a missing one rather than defaulting, so no default applies there.
 const (
 	defaultJSONPathVersion    = "rfc9535"
 	defaultXPathVersion       = "xpath-31"
