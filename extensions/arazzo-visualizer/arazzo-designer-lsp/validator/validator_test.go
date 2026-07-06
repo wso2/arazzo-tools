@@ -225,6 +225,22 @@ func TestDependsOn(t *testing.T) {
 	}
 }
 
+func TestDependsOnCycle(t *testing.T) {
+	// a -> b -> a is a local cycle with no resolvable order.
+	cyc := "      - stepId: a\n        operationId: op1\n        dependsOn:\n          - b\n" +
+		"      - stepId: b\n        operationId: op2\n        dependsOn:\n          - a\n"
+	if errs := diagnose(t, docWith("", cyc)); !has(errs, "error", "circular dependsOn") {
+		t.Errorf("expected a circular dependsOn error, got:%s", dump(errs))
+	}
+
+	// a -> b (b defined later) is a forward, non-cyclic dependency — must NOT be flagged as a cycle.
+	acyclic := "      - stepId: a\n        operationId: op1\n        dependsOn:\n          - b\n" +
+		"      - stepId: b\n        operationId: op2\n"
+	if errs := diagnose(t, docWith("", acyclic)); has(errs, "error", "circular dependsOn") {
+		t.Errorf("acyclic forward dependency should not report a cycle, got:%s", dump(errs))
+	}
+}
+
 // ---- Phase 2: successCriteria, parameters, actions ----
 
 func TestEmptySuccessCriteria(t *testing.T) {
