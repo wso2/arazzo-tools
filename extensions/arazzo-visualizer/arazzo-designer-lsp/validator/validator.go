@@ -345,9 +345,9 @@ func (v *Validator) validateSteps(workflow *parser.Workflow, doc *parser.ArazzoD
 		// Validate parameter 'in' locations (spec §5.8.6)
 		errors = append(errors, v.validateParameterLocations(step.Parameters, step.StepID, step.LineNumber)...)
 
-		// Validate reusable-object references on step parameters resolve to a component
+		// Validate reusable-object references on step parameters resolve to a parameter component
 		for _, p := range step.Parameters {
-			errors = append(errors, v.validateComponentReference(p.Reference, doc, step.StepID, step.LineNumber)...)
+			errors = append(errors, v.validateComponentReference(p.Reference, doc, "parameters", step.StepID, step.LineNumber)...)
 		}
 
 		// Validate successCriteria is non-empty when the key is present (spec §5.8.5.1)
@@ -364,7 +364,7 @@ func (v *Validator) validateSteps(workflow *parser.Workflow, doc *parser.ArazzoD
 		// reusable references, and parameter rules (§5.8.7.1).
 		for i, action := range step.OnSuccess {
 			ref := fmt.Sprintf("onSuccess[%d]", i)
-			errors = append(errors, v.validateComponentReference(action.Reference, doc, step.StepID, step.LineNumber)...)
+			errors = append(errors, v.validateComponentReference(action.Reference, doc, "successActions", step.StepID, step.LineNumber)...)
 			if action.Reference == "" {
 				errors = append(errors, v.validateActionType(action.Type, []string{"goto", "end"}, ref, step.StepID, step.LineNumber)...)
 				errors = append(errors, v.validateActionTarget(action.StepID, action.WorkflowID, ref, step.StepID, step.LineNumber)...)
@@ -376,7 +376,7 @@ func (v *Validator) validateSteps(workflow *parser.Workflow, doc *parser.ArazzoD
 		// reusable references, and parameter rules (§5.8.8.1).
 		for i, action := range step.OnFailure {
 			ref := fmt.Sprintf("onFailure[%d]", i)
-			errors = append(errors, v.validateComponentReference(action.Reference, doc, step.StepID, step.LineNumber)...)
+			errors = append(errors, v.validateComponentReference(action.Reference, doc, "failureActions", step.StepID, step.LineNumber)...)
 			if action.Reference == "" {
 				errors = append(errors, v.validateActionType(action.Type, []string{"goto", "end", "retry"}, ref, step.StepID, step.LineNumber)...)
 				errors = append(errors, v.validateActionTarget(action.StepID, action.WorkflowID, ref, step.StepID, step.LineNumber)...)
@@ -727,8 +727,10 @@ func (v *Validator) validateActionTarget(stepIDTarget, workflowID, actionRef, st
 
 // validateComponentReference checks that a Reusable Object 'reference' resolves to an existing
 // component. References use the runtime expression form '$components.<section>.<key>'
-// (spec §5.8.10 Reusable Object). Empty references are ignored (inline objects).
-func (v *Validator) validateComponentReference(reference string, doc *parser.ArazzoDocument, stepID string, lineNumber int) []ValidationError {
+// (spec §5.8.10 Reusable Object). When expectedSection is non-empty, the reference MUST point at
+// that section (e.g. a parameter reference must use '$components.parameters.<key>'), so a
+// miswired reference to a different section is rejected. Empty references are ignored (inline objects).
+func (v *Validator) validateComponentReference(reference string, doc *parser.ArazzoDocument, expectedSection, stepID string, lineNumber int) []ValidationError {
 	if reference == "" {
 		return nil
 	}
@@ -751,6 +753,14 @@ func (v *Validator) validateComponentReference(reference string, doc *parser.Ara
 		}}
 	}
 	section, key := rest[:dot], rest[dot+1:]
+	if expectedSection != "" && section != expectedSection {
+		return []ValidationError{{
+			Line:     lineNumber,
+			Column:   0,
+			Message:  fmt.Sprintf("Step '%s': reference '%s' must point to '$components.%s.<key>' in this position", stepID, reference, expectedSection),
+			Severity: "error",
+		}}
+	}
 	if doc.Components == nil {
 		return []ValidationError{{
 			Line:     lineNumber,

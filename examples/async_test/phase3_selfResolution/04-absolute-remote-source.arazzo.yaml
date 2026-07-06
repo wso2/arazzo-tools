@@ -1,0 +1,45 @@
+# Phase 3 — Scenario 4: ABSOLUTE REMOTE SOURCE URL (no $self needed).
+#
+# Here the source 'url' is already a full web URL, so it is fetched as-is — the base URI / $self
+# is irrelevant because an absolute source URL always wins. This is the pre-v1.1.0 remote-source
+# case, confirmed to still work after the Phase 3 changes.
+#
+# Needs internet.
+
+arazzo: "1.1.0"
+
+info:
+  title: "Phase 3 - Absolute remote source URL"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: https://api.practicesoftwaretesting.com/docs   # absolute URL → fetched as-is
+    type: openapi
+
+workflows:
+  - workflowId: brandsFlow
+    summary: List brands, then fetch the first brand by id.
+    steps:
+      - stepId: listBrands
+        operationId: getBrands
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          firstBrandId: "$response.body#/0/id"
+          firstBrandName: "$response.body#/0/name"
+
+      - stepId: getOneBrand
+        operationId: getBrand
+        parameters:
+          - name: brandId
+            in: path
+            value: "$steps.listBrands.outputs.firstBrandId"
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          verifiedName: "$response.body#/name"
+
+    outputs:
+      firstBrandId: "$steps.listBrands.outputs.firstBrandId"
+      verifiedName: "$steps.getOneBrand.outputs.verifiedName"

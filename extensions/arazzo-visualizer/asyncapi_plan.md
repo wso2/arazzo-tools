@@ -145,11 +145,34 @@ Verification tests (most already exist under `examples/async_test`): bad `$self`
 bad `action`, negative `timeout`, invalid source `type`, duplicate target selectors,
 empty `successCriteria`, action-param with `in`, `dependsOn` cross-workflow form.
 
-### Phase 3: `$self` And Source Resolution — ❌ NOT STARTED
+### Phase 3: `$self` And Source Resolution — ✅ DONE (2026-06-13)
 
-Goal: correctly resolve source documents in v1.1.0. **Current loader has no `$self`/base-URI logic.**
+Goal: correctly resolve source documents in v1.1.0.
 
-Changes:
+**Implemented.** Source resolution actually happens in exactly one place at runtime — the CLI
+loader ([loader.go](../../arazzo-designer-cli/internal/loader/loader.go), called only from `runner.go`). Added [internal/loader/resolve.go](../../arazzo-designer-cli/internal/loader/resolve.go) with
+pure, unit-tested functions: `IsRemoteURL`, `ResolveBaseURI(self, retrievalPath)`, and
+`ResolveSourceLocation(baseURI, sourceURL)`. `LoadSourceDescriptions` now derives the base URI
+from `$self` and resolves each relative `sourceDescriptions.url` against it; an absolute `$self`
+turns relative sources into remote URLs that are fetched. Identical resolved locations are loaded
+once (identity-over-location dedup). When `$self` is absent the retrieval directory is the base,
+so **v1.0.x behavior is byte-for-byte preserved**. Tests: [resolve_test.go](../../arazzo-designer-cli/internal/loader/resolve_test.go) (base-URI &
+source-location cases) + [loader_test.go](../../arazzo-designer-cli/internal/loader/loader_test.go) (local, relative-`$self`, remote-`$self` via httptest,
+dedup, absolute-remote-source) — all green; full CLI suite green.
+
+The other two layers named below need no change: the LSP parses the whole document before use
+and discovers OpenAPI files by directory scan (it never resolves `sourceDescriptions.url`), and
+the RPC client does no URL resolution. Spec §5.5.1 (full parse before resolution) already holds
+in the CLI (`LoadArazzoDoc` parses everything before `LoadSourceDescriptions` runs).
+
+**Scope note / deferred:** the deep form of §5.5.2 identity matching — loading an *external Arazzo
+document* and matching a cross-document workflow reference against the *target's* declared `$self`
+— is not wired up, because the runner does not yet execute workflows in external Arazzo documents.
+That belongs with cross-document workflow execution (overlaps Phase 7's cross-document `dependsOn`)
+and should be implemented there. The loader-level base-URI resolution and same-location dedup that
+Phase 3 needs are done.
+
+Original spec-derived requirements (for reference):
 - Enforce full-document parse before any reference resolution (spec §5.5.1) in the LSP loader,
   CLI loader, and RPC client.
 - Establish the base URI per RFC3986 §5.1.1–5.1.4 priority:

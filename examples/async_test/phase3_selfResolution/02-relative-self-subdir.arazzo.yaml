@@ -1,0 +1,50 @@
+# Phase 3 — Scenario 2: RELATIVE $self (shifts the base folder).
+#
+# $self is the RELATIVE reference 'specs/order-flow.arazzo.yaml'. It is resolved against this
+# file's location, which makes the base directory './specs'. So the relative source
+# './api-spec.yaml' loads from ./specs/api-spec.yaml — NOT from this file's own folder.
+#
+# This is a genuine test: 'api-spec.yaml' exists ONLY inside ./specs. If $self resolution were
+# broken (and it used this file's folder instead), the source would NOT be found and the run
+# would fail to load it.
+#
+# Runs against the real public Toolshop API (needs internet).
+
+arazzo: "1.1.0"
+$self: specs/order-flow.arazzo.yaml      # relative → base directory becomes ./specs
+
+info:
+  title: "Phase 3 - Relative $self (subdir base)"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./api-spec.yaml                  # resolves to ./specs/api-spec.yaml
+    type: openapi
+
+workflows:
+  - workflowId: brandsFlow
+    summary: List brands, then fetch the first brand by id.
+    steps:
+      - stepId: listBrands
+        operationId: getBrands
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          firstBrandId: "$response.body#/0/id"
+          firstBrandName: "$response.body#/0/name"
+
+      - stepId: getOneBrand
+        operationId: getBrand
+        parameters:
+          - name: brandId
+            in: path
+            value: "$steps.listBrands.outputs.firstBrandId"
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          verifiedName: "$response.body#/name"
+
+    outputs:
+      firstBrandId: "$steps.listBrands.outputs.firstBrandId"
+      verifiedName: "$steps.getOneBrand.outputs.verifiedName"

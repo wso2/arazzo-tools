@@ -1,0 +1,41 @@
+# Phase 2 — YELLOW WARNINGS.
+# EXPECT: each step below produces a YELLOW warning underline (not an error).
+# Warnings mean "this is suspicious / pointless" but it won't break the file.
+
+arazzo: "1.1.0"
+
+info:
+  title: Phase 2 Warnings
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+  - name: orderBus
+    url: ./orders.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: warnFlow
+    inputs:
+      type: object
+      properties:
+        token: { type: string }
+    steps:
+      - stepId: actionOnRest                      # WARNING: 'action' only applies to AsyncAPI steps (needs channelPath)
+        operationId: getBrands
+        action: send
+
+      - stepId: correlationOnSend                 # WARNING: correlationId only applies to a 'receive' step, not 'send'
+        channelPath: orderBus#/channels/orders
+        action: send
+        correlationId: $inputs.token
+
+      - stepId: correlationNoChannel              # WARNING: correlationId only meaningful on an AsyncAPI step (no channelPath)
+        operationId: getBrands
+        correlationId: $inputs.token
+
+      - stepId: unknownChannelSource              # WARNING: channelPath references unknown source 'ghostBus'
+        channelPath: ghostBus#/channels/x
+        action: send

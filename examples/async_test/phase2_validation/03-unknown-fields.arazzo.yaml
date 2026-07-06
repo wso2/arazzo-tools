@@ -1,0 +1,29 @@
+# Phase 2 — UNKNOWN-FIELD WARNINGS (yellow).
+# These are the "silent typo" catches. Each misspelled / wrong field name below gets a
+# YELLOW warning ON THAT EXACT LINE (unknown-field warnings are line-precise).
+
+arazzo: "1.1.0"
+
+info:
+  title: Phase 2 Unknown Fields
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: typoFlow
+    steps:
+      - stepId: typoStep
+        operationId: getBrands
+        chanelPath: x                  # WARNING: Unknown field 'chanelPath' (typo of channelPath)
+        parameters:
+          - $ref: $components.parameters.Foo   # WARNING: Unknown field '$ref' (Arazzo uses 'reference', not $ref)
+        successCriteria:
+          - conditionn: $statusCode == 200     # WARNING: Unknown field 'conditionn' (typo of condition)
+
+      - stepId: extensionsAreFine
+        operationId: getBrands
+        x-team: payments               # NO warning: 'x-' extension fields are always allowed

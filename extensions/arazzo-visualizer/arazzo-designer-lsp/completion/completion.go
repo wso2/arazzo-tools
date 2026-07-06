@@ -106,6 +106,12 @@ func (c *CompletionProvider) detectContext(lines []string, currentLine int) stri
 				return "onSuccess"
 			} else if strings.HasPrefix(trimmed, "onFailure:") {
 				return "onFailure"
+			} else if strings.HasPrefix(trimmed, "successActions:") {
+				// Workflow/component-level reusable success actions share the Success Action shape
+				return "onSuccess"
+			} else if strings.HasPrefix(trimmed, "failureActions:") {
+				// Workflow/component-level reusable failure actions share the Failure Action shape
+				return "onFailure"
 			} else if strings.HasPrefix(trimmed, "successCriteria:") {
 				return "successCriteria"
 			} else if strings.Contains(trimmed, "- ") {

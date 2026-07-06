@@ -63,36 +63,64 @@ func LoadArazzoDocRaw(arazzoPath string) (map[string]interface{}, error) {
 	return raw, nil
 }
 
-// LoadSourceDescriptions loads all referenced OpenAPI source descriptions.
-// Returns a map from source name to the parsed OpenAPI spec (as map[string]interface{}).
+// LoadSourceDescriptions loads all referenced OpenAPI/AsyncAPI source descriptions.
+// Returns a map from source name to the parsed spec (as map[string]interface{}).
+//
+// v1.1.0: relative source URLs are resolved against the document's base URI (spec §5.5).
+// The base URI is derived from the optional `$self` field: when `$self` is absent the
+// retrieval location (the Arazzo file's path) is the base, preserving v1.0.x behavior.
+// The whole Arazzo document has already been parsed by LoadArazzoDoc before this runs
+// (spec §5.5.1: parse the entire document before resolving any reference).
 func LoadSourceDescriptions(doc *models.ArazzoDoc, arazzoPath string) (map[string]interface{}, error) {
 	sources := make(map[string]interface{})
-	arazzoDir := filepath.Dir(arazzoPath)
+
+	baseURI := ResolveBaseURI(doc.Self, arazzoPath)
+
+	// cache maps a resolved target location to its parsed spec so that two source
+	// descriptions resolving to the same document are loaded only once (identity over location).
+	cache := make(map[string]interface{})
 
 	for _, src := range doc.SourceDescriptions {
 		if src.Name == "" || src.URL == "" {
 			continue
 		}
 
+		target, isRemote := ResolveSourceLocation(baseURI, src.URL)
+		if spec, ok := cache[target]; ok {
+			sources[src.Name] = spec
+			continue
+		}
+
 		var spec interface{}
 		var err error
-
-		if strings.HasPrefix(src.URL, "http://") || strings.HasPrefix(src.URL, "https://") {
-			spec, err = loadRemoteSpec(src.URL)
+		if isRemote {
+			spec, err = loadRemoteSpec(target)
 		} else {
-			spec, err = loadLocalSpec(src.URL, arazzoDir)
+			// Local loading is anchored at the base document's directory. When the base URI is a
+			// remote URL (absolute $self), it has no meaningful local directory, so fall back to
+			// the Arazzo file's own directory.
+			baseDir := filepath.Dir(baseURI)
+			if IsRemoteURL(baseURI) {
+				baseDir = filepath.Dir(arazzoPath)
+			}
+			spec, err = loadLocalSpec(src.URL, baseDir)
 		}
 
 		if err != nil {
 			return nil, fmt.Errorf("error loading source description %s: %w", src.Name, err)
 		}
 
-		sources[src.Name] = spec
-
-		// Store the source URL for relative server URL resolution
+		// Store the RESOLVED source location for relative server-URL resolution. Using the resolved
+		// target (not the raw src.URL) means that when an absolute remote $self turns a relative
+		// source into a remote URL, server resolution still has a usable absolute base.
+		// For local sources the target is a file path (non-http), which downstream ignores — same
+		// effective behavior as before.
 		if specMap, ok := spec.(map[string]interface{}); ok {
-			specMap["_source_url"] = src.URL
+			specMap["_source_url"] = target
 		}
+
+		cache[target] = spec
+		sources[src.Name] = spec
 	}
 
 	return sources, nil

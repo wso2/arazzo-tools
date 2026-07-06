@@ -1,0 +1,45 @@
+# Phase 3 — Scenario 1: NO $self (baseline / v1.0.x behavior).
+#
+# With no $self, the base URI is THIS file's own folder. So the relative source
+# './toolshop-openapi.yaml' loads from this folder (phase3_selfResolution/toolshop-openapi.yaml).
+# This proves the old behavior still works unchanged.
+#
+# Runs against the real public Toolshop API (needs internet).
+
+arazzo: "1.1.0"
+
+info:
+  title: "Phase 3 - No $self (local source)"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml      # resolves next to THIS file
+    type: openapi
+
+workflows:
+  - workflowId: brandsFlow
+    summary: List brands, then fetch the first brand by id.
+    steps:
+      - stepId: listBrands
+        operationId: getBrands
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          firstBrandId: "$response.body#/0/id"
+          firstBrandName: "$response.body#/0/name"
+
+      - stepId: getOneBrand
+        operationId: getBrand
+        parameters:
+          - name: brandId
+            in: path
+            value: "$steps.listBrands.outputs.firstBrandId"
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          verifiedName: "$response.body#/name"
+
+    outputs:
+      firstBrandId: "$steps.listBrands.outputs.firstBrandId"
+      verifiedName: "$steps.getOneBrand.outputs.verifiedName"

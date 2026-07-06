@@ -9,8 +9,9 @@ import (
 
 // Known key sets for each Arazzo object type (v1.1.0). Specification extensions
 // (keys beginning with "x-") are allowed everywhere and are not listed here.
-// Reusable Object fields ("reference", "value") are folded into the parameter/action
-// sets because those positions accept either an inline object or a Reusable Object.
+// Reusable Object fields are folded into the sets where a Reusable Object is allowed: every such
+// position accepts "reference"; "value" is only valid for a parameter Reusable Object (spec §5.8.10),
+// so it is included in parameterKeys but NOT in the action sets (a 'value:' on an action is ignored).
 var (
 	rootKeys          = keySet("arazzo", "$self", "info", "sourceDescriptions", "workflows", "components")
 	infoKeys          = keySet("title", "summary", "description", "version")
@@ -21,8 +22,8 @@ var (
 	requestBodyKeys   = keySet("contentType", "payload", "replacements")
 	replacementKeys   = keySet("target", "targetSelectorType", "value")
 	criterionKeys     = keySet("context", "condition", "type")
-	successActionKeys = keySet("name", "type", "stepId", "workflowId", "parameters", "criteria", "reference", "value")
-	failureActionKeys = keySet("name", "type", "stepId", "workflowId", "retryAfter", "retryLimit", "parameters", "criteria", "reference", "value")
+	successActionKeys = keySet("name", "type", "stepId", "workflowId", "parameters", "criteria", "reference")
+	failureActionKeys = keySet("name", "type", "stepId", "workflowId", "retryAfter", "retryLimit", "parameters", "criteria", "reference")
 	componentsKeys    = keySet("inputs", "parameters", "successActions", "failureActions")
 )
 
@@ -87,11 +88,11 @@ func checkWorkflow(node *yaml.Node) []ValidationError {
 			})
 		case "successActions":
 			forEachSeqItem(val, func(_ int, item *yaml.Node) {
-				errors = append(errors, checkKeys(item, successActionKeys, "a success action")...)
+				errors = append(errors, checkAction(item, successActionKeys, "a success action")...)
 			})
 		case "failureActions":
 			forEachSeqItem(val, func(_ int, item *yaml.Node) {
-				errors = append(errors, checkKeys(item, failureActionKeys, "a failure action")...)
+				errors = append(errors, checkAction(item, failureActionKeys, "a failure action")...)
 			})
 		}
 	})

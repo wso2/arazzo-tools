@@ -1,0 +1,67 @@
+# Phase 2 — VALID v1.1.0 document.
+# EXPECT: NO diagnostics at all — no red underlines, no yellow underlines.
+# If you open this in VS Code (with the extension) and see ANY squiggle, validation is wrong.
+#
+# Note: this file is for VALIDATION only (it is not meant to be executed — the source URLs
+# below are placeholders that the validator never loads).
+
+arazzo: "1.1.0"
+$self: https://example.com/workflows/valid.arazzo.yaml   # absolute, no '#fragment' → OK
+
+info:
+  title: Phase 2 Valid Example
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+  - name: orderBus
+    url: ./orders.asyncapi.yaml
+    type: asyncapi          # asyncapi source type is valid in v1.1.0
+
+components:
+  successActions:
+    FinishUp:
+      name: FinishUp
+      type: end
+
+workflows:
+  - workflowId: mainFlow
+    inputs:
+      type: object
+      properties:
+        token: { type: string }
+    steps:
+      # AsyncAPI SEND step — channel + action send, no correlationId (correct)
+      - stepId: sendOrder
+        channelPath: orderBus#/channels/orders
+        action: send
+        timeout: 5000
+        parameters:
+          - name: q
+            in: querystring        # querystring is a valid 'in' value (v1.1.0)
+            value: $inputs.token
+        requestBody:
+          contentType: application/json
+          payload:
+            orderId: "A-1"
+            correlationId: $inputs.token   # the ID VALUE travels inside the message (this is fine)
+
+      # AsyncAPI RECEIVE step — correlationId here IS correct (matches the reply)
+      - stepId: awaitConfirmation
+        channelPath: orderBus#/channels/confirmations
+        action: receive
+        correlationId: $inputs.token
+        timeout: 30000
+        dependsOn:
+          - sendOrder            # bare stepId that exists earlier → OK
+        successCriteria:
+          - condition: $message.payload.status == "confirmed"
+        onSuccess:
+          - reference: $components.successActions.FinishUp   # resolves to a real component → OK
+        outputs:
+          confirmedId: $message.payload.orderId
+
+    outputs:
+      confirmedId: $steps.awaitConfirmation.outputs.confirmedId

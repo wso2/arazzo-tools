@@ -311,6 +311,34 @@ workflows:
 	if !has(errs, "error", "does not resolve") {
 		t.Errorf("expected unresolved reference error, got:%s", dump(errs))
 	}
+
+	// wrong section: a parameter reference must point to $components.parameters.<key>,
+	// so referencing a successAction from a parameter position is rejected.
+	wrongSection := `arazzo: "1.1.0"
+info:
+  title: T
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: ./api.yaml
+    type: openapi
+components:
+  successActions:
+    Known:
+      name: Known
+      type: end
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: s1
+        operationId: op
+        parameters:
+          - reference: $components.successActions.Known
+`
+	errs = diagnose(t, wrongSection)
+	if !has(errs, "error", "must point to '$components.parameters") {
+		t.Errorf("expected wrong-section error for a parameter referencing successActions, got:%s", dump(errs))
+	}
 }
 
 // ---- Phase 2: $self & source type ----
@@ -352,6 +380,12 @@ func TestUnknownFields(t *testing.T) {
 	errs = diagnose(t, docWith("  - name: api\n    url: ./api.yaml\n    type: openapi\n    x-internal: true\n", "      - stepId: s1\n        operationId: op\n"))
 	if has(errs, "warning", "Unknown field 'x-internal'") {
 		t.Errorf("x- extension should be allowed, got:%s", dump(errs))
+	}
+
+	// 'value' is only valid on a parameter Reusable Object — on an action it must be flagged.
+	errs = diagnose(t, docWith("", "      - stepId: s1\n        operationId: op\n        onSuccess:\n          - name: a\n            type: end\n            value: x\n"))
+	if !has(errs, "warning", "Unknown field 'value' in a success action") {
+		t.Errorf("expected unknown 'value' warning on an action, got:%s", dump(errs))
 	}
 }
 
