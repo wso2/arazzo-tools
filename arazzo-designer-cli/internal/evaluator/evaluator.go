@@ -774,6 +774,11 @@ func (p *condParser) readComparisonChunk() string {
 	for p.pos < len(p.s) {
 		c := p.s[p.pos]
 		if quote != 0 {
+			// An escaped character (e.g. \") inside a string literal must not end the string.
+			if c == '\\' && p.pos+1 < len(p.s) {
+				p.pos += 2
+				continue
+			}
 			if c == quote {
 				quote = 0
 			}
@@ -837,6 +842,11 @@ func topLevelIndex(s, op string) int {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		if quote != 0 {
+			// Skip an escaped character so an escaped quote doesn't prematurely end the string.
+			if c == '\\' && i+1 < len(s) {
+				i++
+				continue
+			}
 			if c == quote {
 				quote = 0
 			}

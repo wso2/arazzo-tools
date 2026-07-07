@@ -1,6 +1,7 @@
 package evaluator
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/wso2/arazzo-designer-cli/internal/models"
@@ -72,6 +73,29 @@ func TestEvaluateSimpleCondition_Malformed(t *testing.T) {
 	// sanity: the well-formed version is still true
 	if !EvaluateSimpleCondition("($statusCode == 200)", state, nil, ctx) {
 		t.Errorf("well-formed grouped condition should be true")
+	}
+}
+
+// Escaped quotes inside a string literal must not end the string early (both quote-scanners).
+func TestConditionParser_EscapedQuotes(t *testing.T) {
+	// topLevelIndex: the only TOP-LEVEL "==" is the one AFTER the closing quote (index > 9),
+	// not the one inside the literal (index 5). Without escape handling it would return 5.
+	if got := topLevelIndex(`"a\" == b" == c`, "=="); got <= 9 {
+		t.Errorf("topLevelIndex matched an operator inside the escaped-quote literal (index %d)", got)
+	}
+	// sanity: plain and fully-quoted cases still behave
+	if got := topLevelIndex("a == b", "=="); got != 2 {
+		t.Errorf("topLevelIndex plain: got %d, want 2", got)
+	}
+	if got := topLevelIndex(`"a == b"`, "=="); got != -1 {
+		t.Errorf("topLevelIndex fully-quoted: got %d, want -1", got)
+	}
+
+	// readComparisonChunk: the "&&" inside an escaped-quote literal must not stop the chunk, so the
+	// chunk includes the "b" that comes after it. Without escape handling the chunk would be `"a\"`.
+	p := &condParser{s: `"a\" && b" tail`}
+	if chunk := p.readComparisonChunk(); !strings.Contains(chunk, "b") {
+		t.Errorf("readComparisonChunk stopped at && inside an escaped-quote literal: %q", chunk)
 	}
 }
 
