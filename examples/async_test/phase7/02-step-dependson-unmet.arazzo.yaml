@@ -1,0 +1,39 @@
+# Phase 7 — Scenario 2: step dependsOn a prerequisite that has NOT run → HARD ERROR.  (fails on purpose)
+#
+# `dependsOn` does NOT trigger the referenced step and does NOT reorder execution (spec §5.8.5.1).
+# Here `needsLater` is the FIRST step but it dependsOn `runsLater`, which is defined AFTER it. When the
+# runner reaches `needsLater`, `runsLater` has not run yet — and the gate won't run it — so the
+# prerequisite can't be satisfied.
+#
+# EXPECTED (intentional failure): the workflow fails with a clear message like
+#     step 'needsLater' dependsOn 'runsLater', which has not completed successfully
+# This is the point of the example — it shows the gate blocking a step whose prerequisite isn't done.
+# (Fix in real docs: order the prerequisite BEFORE the dependent, as in scenario 01.)
+#
+# Runs against the live Toolshop API (needs internet). No inputs needed.
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 7 - step dependsOn unmet (intentional failure)"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: unmetDep
+    steps:
+      - stepId: needsLater
+        operationId: getBrands
+        dependsOn:
+          - runsLater             # defined LATER → not completed when we reach here → HARD ERROR
+        successCriteria:
+          - condition: "$statusCode == 200"
+
+      - stepId: runsLater
+        operationId: getProducts
+        successCriteria:
+          - condition: "$statusCode == 200"

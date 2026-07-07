@@ -1,0 +1,41 @@
+# Phase 7 — Scenario 4: CIRCULAR workflow-level dependsOn → clear error (not a crash).  (fails on purpose)
+#
+# `alpha` dependsOn `beta`, and `beta` dependsOn `alpha`. Running either one would recurse forever
+# (alpha → run beta → run alpha → …). Before Phase 7 this overflowed the stack and crashed; now the
+# runner detects the cycle in `executeDependencies` and errors clearly.
+#
+# EXPECTED (intentional failure): running **alpha** (or beta) fails with a message like
+#     circular workflow dependsOn detected: alpha -> beta -> alpha
+# No step ever runs — the cycle is caught before execution.
+#
+# (No network is even needed — the cycle is detected before any HTTP call.)
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 7 - circular workflow dependsOn (intentional failure)"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: alpha
+    dependsOn:
+      - beta                      # beta must complete first...
+    steps:
+      - stepId: s
+        operationId: getBrands
+        successCriteria:
+          - condition: "$statusCode == 200"
+
+  - workflowId: beta
+    dependsOn:
+      - alpha                     # ...but alpha depends on beta → CYCLE
+    steps:
+      - stepId: s
+        operationId: getBrands
+        successCriteria:
+          - condition: "$statusCode == 200"

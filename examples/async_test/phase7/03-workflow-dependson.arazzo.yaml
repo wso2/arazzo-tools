@@ -1,0 +1,47 @@
+# Phase 7 — Scenario 3: WORKFLOW-level dependsOn → the dependency workflow is TRIGGERED first.
+#
+# Workflow-level dependsOn is DIFFERENT from step-level: it DOES trigger the referenced workflows
+# (spec §5.8.4.1 — no "does not trigger" clause), runs them first, and exposes their outputs via
+# `$dependencies.<workflowId>.<output>`.
+#
+# Here `mainFlow` dependsOn `prerequisiteFlow`. Running mainFlow first runs prerequisiteFlow (which
+# fetches a brand id), then mainFlow runs and reads that id back through `$dependencies`.
+#
+# EXPECTED: run **mainFlow** → it completes, and output `inheritedBrandId` equals the brand id that
+# prerequisiteFlow produced.
+#
+# Runs against the live Toolshop API (needs internet). No inputs needed.
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 7 - workflow-level dependsOn"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: prerequisiteFlow
+    steps:
+      - stepId: getData
+        operationId: getBrands
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          firstBrandId: "$response.body#/0/id"
+    outputs:
+      brandId: "$steps.getData.outputs.firstBrandId"
+
+  - workflowId: mainFlow
+    dependsOn:
+      - prerequisiteFlow          # triggered & completed BEFORE mainFlow runs
+    steps:
+      - stepId: useIt
+        operationId: getProducts
+        successCriteria:
+          - condition: "$statusCode == 200"
+    outputs:
+      inheritedBrandId: "$dependencies.prerequisiteFlow.brandId"
