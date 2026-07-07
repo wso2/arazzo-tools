@@ -64,8 +64,23 @@ func (oe *OutputExtractor) ExtractOutputs(step map[string]interface{}, response 
 	for outputName, outputExprRaw := range stepOutputs {
 		outputExpr, ok := outputExprRaw.(string)
 		if !ok {
-			// Non-string output definition (e.g., Selector Object) — preserve as-is
-			outputs[outputName] = outputExprRaw
+			// Non-string output: a v1.1.0 Selector Object is evaluated; anything else is kept as-is.
+			if evaluator.IsSelectorObject(outputExprRaw) {
+				selMap, _ := outputExprRaw.(map[string]interface{})
+				value, err := evaluator.EvaluateSelectorObject(selMap, state, oe.SourceDescriptions, context)
+				switch {
+				case err != nil:
+					log.Printf("Warning: selector output %s failed: %v", outputName, err)
+				case value != nil:
+					// Mirror the string-path guard: only record a value that actually resolved.
+					outputs[outputName] = value
+					log.Printf("Selector extracted output %s: %v", outputName, value)
+				default:
+					log.Printf("Warning: selector output %s resolved to nil; not extracted", outputName)
+				}
+			} else {
+				outputs[outputName] = outputExprRaw
+			}
 			continue
 		}
 

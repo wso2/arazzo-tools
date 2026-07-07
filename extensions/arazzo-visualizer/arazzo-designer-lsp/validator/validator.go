@@ -360,6 +360,11 @@ func (v *Validator) validateSteps(workflow *parser.Workflow, doc *parser.ArazzoD
 			})
 		}
 
+		// Validate Expression Type Objects used as a criterion 'type' (spec §5.8.12)
+		for ci, crit := range step.SuccessCriteria {
+			errors = append(errors, v.validateExpressionType(crit.Type, fmt.Sprintf("Step '%s' successCriteria[%d]", step.StepID, ci), step.LineNumber)...)
+		}
+
 		// Validate onSuccess actions (spec §5.8.7): type enum {goto,end}, target exclusivity,
 		// reusable references, and parameter rules (§5.8.7.1).
 		for i, action := range step.OnSuccess {
@@ -667,6 +672,52 @@ func (v *Validator) validateActionParameters(params []parser.Parameter, workflow
 // 'querystring' was added in v1.1.0. Note: 'body' is NOT valid — use requestBody instead.
 var validParameterLocations = map[string]bool{
 	"path": true, "query": true, "querystring": true, "header": true, "cookie": true,
+}
+
+// allowedExprVersions lists the spec-permitted versions per Expression Type Object dialect (§5.8.12).
+var allowedExprVersions = map[string]map[string]bool{
+	"jsonpath":    {"rfc9535": true, "draft-goessner-dispatch-jsonpath-00": true},
+	"xpath":       {"xpath-31": true, "xpath-30": true, "xpath-20": true, "xpath-10": true},
+	"jsonpointer": {"rfc6901": true},
+}
+
+// validateExpressionType validates an Expression Type Object (spec §5.8.12) used as a criterion,
+// selector, or replacement 'type'. A bare-string type (e.g. "jsonpath") needs no version check —
+// defaults apply at runtime. When the type is an object, 'type' must be a known dialect and
+// 'version' is REQUIRED and must be valid for that dialect.
+func (v *Validator) validateExpressionType(typeField interface{}, contextLabel string, lineNumber int) []ValidationError {
+	m, ok := typeField.(map[string]interface{})
+	if !ok {
+		return nil // bare string short form or absent — nothing to validate here
+	}
+	dialect, _ := m["type"].(string)
+	versions, known := allowedExprVersions[dialect]
+	if !known {
+		return []ValidationError{{
+			Line:     lineNumber,
+			Column:   0,
+			Message:  fmt.Sprintf("%s: Expression Type Object has invalid 'type' '%s' (must be jsonpath, xpath, or jsonpointer)", contextLabel, dialect),
+			Severity: "error",
+		}}
+	}
+	version, _ := m["version"].(string)
+	if version == "" {
+		return []ValidationError{{
+			Line:     lineNumber,
+			Column:   0,
+			Message:  fmt.Sprintf("%s: Expression Type Object is missing required 'version' for type '%s'", contextLabel, dialect),
+			Severity: "error",
+		}}
+	}
+	if !versions[version] {
+		return []ValidationError{{
+			Line:     lineNumber,
+			Column:   0,
+			Message:  fmt.Sprintf("%s: Expression Type Object has unsupported version '%s' for type '%s'", contextLabel, version, dialect),
+			Severity: "error",
+		}}
+	}
+	return nil
 }
 
 // validateParameterLocations checks that each parameter's 'in' value (when present) is a

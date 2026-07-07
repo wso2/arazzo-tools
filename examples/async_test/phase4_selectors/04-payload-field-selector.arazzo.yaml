@@ -1,0 +1,63 @@
+# Phase 4 — Scenario 4: a Selector Object as a REQUEST-BODY PAYLOAD field.
+#
+# Mirrors the classic cart flow (list products → create cart → add item), but the addItem
+# payload's `product_id` is a Selector Object that picks the first product's id out of the
+# stored products body. This exercises selector evaluation nested inside a payload
+# (PrepareRequestBody → ProcessObjectExpressions → processValue).
+#
+# Runs against the live Toolshop API (needs internet).
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 4 - Selector Object in a request-body payload"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: payloadFieldSelector
+    inputs:
+      type: object
+      properties:
+        quantity:
+          type: integer
+    steps:
+      - stepId: listProducts
+        operationId: getProducts
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          productsBody: "$response.body"   # { data: [ {id, name, price}, ... ], ... }
+
+      - stepId: createCart
+        operationId: createCart
+        outputs:
+          cartId: "$response.body#/id"
+
+      - stepId: addProductToCart
+        operationId: addItem
+        parameters:
+          - name: cartId
+            in: path
+            value: "$steps.createCart.outputs.cartId"
+        requestBody:
+          contentType: application/json
+          payload:
+            # Selector Object as a payload field — JSONPath into the products body
+            product_id:
+              context: $steps.listProducts.outputs.productsBody
+              selector: $.data[0].id
+              type: jsonpath
+            quantity: "$inputs.quantity"
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          addResult: "$response.body#/result"
+
+    outputs:
+      cartId: $steps.createCart.outputs.cartId
+      addResult: $steps.addProductToCart.outputs.addResult

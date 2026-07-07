@@ -63,6 +63,10 @@ func ResolveSourceLocation(baseURI, sourceURL string) (target string, isRemote b
 		if resolved, ok := resolveURLRef(baseURI, sourceURL); ok {
 			return resolved, true
 		}
+		// Remote base but the reference could not be resolved: stay on the remote path. A remote
+		// base URI must never yield a local filesystem path, so we must NOT fall through to the
+		// filepath.Join below (which would make the caller switch to the local-load path).
+		return sourceURL, true
 	}
 	// Local base: resolve relative to the base document's directory.
 	return filepath.Join(filepath.Dir(baseURI), sourceURL), false

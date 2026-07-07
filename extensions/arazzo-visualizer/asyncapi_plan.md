@@ -190,7 +190,33 @@ Tests: relative source with `$self` absent; with absolute `$self`; relative `$se
 against retrieval URI; remote-style `$self` + relative source URL; two docs sharing a `$self`
 treated as one; full parse before resolution; existing examples still load.
 
-### Phase 4: Selector Objects And Expression Types — ❌ NOT STARTED
+### Phase 4: Selector Objects And Expression Types — ✅ DONE except XPath (2026-06-17)
+
+**Implemented.** New shared selector-evaluation service [internal/evaluator/selector.go](../../arazzo-designer-cli/internal/evaluator/selector.go):
+`IsSelectorObject` (detects a `{context, selector, type}` map), `EvaluateSelectorObject`
+(resolves the `context` expression, then routes by dialect), `resolveExpressionType` (handles
+bare-string or Expression Type Object `type`, applies default versions, rejects unknown
+dialects/versions), and `EvaluateJSONPathValue` (value-returning JSONPath, complementing the
+existing bool criterion engine). Wired into all permitted spots: step outputs
+([output_extractor.go](../../arazzo-designer-cli/internal/runner/executor/output_extractor.go)), workflow outputs ([runner.go](../../arazzo-designer-cli/internal/runner/runner.go) `resolveWorkflowOutputs`),
+parameter values + request-body payloads (nested) + payload replacement values
+([parameter_processor.go](../../arazzo-designer-cli/internal/runner/executor/parameter_processor.go)), and the central `processValue` recursion. `jsonpointer` reuses
+`ResolveJSONPointer` (RFC 6901); `jsonpath` reuses the `ojg` engine (RFC 9535). **XPath returns
+a clear "not yet supported" error** (deferred to the next step). LSP: `validateExpressionType`
+([validator.go](../../arazzo-designer-cli/../arazzo-designer-lsp/validator/validator.go)) validates Expression Type Objects on criterion `type` (version required + valid per
+type). Plain string expressions are untouched. Tests: `evaluator/selector_test.go`,
+`executor/output_extractor_test.go`, `executor/parameter_processor_test.go`, and an LSP
+`TestExpressionType` — all green; full CLI + LSP suites green.
+
+**Remaining for the XPath follow-up (do near the end, together with Phase 6's `targetSelectorType`):**
+add an XML/XPath engine and route `xpath` selectors to it (currently they error). The **same XPath
+engine also unblocks Phase 6's XPath replacement targets**, and `targetSelectorType` (JSONPath/XPath
+replacement targets) is likewise deferred there — so XPath-selectors (this phase) and the replacement
+target side (Phase 6) are best done as one final XPath/`targetSelectorType` push. Also a possible
+tightening: LSP validation of Expression Type Objects on Selector Objects / `targetSelectorType`
+inside outputs/payloads (currently runtime-validated only, since those are untyped maps in the LSP).
+
+Original spec-derived requirements (for reference):
 
 Goal: support the new structured-extraction model. **Currently Selector Objects are preserved
 verbatim and never evaluated.**
@@ -241,18 +267,26 @@ Tests: `$message.payload.status == "confirmed"`; `$message.header.correlationId`
 resolves; `$sourceDescriptions.petstore.url` resolves; object/array embedded serialization;
 compound criteria with `&&`/`||`/`!`/parentheses/indexing.
 
-### Phase 6: Payload Replacement Upgrade — ❌ NOT STARTED
+### Phase 6: Payload Replacement Upgrade — 🟡 MOSTLY DONE (only XPath targets remain)
 
-Goal: support v1.1.0 replacement targets/values. **Currently JSON-Pointer targets only (`setJSONPointer`).**
+Status:
+- **Value side — ✅ done (Phase 4):** a replacement `value` can be a literal, a runtime expression,
+  or a Selector Object; `applyReplacements` evaluates it.
+- **Target side — ✅ done for JSON Pointer + JSONPath:** `applyReplacements` now reads
+  `targetSelectorType` (string or Expression Type Object, via `evaluator.ResolveExpressionType`) and
+  routes the `target` accordingly — **JSON Pointer** (`setJSONPointer`, the default when omitted) and
+  **JSONPath** (`evaluator.SetJSONPath`, backed by `ojg`'s `Set`). Tests: `evaluator.TestSetJSONPath`
+  and `executor.TestApplyReplacements_JSONPathTarget`; example `phase4_selectors/07-jsonpath-replacement-target`.
+- **Target side — ❌ XPath only:** an `xpath` `targetSelectorType` logs a clear "not yet supported"
+  warning. This is the **only** remaining replacement gap and it **depends on the XPath engine that
+  Phase 4 also deferred** — so finish it together with the Phase 4 XPath selectors as one final
+  XPath push.
 
-Changes:
-- Extend replacement with `targetSelectorType` and JSONPath / XPath / JSON-Pointer targets.
-- Allow Selector-Object replacement values.
-- Preserve existing JSON-Pointer replacement behavior.
-- Route target lookup and value resolution through the Phase 4 shared selector service.
-
-Tests: existing JSON-Pointer replacement still works; JSONPath target; XPath target on XML;
-replacement value as literal / runtime expression / Selector Object.
+**Remaining for the XPath follow-up:**
+- Add the XML/XPath engine and route `xpath` replacement targets (and `xpath` selectors from Phase 4) to it.
+- Apply the XML default: when `targetSelectorType` is omitted and the payload is XML, treat the target as XPath.
+  (JSON default — JSON Pointer — is already in place.)
+- Optional: LSP validation of `targetSelectorType` as an Expression Type Object (version required + valid per type).
 
 ### Phase 7: OpenAPI Runtime Preservation And Step Dependencies — ❌ NOT STARTED
 
@@ -390,3 +424,48 @@ proceed 3 → 12. Phases 4 and 5 share the selector/expression service and are b
 Phase 6 depends on Phase 4; Phase 7 is independent and can be parallelized with 4–6; Phases
 8–11 form the AsyncAPI runtime track and depend on 3 (resolution) + 4–5 (evaluation) + 9
 (adapter) before 10–11. Phase 12 closes out docs/samples last.
+
+## Known Issues / Bugs (separate from the v1.1.0 phases — fix independently)
+
+### BUG: stopping the Arazzo server doesn't reset the "server running" UI state
+**Not related to v1.1.0** — a pre-existing extension lifecycle bug; tracked here so it isn't lost.
+
+**Symptoms:**
+- Starting a server correctly shows the red **stop** icon + the yellow "Arazzo server: stop" status-bar
+  item; while running, the *Try with curl* / *Try with AI* CodeLenses appear and the webview buttons work.
+- Clicking stop shows "Arazzo server stopped." and the pseudo-terminal closes (correct), **but the UI
+  does not return to the not-running state**: the stop icons remain (the ▶ play button should be the
+  only control), the *Try with curl* CodeLenses are still shown, and *Try with curl / Try with AI* in
+  the webview no longer prompt "server not running — start it" (they behave as if it's still running).
+- For a file whose server was **never started**, all of the above is correct (no stop icon, no
+  CodeLenses, webview prompts to start) — so the problem is specifically that **stop doesn't
+  propagate the state change** that the never-started case has.
+
+**How it's wired (so the fix is targeted):** a single `notifyStateChange()`
+([mcpServerRunner.ts](arazzo-designer-extension/src/mcp/mcpServerRunner.ts) line ~66) drives the refresh — it fires the callback registered via
+`onMCPServerStateChange`, which in [extension.ts](arazzo-designer-extension/src/mcp/../extension.ts) (~line 146) does
+`setContext('arazzoServerRunning', <running>)`. That context key gates the play/stop status-bar items
+and the CodeLens `when` clauses, and the Run-workflow CodeLens provider also refreshes on it.
+- **Start** path calls `notifyStateChange()` directly (line ~270) → UI shows "running".
+- **Stop** (`stopMCPServer`, ~line 312) deliberately does *not* call it; it relies on the
+  **task-end listener** registered in `initializeMCPServerRunner` (~line 340) which, on `onDidEndTask`,
+  clears state and calls `notifyStateChange()`.
+
+**Suspected root cause(s) to investigate:**
+1. The task-end listener (`registerMCPTaskEndListener`) may not fire (or not match) when the task is
+   **terminated** via stop (vs. exiting on its own), so `notifyStateChange()` never runs on stop.
+2. Or it fires too early — while `isMCPServerRunning()` (`isMCPTaskRunning()`) still reports `true` —
+   so the `setContext('arazzoServerRunning', …)` callback recomputes "running = true" and nothing resets.
+3. The **webview's** running state (Try with curl/AI prompt) may be cached/driven separately from the
+   `arazzoServerRunning` context key, so even when the others reset, the webview isn't told the server stopped.
+
+**Fix direction:** ensure stop reliably flips the state to not-running — e.g. have `stopMCPServer`
+itself call `notifyStateChange()` after stopping (so it doesn't depend solely on the task-end event),
+make the `arazzoServerRunning` callback read the post-stop state, and ensure the webview is notified
+(or reads `isMCPServerRunning()` live) so its Try-with-curl/AI prompt resets. Then verify all three
+reset on stop: status-bar play/stop toggle, CodeLenses, and the webview prompt.
+
+**Files:** `arazzo-designer-extension/src/mcp/mcpServerRunner.ts` (`stopMCPServer`, `notifyStateChange`,
+`initializeMCPServerRunner`/task-end listener), `arazzo-designer-extension/src/extension.ts`
+(`arazzoServerRunning` context callback, status-bar items), `mcp/runWorkflowCodeLens.ts`,
+`mcp/mcpPlaygroundWebview.ts` (webview running state).

@@ -1,0 +1,72 @@
+# Phase 4/6 — a JSONPath replacement TARGET via `targetSelectorType: jsonpath`.
+#
+# Same cart flow, but the replacement that fills in product_id uses a **JSONPath** target
+# (`$.product_id`) declared with `targetSelectorType: jsonpath`, instead of the default JSON Pointer.
+# The replacement VALUE is itself a Selector Object pulling a real product id from the catalog.
+#
+# JSON Pointer is the default target type, so you only add `targetSelectorType: jsonpath` to use a
+# JSONPath target. For a flat object, `$.product_id` hits the same spot a JSON Pointer `/product_id`
+# would — JSONPath's extra power (filters/wildcards, e.g. `$.items[?(@.sku=='X')].qty`) applies the
+# same way when the payload contains arrays.
+#
+# (XPath targets are NOT supported yet — they'd log a clear "not yet supported" warning.)
+#
+# Runs against the live Toolshop API (needs internet). Provide an input `quantity` (e.g. 1).
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 4/6 - JSONPath replacement target (targetSelectorType: jsonpath)"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: jsonpathReplacementTarget
+    inputs:
+      type: object
+      properties:
+        quantity:
+          type: integer
+    steps:
+      - stepId: listProducts
+        operationId: getProducts
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          productsBody: "$response.body"
+
+      - stepId: createCart
+        operationId: createCart
+        outputs:
+          cartId: "$response.body#/id"
+
+      - stepId: addProductToCart
+        operationId: addItem
+        parameters:
+          - name: cartId
+            in: path
+            value: "$steps.createCart.outputs.cartId"
+        requestBody:
+          contentType: application/json
+          payload:
+            product_id: "PLACEHOLDER"
+            quantity: "$inputs.quantity"
+          replacements:
+            - target: "$.product_id"          # a JSONPath target (not a JSON Pointer)
+              targetSelectorType: jsonpath
+              value:
+                context: $steps.listProducts.outputs.productsBody
+                selector: /data/0/id
+                type: jsonpointer
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          addResult: "$response.body#/result"
+
+    outputs:
+      cartId: $steps.createCart.outputs.cartId
+      addResult: $steps.addProductToCart.outputs.addResult

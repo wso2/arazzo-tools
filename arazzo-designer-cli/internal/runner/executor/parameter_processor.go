@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/wso2/arazzo-designer-cli/internal/evaluator"
@@ -75,8 +76,17 @@ func (pp *ParameterProcessor) PrepareRequestBody(requestBody map[string]interfac
 	contentType, _ := requestBody["contentType"].(string)
 	payload := requestBody["payload"]
 
-	// Evaluate the entire payload to resolve expressions
-	if m, ok := payload.(map[string]interface{}); ok {
+	// Evaluate the entire payload to resolve expressions.
+	// Nested Selector Objects inside a map/array are handled by Process*Expressions; a payload
+	// that is itself a Selector Object is evaluated here.
+	if evaluator.IsSelectorObject(payload) {
+		selMap, _ := payload.(map[string]interface{})
+		if value, err := evaluator.EvaluateSelectorObject(selMap, state, pp.SourceDescriptions, nil); err == nil {
+			payload = value
+		} else {
+			log.Printf("Warning: payload selector failed: %v", err)
+		}
+	} else if m, ok := payload.(map[string]interface{}); ok {
 		payload = evaluator.ProcessObjectExpressions(m, state, pp.SourceDescriptions)
 	} else if arr, ok := payload.([]interface{}); ok {
 		payload = evaluator.ProcessArrayExpressions(arr, state, pp.SourceDescriptions)
@@ -148,6 +158,15 @@ func (pp *ParameterProcessor) resolveParameterValue(value interface{}, state *mo
 		return v
 
 	case map[string]interface{}:
+		// A v1.1.0 Selector Object is evaluated as a whole; a plain object is recursed into.
+		if evaluator.IsSelectorObject(v) {
+			if value, err := evaluator.EvaluateSelectorObject(v, state, pp.SourceDescriptions, nil); err == nil {
+				return value
+			} else {
+				log.Printf("Warning: parameter selector failed: %v", err)
+				return v
+			}
+		}
 		return evaluator.ProcessObjectExpressions(v, state, pp.SourceDescriptions)
 
 	case []interface{}:
@@ -219,46 +238,105 @@ func applyReplacements(payload interface{}, replacements []interface{}, state *m
 		target, _ := rep["target"].(string)
 		value := rep["value"]
 
-		// Resolve expression values
-		if s, ok := value.(string); ok && strings.HasPrefix(s, "$") {
+		// Resolve the replacement value: Selector Object, runtime expression, or literal.
+		if evaluator.IsSelectorObject(value) {
+			selMap, _ := value.(map[string]interface{})
+			if resolved, err := evaluator.EvaluateSelectorObject(selMap, state, sourceDescs, nil); err == nil {
+				value = resolved
+			} else {
+				log.Printf("Warning: replacement selector failed: %v", err)
+			}
+		} else if s, ok := value.(string); ok && strings.HasPrefix(s, "$") {
 			value = evaluator.EvaluateExpression(s, state, sourceDescs, nil)
 		}
 
-		// Apply the replacement using JSON Pointer
-		if strings.HasPrefix(target, "/") {
-			payload = setJSONPointer(payload, target, value)
+		// Determine the target dialect from targetSelectorType (spec §5.8.15).
+		// Default when omitted: JSON Pointer (the spec default for JSON payloads).
+		dialect := "jsonpointer"
+		if tst := rep["targetSelectorType"]; tst != nil {
+			d, _, err := evaluator.ResolveExpressionType(tst)
+			if err != nil {
+				log.Printf("Warning: replacement 'targetSelectorType' invalid: %v", err)
+				continue
+			}
+			dialect = d
+		}
+
+		// Apply the replacement at the target, interpreting it per the dialect.
+		switch dialect {
+		case "jsonpointer":
+			if strings.HasPrefix(target, "/") {
+				payload = setJSONPointer(payload, target, value)
+			} else {
+				log.Printf("Warning: JSON Pointer replacement target %q must start with '/'", target)
+			}
+		case "jsonpath":
+			if updated, err := evaluator.SetJSONPath(payload, target, value); err == nil {
+				payload = updated
+			} else {
+				log.Printf("Warning: JSONPath replacement target failed: %v", err)
+			}
+		case "xpath":
+			log.Printf("Warning: XPath replacement targets are not yet supported (target %q)", target)
 		}
 	}
 	return payload
 }
 
-// setJSONPointer sets a value at a JSON Pointer path in a data structure.
+// setJSONPointer sets a value at a JSON Pointer path (RFC 6901) within data, descending through
+// both JSON objects (map[string]interface{}) and JSON arrays ([]interface{}). It mirrors the read
+// side (evaluator.ResolveJSONPointer) so a target that can be READ can also be PATCHED — e.g.
+// /data/0/price, where "0" indexes into an array.
+//
+// The edit is made in place: Go maps and slices are reference types, so mutating a nested container
+// is visible through the returned data without rebuilding its parents. Unresolvable targets (a
+// missing object key, an array index out of range, a numeric segment against a non-array, or trying
+// to descend into a scalar) are left unchanged with a warning rather than a silent no-op.
 func setJSONPointer(data interface{}, pointer string, value interface{}) interface{} {
 	parts := strings.Split(pointer, "/")
 	if len(parts) < 2 {
 		return data
 	}
-	parts = parts[1:] // Skip the first empty element
+	parts = parts[1:] // Skip the leading empty element (the "" before the first '/').
 
-	m, ok := data.(map[string]interface{})
-	if !ok {
-		return data
-	}
-
-	current := m
+	current := data
 	for i, part := range parts {
-		if i == len(parts)-1 {
-			current[part] = value
-		} else {
-			next, ok := current[part].(map[string]interface{})
+		// Decode JSON Pointer escapes: ~1 -> /, ~0 -> ~ (RFC 6901 §3).
+		part = strings.ReplaceAll(part, "~1", "/")
+		part = strings.ReplaceAll(part, "~0", "~")
+
+		last := i == len(parts)-1
+
+		switch node := current.(type) {
+		case map[string]interface{}:
+			if last {
+				node[part] = value
+				return data
+			}
+			next, ok := node[part]
 			if !ok {
+				log.Printf("Warning: JSON Pointer target %q not applied: missing object key %q", pointer, part)
 				return data
 			}
 			current = next
+		case []interface{}:
+			idx, err := strconv.Atoi(part)
+			if err != nil || idx < 0 || idx >= len(node) {
+				log.Printf("Warning: JSON Pointer target %q not applied: invalid array index %q (array length %d)", pointer, part, len(node))
+				return data
+			}
+			if last {
+				node[idx] = value
+				return data
+			}
+			current = node[idx]
+		default:
+			log.Printf("Warning: JSON Pointer target %q not applied: cannot descend into segment %q (node is neither object nor array)", pointer, part)
+			return data
 		}
 	}
 
-	return m
+	return data
 }
 
 // ensureParamMap ensures a parameter location map exists and returns it.

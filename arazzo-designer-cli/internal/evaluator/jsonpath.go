@@ -47,6 +47,21 @@ func EvaluateJSONPathCriterion(contextValue interface{}, condition string) bool 
 	return len(results) > 0
 }
 
+// SetJSONPath sets value at every location matched by a JSONPath (RFC 9535) selector and returns
+// the (in-place-modified) root. Used for v1.1.0 payload replacements whose targetSelectorType is
+// jsonpath. It operates on the payload directly so untouched fields keep their original types;
+// payloads at this point are already ojg-compatible (map[string]interface{} / []interface{}).
+func SetJSONPath(data interface{}, selector string, value interface{}) (interface{}, error) {
+	expr, err := jp.ParseString(selector)
+	if err != nil {
+		return data, fmt.Errorf("invalid JSONPath target %q: %w", selector, err)
+	}
+	if err := expr.Set(data, value); err != nil {
+		return data, fmt.Errorf("failed to set JSONPath target %q: %w", selector, err)
+	}
+	return data, nil
+}
+
 // normalizeForOJG converts an arbitrary Go value into ojg-compatible simple
 // types by round-tripping through JSON serialization → ojg parsing.
 // This handles edge cases like yaml.v3 producing map[interface{}]interface{}

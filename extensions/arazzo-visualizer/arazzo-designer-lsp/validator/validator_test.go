@@ -363,6 +363,38 @@ func TestSourceType(t *testing.T) {
 	}
 }
 
+// ---- Expression Type Object (Phase 4 validation) ----
+
+func TestExpressionType(t *testing.T) {
+	crit := func(typeBlock string) string {
+		return "      - stepId: s1\n        operationId: op\n        successCriteria:\n" +
+			"          - context: $response.body\n            condition: \"$.x\"\n" + typeBlock
+	}
+	cases := []struct {
+		name    string
+		typeYML string
+		wantErr string // "" = expect no error
+	}{
+		{"valid object", "            type:\n              type: jsonpath\n              version: rfc9535\n", ""},
+		{"valid string short form", "            type: jsonpath\n", ""},
+		{"missing version", "            type:\n              type: jsonpath\n", "missing required 'version'"},
+		{"bad version", "            type:\n              type: jsonpath\n              version: nope\n", "unsupported version"},
+		{"bad dialect", "            type:\n              type: yaml\n              version: rfc9535\n", "invalid 'type'"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := diagnose(t, docWith("", crit(tc.typeYML)))
+			if tc.wantErr == "" {
+				if has(errs, "error", "Expression Type Object") {
+					t.Errorf("expected no Expression Type Object error, got:%s", dump(errs))
+				}
+			} else if !has(errs, "error", tc.wantErr) {
+				t.Errorf("expected %q, got:%s", tc.wantErr, dump(errs))
+			}
+		})
+	}
+}
+
 // ---- Unknown fields ----
 
 func TestUnknownFields(t *testing.T) {

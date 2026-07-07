@@ -1,0 +1,53 @@
+# Phase 4 — Scenario 1: Selector Objects in STEP OUTPUTS.
+#
+# getBrands returns a top-level JSON array of brands ([{id, name, slug}, ...]).
+# The step outputs use Selector Objects (context + selector + type) to extract values,
+# showing both JSON Pointer and JSONPath, alongside a plain string expression for comparison.
+#
+# Runs against the live Toolshop API (needs internet).
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 4 - Selector Objects in step outputs"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: stepOutputSelectors
+    steps:
+      - stepId: listBrands
+        operationId: getBrands
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          # plain string expression (unchanged behavior)
+          firstBrandIdString: "$response.body#/0/id"
+
+          # Selector Object — JSON Pointer
+          firstBrandIdPointer:
+            context: $response.body
+            selector: /0/id
+            type: jsonpointer
+
+          # Selector Object — JSONPath (single value)
+          firstBrandNamePath:
+            context: $response.body
+            selector: $[0].name
+            type: jsonpath
+
+          # Selector Object — JSONPath wildcard (all brand names → a list)
+          allBrandNames:
+            context: $response.body
+            selector: $[*].name
+            type: jsonpath
+
+    outputs:
+      firstBrandIdString: $steps.listBrands.outputs.firstBrandIdString
+      firstBrandIdPointer: $steps.listBrands.outputs.firstBrandIdPointer
+      firstBrandNamePath: $steps.listBrands.outputs.firstBrandNamePath
+      allBrandNames: $steps.listBrands.outputs.allBrandNames

@@ -596,6 +596,15 @@ func processValue(value interface{}, state *models.ExecutionState, sourceDescs m
 		}
 		return v
 	case map[string]interface{}:
+		// A v1.1.0 Selector Object is evaluated as a whole; a plain object is recursed into.
+		if IsSelectorObject(v) {
+			result, err := EvaluateSelectorObject(v, state, sourceDescs, nil)
+			if err != nil {
+				log.Printf("Warning: selector object evaluation failed: %v", err)
+				return v
+			}
+			return result
+		}
 		return ProcessObjectExpressions(v, state, sourceDescs)
 	case []interface{}:
 		return ProcessArrayExpressions(v, state, sourceDescs)
