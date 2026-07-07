@@ -1,0 +1,49 @@
+# Phase 5 — an ESCAPED QUOTE inside a successCriteria string literal.
+#
+# A `simple` condition can contain a double-quoted string literal. If that literal needs to contain
+# a quote, it is escaped as \". The condition parser must treat \" as part of the string — NOT as the
+# end of the string. Otherwise any operator that appears LATER inside the literal (here a `&&`) would
+# leak out and be mis-read as real syntax, and the condition would be evaluated incorrectly.
+#
+# The step below has ONE compound condition:
+#     $statusCode == 200 && "x\" == y" == "x\" == y"
+#   - left  : a real check — the GET returns 200
+#   - right : the SAME string literal compared to itself. That literal contains an escaped quote (\")
+#            immediately followed by "==" inside it.
+#
+# This condition DISCRIMINATES the fix:
+#   - With correct escaped-quote handling, the inner \" stays inside the string, the inner "==" is
+#     ignored, the two identical literals are equal → the whole condition is TRUE → the step PASSES.
+#   - WITHOUT the fix, the \" ends the string early, the inner "==" is mistaken for the real operator,
+#     the condition mis-splits into `"x\"` == `y" == "x\" == y"` → NOT equal → FALSE → the step FAILS.
+#
+# So: this passes ONLY on a build that has the escaped-quote fix. (If you run it through the VS Code
+# extension, rebuild the CLI first — `run build-cli` — or the extension uses the old, unpatched binary.)
+#
+# Runs against the live Toolshop API (needs internet). No inputs needed.
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 5 - escaped quotes in a condition"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: escapedQuoteCondition
+    steps:
+      - stepId: listBrands
+        operationId: getBrands
+        successCriteria:
+          # The \" (escaped quote) and the "==" after it must stay INSIDE the string literal.
+          # Passes ONLY when escaped quotes are handled; mis-parses to FALSE otherwise.
+          - condition: '$statusCode == 200 && "x\" == y" == "x\" == y"'
+        outputs:
+          firstBrandId: "$response.body#/0/id"
+
+    outputs:
+      firstBrandId: $steps.listBrands.outputs.firstBrandId

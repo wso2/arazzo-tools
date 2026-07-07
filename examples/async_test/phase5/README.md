@@ -16,6 +16,7 @@ success criteria** (`&&`, `||`, `!`, parentheses). Most run against the live **T
 | `05-workflows-expression.arazzo.yaml` | `$workflows.<id>.<field>` (run **mainFlow**) | output `helperSummary` = helperFlow's summary |
 | `06-embedded-serialization.arazzo.yaml` | `{$...}` template: objects→JSON, primitives→text | inspect the addItem request body (`debug_order` is JSON) |
 | `07-message-expression.arazzo.yaml` | `$message.header.*` / `$message.payload#/…` (AsyncAPI) | ⚠️ illustrative — see note below |
+| `08-escaped-quote-condition.arazzo.yaml` | an escaped quote (`\"`) inside a condition string literal isn't treated as the string's end | the step **passes only with the fix** — it mis-parses to FALSE (step fails) on an unpatched binary |
 
 ## Expected output values
 
