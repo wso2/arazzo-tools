@@ -72,20 +72,28 @@ func DiscoverOpenAPIFiles(arazzoFileURI string) ([]string, error) {
 			continue
 		}
 
-		isOpenAPI, err := isOpenAPIFile(file)
+		isSpec, err := isSpecFile(file)
 		if err != nil {
 			utils.LogWarning("Error checking file %s: %v", file, err)
 			continue
 		}
 
-		if isOpenAPI {
-			utils.LogDebug("Found OpenAPI file: %s", file)
+		if isSpec {
+			utils.LogDebug("Found API spec file: %s", file)
 			openAPIFiles = append(openAPIFiles, utils.PathToURI(file))
 		}
 	}
 
-	utils.LogInfo("Discovered %d OpenAPI files", len(openAPIFiles))
+	utils.LogInfo("Discovered %d API spec files", len(openAPIFiles))
 	return openAPIFiles, nil
+}
+
+// isSpecFile reports whether a file is an OpenAPI OR AsyncAPI specification.
+func isSpecFile(filePath string) (bool, error) {
+	if ok, err := isOpenAPIFile(filePath); ok || err != nil {
+		return ok, err
+	}
+	return isAsyncAPIFile(filePath)
 }
 
 // findFilesInDirectory finds all YAML and JSON files in a directory
@@ -208,4 +216,23 @@ func isOpenAPIFile(filePath string) (bool, error) {
 		strings.Contains(content, `"openapi"`)
 
 	return hasOpenAPI, nil
+}
+
+// isAsyncAPIFile checks if a file contains an AsyncAPI specification (by its "asyncapi:" marker).
+func isAsyncAPIFile(filePath string) (bool, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return false, err
+	}
+	defer file.Close()
+
+	buf := make([]byte, 1024)
+	n, err := file.Read(buf)
+	if err != nil && n == 0 {
+		return false, err
+	}
+	content := string(buf[:n])
+	hasAsyncAPI := strings.Contains(content, "asyncapi:") ||
+		strings.Contains(content, `"asyncapi"`)
+	return hasAsyncAPI, nil
 }

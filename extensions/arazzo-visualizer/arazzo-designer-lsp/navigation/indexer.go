@@ -116,7 +116,12 @@ func (idx *Indexer) IndexFile(fileURI string) error {
 		idx.index.AddOperation(operation)
 	}
 
-	utils.LogDebug("Indexed %d operations from %s", len(openAPIFile.Operations), fileURI)
+	// Add all AsyncAPI channels to index
+	for _, channel := range openAPIFile.Channels {
+		idx.index.AddChannel(channel)
+	}
+
+	utils.LogDebug("Indexed %d operations, %d channels from %s", len(openAPIFile.Operations), len(openAPIFile.Channels), fileURI)
 	return nil
 }
 

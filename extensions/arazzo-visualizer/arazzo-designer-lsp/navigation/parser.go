@@ -67,9 +67,89 @@ func ParseOpenAPIFile(fileURI string) (*OpenAPIFile, error) {
 	}
 
 	openAPIFile.Operations = operations
-	utils.LogInfo("Parsed %d operations from %s", len(operations), filepath.Base(filePath))
+
+	// If this is an AsyncAPI document, also extract its operations (keyed by id) and channels so
+	// `operationId` and `channelPath` references can navigate into it.
+	if asyncVersion := getString(spec, "asyncapi"); asyncVersion != "" {
+		openAPIFile.Version = asyncVersion
+		openAPIFile.Operations = append(openAPIFile.Operations, extractAsyncOperations(spec, fileURI, string(content))...)
+		openAPIFile.Channels = extractChannels(spec, fileURI, string(content))
+	}
+
+	utils.LogInfo("Parsed %d operations, %d channels from %s", len(openAPIFile.Operations), len(openAPIFile.Channels), filepath.Base(filePath))
 
 	return openAPIFile, nil
+}
+
+// extractAsyncOperations extracts AsyncAPI 3.x operations (the `operations` map keyed by id).
+func extractAsyncOperations(spec map[string]interface{}, fileURI, content string) []*OperationInfo {
+	ops := make([]*OperationInfo, 0)
+	operationsObj, ok := spec["operations"].(map[string]interface{})
+	if !ok {
+		return ops
+	}
+	fileName := baseName(fileURI)
+	for opID, opRaw := range operationsObj {
+		opMap, ok := opRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		ops = append(ops, &OperationInfo{
+			OperationID: opID,
+			Method:      strings.ToUpper(getString(opMap, "action")), // SEND / RECEIVE (for display)
+			Summary:     getString(opMap, "summary"),
+			Description: getString(opMap, "description"),
+			FileURI:     fileURI,
+			FileName:    fileName,
+			LineNumber:  findKeyLineNumber(content, opID),
+			Column:      0,
+		})
+	}
+	return ops
+}
+
+// extractChannels extracts AsyncAPI channels (the `channels` map keyed by channel key).
+func extractChannels(spec map[string]interface{}, fileURI, content string) []*ChannelInfo {
+	channels := make([]*ChannelInfo, 0)
+	channelsObj, ok := spec["channels"].(map[string]interface{})
+	if !ok {
+		return channels
+	}
+	fileName := baseName(fileURI)
+	for key, chRaw := range channelsObj {
+		chMap, _ := chRaw.(map[string]interface{})
+		channels = append(channels, &ChannelInfo{
+			Key:        key,
+			Address:    getString(chMap, "address"),
+			FileURI:    fileURI,
+			FileName:   fileName,
+			LineNumber: findKeyLineNumber(content, key),
+		})
+	}
+	return channels
+}
+
+// findKeyLineNumber finds the (0-indexed) line where a YAML/JSON map key is defined, e.g. the
+// `placeOrder:` operation key or the `orders:` channel key.
+func findKeyLineNumber(content, key string) int {
+	lines := strings.Split(content, "\n")
+	yamlKey := key + ":"
+	jsonKey := `"` + key + `"`
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, yamlKey) || strings.HasPrefix(trimmed, jsonKey) {
+			return i
+		}
+	}
+	return 0
+}
+
+// baseName returns the display filename for a URI.
+func baseName(fileURI string) string {
+	if filePath, err := utils.URIToPath(fileURI); err == nil {
+		return filepath.Base(filePath)
+	}
+	return filepath.Base(fileURI)
 }
 
 // extractOperations extracts operation information from the paths object
