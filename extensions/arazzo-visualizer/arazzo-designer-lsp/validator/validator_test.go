@@ -241,6 +241,50 @@ func TestDependsOnCycle(t *testing.T) {
 	}
 }
 
+func TestWorkflowDependsOnCycle(t *testing.T) {
+	// threeWf builds a document with workflows A, B, C, each given the dependsOn line in depA/depB/depC
+	// (an empty string omits dependsOn for that workflow).
+	threeWf := func(depA, depB, depC string) string {
+		wf := func(id, dep string) string {
+			s := "  - workflowId: " + id + "\n"
+			if dep != "" {
+				s += "    dependsOn:\n      - " + dep + "\n"
+			}
+			return s + "    steps:\n      - stepId: s_" + id + "\n        operationId: op\n"
+		}
+		return `arazzo: "1.1.0"
+info:
+  title: Test
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: ./api.yaml
+    type: openapi
+workflows:
+` + wf("A", depA) + wf("B", depB) + wf("C", depC)
+	}
+
+	// A -> B, B -> A: direct two-workflow cycle.
+	if errs := diagnose(t, threeWf("B", "A", "")); !has(errs, "error", "circular dependsOn") {
+		t.Errorf("expected a circular workflow dependsOn error (A<->B), got:%s", dump(errs))
+	}
+
+	// A -> B -> C -> A: three-workflow cycle.
+	if errs := diagnose(t, threeWf("B", "C", "A")); !has(errs, "error", "circular dependsOn") {
+		t.Errorf("expected a circular workflow dependsOn error (A->B->C->A), got:%s", dump(errs))
+	}
+
+	// A -> A: self-cycle.
+	if errs := diagnose(t, threeWf("A", "", "")); !has(errs, "error", "circular dependsOn") {
+		t.Errorf("expected a self-cycle workflow dependsOn error, got:%s", dump(errs))
+	}
+
+	// A -> B, B -> C, C -> (nothing): acyclic chain — must NOT be flagged.
+	if errs := diagnose(t, threeWf("B", "C", "")); has(errs, "error", "circular dependsOn") {
+		t.Errorf("acyclic workflow chain should not report a cycle, got:%s", dump(errs))
+	}
+}
+
 // ---- Phase 2: successCriteria, parameters, actions ----
 
 func TestEmptySuccessCriteria(t *testing.T) {

@@ -153,6 +153,10 @@ func (v *Validator) validateSourceDescriptions(doc *parser.ArazzoDocument) []Val
 func (v *Validator) validateWorkflows(doc *parser.ArazzoDocument) []ValidationError {
 	var errors []ValidationError
 
+	// Detect circular workflow-level dependsOn across the document — spec §5.8.4.1 (workflow dependsOn
+	// TRIGGERS the referenced workflows, so a cycle would infinite-recurse at runtime).
+	errors = append(errors, v.validateWorkflowDependsOnCycles(doc)...)
+
 	workflowIDs := make(map[string]bool)
 
 	for _, workflow := range doc.Workflows {
@@ -703,6 +707,72 @@ func (v *Validator) validateDependsOnCycles(workflow *parser.Workflow) []Validat
 	for _, step := range workflow.Steps {
 		if stateOf[step.StepID] == unvisited {
 			visit(step.StepID)
+		}
+	}
+	return errors
+}
+
+// validateWorkflowDependsOnCycles detects circular workflow-level dependsOn relationships across the
+// whole document (e.g. workflow A dependsOn B, B dependsOn A), which have no resolvable execution
+// order and would infinite-recurse at runtime (spec §5.8.4.1 — workflow dependsOn TRIGGERS the
+// referenced workflows). This mirrors the runner's depStack cycle guard (runner.go executeDependencies).
+// Only local workflowId references participate; cross-document ($sourceDescriptions.*) refs are
+// resolved/executed elsewhere and cannot form an in-document cycle.
+func (v *Validator) validateWorkflowDependsOnCycles(doc *parser.ArazzoDocument) []ValidationError {
+	exists := make(map[string]bool)
+	line := make(map[string]int)
+	for _, wf := range doc.Workflows {
+		exists[wf.WorkflowID] = true
+		line[wf.WorkflowID] = wf.LineNumber
+	}
+	// edges: workflowId -> the local workflowIds it dependsOn
+	edges := make(map[string][]string)
+	for _, wf := range doc.Workflows {
+		for _, dep := range wf.DependsOn {
+			if dep == "" || strings.HasPrefix(dep, "$") {
+				continue // cross-document refs can't form a same-document cycle
+			}
+			if exists[dep] {
+				edges[wf.WorkflowID] = append(edges[wf.WorkflowID], dep)
+			}
+		}
+	}
+
+	var errors []ValidationError
+	const (
+		unvisited = 0
+		inStack   = 1
+		done      = 2
+	)
+	stateOf := make(map[string]int)
+	reported := make(map[string]bool)
+
+	var visit func(node string)
+	visit = func(node string) {
+		stateOf[node] = inStack
+		for _, next := range edges[node] {
+			switch stateOf[next] {
+			case inStack: // back-edge → cycle
+				key := node + "\x00" + next
+				if !reported[key] {
+					reported[key] = true
+					errors = append(errors, ValidationError{
+						Line:     line[node],
+						Column:   0,
+						Message:  fmt.Sprintf("Workflow '%s': circular dependsOn detected (depends on '%s', which depends back on '%s')", node, next, node),
+						Severity: "error",
+					})
+				}
+			case unvisited:
+				visit(next)
+			}
+		}
+		stateOf[node] = done
+	}
+
+	for _, wf := range doc.Workflows {
+		if stateOf[wf.WorkflowID] == unvisited {
+			visit(wf.WorkflowID)
 		}
 	}
 	return errors
