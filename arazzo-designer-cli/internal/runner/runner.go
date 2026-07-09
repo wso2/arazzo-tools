@@ -514,6 +514,8 @@ func (r *ArazzoRunner) executeDependencies(wf map[string]interface{}) (map[strin
 
 		// Handle $sourceDescriptions.xxx references (cross-document — execution deferred)
 		if strings.HasPrefix(depID, "$sourceDescriptions") {
+			// TODO(end-of-project batch): execute cross-document workflow dependsOn once external
+			// `type: arazzo` source descriptions are executable. See asyncapi_plan.md "Known Issues".
 			log.Printf("Warning: cross-document workflow dependsOn '%s' is not yet executed (skipped)", depID)
 			continue
 		}
@@ -558,6 +560,8 @@ func (r *ArazzoRunner) checkStepDependencies(step map[string]interface{}, state 
 		}
 		switch {
 		case strings.HasPrefix(dep, "$sourceDescriptions."):
+			// TODO(end-of-project batch): support cross-document step dependsOn once external
+			// `type: arazzo` source descriptions are executable. See asyncapi_plan.md "Known Issues".
 			return fmt.Errorf("step '%s' dependsOn '%s': cross-document step dependencies are not yet supported", stepID, dep)
 		case strings.HasPrefix(dep, "$workflows."):
 			wfID, depStepID, ok := parseWorkflowsRef(dep)

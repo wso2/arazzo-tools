@@ -294,6 +294,8 @@ func applyReplacements(payload interface{}, replacements []interface{}, state *m
 				log.Printf("Warning: JSONPath replacement target failed: %v", err)
 			}
 		case "xpath":
+			// TODO(xpath, end-of-project batch): route xpath replacement targets to the shared XML/XPath
+			// engine (same engine as the Phase 4 xpath selectors). See asyncapi_plan.md.
 			log.Printf("Warning: XPath replacement targets are not yet supported (target %q)", target)
 		}
 	}

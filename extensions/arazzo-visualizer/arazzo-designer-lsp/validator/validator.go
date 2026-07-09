@@ -291,6 +291,11 @@ func (v *Validator) validateSteps(workflow *parser.Workflow, doc *parser.ArazzoD
 			})
 		}
 
+		// TODO(phase8/9): flag an operationId/action MISMATCH (step 'action' contradicts the referenced
+		// AsyncAPI operation's action). Deferred here because it needs cross-source resolution (loading
+		// the AsyncAPI doc + finding the operation), which this validator doesn't do yet. The CLI
+		// resolver (AsyncFinder.ActionMismatch) already detects it; runtime enforces (doc wins + warn).
+
 		// Validate channelPath format and source description type (spec §5.8.5)
 		if step.ChannelPath != "" {
 			parts := strings.SplitN(step.ChannelPath, "#", 2)

@@ -904,6 +904,8 @@ func resolveValue(expr string, state *models.ExecutionState, sourceDescs map[str
 }
 
 // compareValues compares two values with the given operator.
+// TODO(phase5): string comparison is case-sensitive; add case-insensitive comparison where the spec
+// requires it (deferred — no clear spec requirement was located). See asyncapi_plan.md Phase 5.
 func compareValues(left, right interface{}, op string) bool {
 	// Normalize numeric types for comparison
 	leftNum, leftIsNum := toFloat64(left)

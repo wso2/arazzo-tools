@@ -71,6 +71,8 @@ func EvaluateSelectorObject(sel map[string]interface{}, state *models.ExecutionS
 	case "jsonpath":
 		return EvaluateJSONPathValue(data, selector)
 	case "xpath":
+		// TODO(xpath, end-of-project batch): add the XML/XPath engine and route xpath selectors to it
+		// (shared with the Phase 6 `targetSelectorType: xpath` replacement targets). See asyncapi_plan.md.
 		return nil, fmt.Errorf("XPath selectors are not yet supported (selector %q)", selector)
 	default:
 		return nil, fmt.Errorf("unsupported selector type %q", dialect)
