@@ -693,7 +693,7 @@ func (v *Validator) validateDependsOnCycles(workflow *parser.Workflow) []Validat
 					errors = append(errors, ValidationError{
 						Line:     line[node],
 						Column:   0,
-						Message:  fmt.Sprintf("Step '%s': circular dependsOn detected (depends on '%s', which depends back on '%s')", node, next, node),
+						Message:  fmt.Sprintf("Step '%s': circular dependsOn detected (part of a dependency cycle involving '%s')", node, next),
 						Severity: "error",
 					})
 				}
@@ -759,7 +759,7 @@ func (v *Validator) validateWorkflowDependsOnCycles(doc *parser.ArazzoDocument) 
 					errors = append(errors, ValidationError{
 						Line:     line[node],
 						Column:   0,
-						Message:  fmt.Sprintf("Workflow '%s': circular dependsOn detected (depends on '%s', which depends back on '%s')", node, next, node),
+						Message:  fmt.Sprintf("Workflow '%s': circular dependsOn detected (part of a dependency cycle involving '%s')", node, next),
 						Severity: "error",
 					})
 				}
