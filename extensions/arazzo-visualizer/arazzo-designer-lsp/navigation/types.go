@@ -11,8 +11,18 @@ import (
 // OperationIndex stores the mapping of operationIds to their definitions
 type OperationIndex struct {
 	Operations map[string]*OperationInfo
+	Channels   map[string]*ChannelInfo // AsyncAPI channels, keyed by channel key (e.g. "orders")
 	Files      map[string]*OpenAPIFile
 	mutex      sync.RWMutex
+}
+
+// ChannelInfo contains information about an AsyncAPI channel definition (for navigation).
+type ChannelInfo struct {
+	Key        string // the channel's key under `channels:` (e.g. "orders")
+	Address    string // the channel `address` (broker-side name, e.g. "orders/new")
+	FileURI    string
+	FileName   string
+	LineNumber int
 }
 
 // OperationInfo contains information about an OpenAPI operation
@@ -29,13 +39,14 @@ type OperationInfo struct {
 	Tags        []string
 }
 
-// OpenAPIFile represents a parsed OpenAPI specification file
+// OpenAPIFile represents a parsed OpenAPI or AsyncAPI specification file
 type OpenAPIFile struct {
 	URI        string
 	Version    string
 	Title      string
 	Description string
 	Operations []*OperationInfo
+	Channels   []*ChannelInfo // AsyncAPI channels (empty for OpenAPI files)
 	ParsedAt   time.Time
 }
 
@@ -43,8 +54,34 @@ type OpenAPIFile struct {
 func NewOperationIndex() *OperationIndex {
 	return &OperationIndex{
 		Operations: make(map[string]*OperationInfo),
+		Channels:   make(map[string]*ChannelInfo),
 		Files:      make(map[string]*OpenAPIFile),
 	}
+}
+
+// AddChannel adds an AsyncAPI channel to the index (thread-safe, keeps the first occurrence).
+func (idx *OperationIndex) AddChannel(ch *ChannelInfo) {
+	idx.mutex.Lock()
+	defer idx.mutex.Unlock()
+	if _, exists := idx.Channels[ch.Key]; exists {
+		return
+	}
+	idx.Channels[ch.Key] = ch
+}
+
+// LookupChannel finds a channel by its key (thread-safe).
+func (idx *OperationIndex) LookupChannel(key string) (*ChannelInfo, bool) {
+	idx.mutex.RLock()
+	defer idx.mutex.RUnlock()
+	ch, found := idx.Channels[key]
+	return ch, found
+}
+
+// ChannelCount returns the number of indexed channels (thread-safe).
+func (idx *OperationIndex) ChannelCount() int {
+	idx.mutex.RLock()
+	defer idx.mutex.RUnlock()
+	return len(idx.Channels)
 }
 
 // AddOperation adds an operation to the index (thread-safe)
@@ -94,6 +131,13 @@ func (idx *OperationIndex) RemoveFile(fileURI string) {
 			delete(idx.Operations, opID)
 		}
 	}
+
+	// Remove all channels from this file
+	for key, ch := range idx.Channels {
+		if ch.FileURI == fileURI {
+			delete(idx.Channels, key)
+		}
+	}
 }
 
 // ListAll returns all operations (thread-safe)
@@ -123,6 +167,7 @@ func (idx *OperationIndex) Clear() {
 	defer idx.mutex.Unlock()
 
 	idx.Operations = make(map[string]*OperationInfo)
+	idx.Channels = make(map[string]*ChannelInfo)
 	idx.Files = make(map[string]*OpenAPIFile)
 }
 
