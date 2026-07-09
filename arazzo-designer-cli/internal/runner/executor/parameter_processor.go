@@ -250,6 +250,12 @@ func applyReplacements(payload interface{}, replacements []interface{}, state *m
 				log.Printf("Warning: replacement selector failed (target %q): %v; skipping replacement", target, err)
 				continue
 			}
+			if resolved == nil {
+				// A selector that matches nothing (e.g. a JSONPath/JSON Pointer with no hit) yields nil;
+				// don't silently inject JSON null. Mirrors the $-expression branch below.
+				log.Printf("Warning: replacement selector resolved to nil (target %q); skipping replacement", target)
+				continue
+			}
 			value = resolved
 		} else if s, ok := value.(string); ok && strings.HasPrefix(s, "$") {
 			resolved := evaluator.EvaluateExpression(s, state, sourceDescs, nil)
