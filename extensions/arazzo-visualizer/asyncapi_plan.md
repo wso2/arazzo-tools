@@ -372,23 +372,34 @@ fine; a step whose `dependsOn` prerequisite did not run → workflow fails with 
 prerequisite does not satisfy the gate; LSP flags a cycle and a missing `stepId`; a **circular WORKFLOW-level
 `dependsOn`** errors clearly instead of crashing (stack overflow).
 
-### Phase 8: AsyncAPI Model Resolution And Visualization — ❌ NOT STARTED
+### Phase 8: AsyncAPI Model Resolution — ❌ NOT STARTED
 
-Goal: understand AsyncAPI sources and show them before real broker execution.
+Goal: understand AsyncAPI sources (resolve + navigate + surface info) before real broker execution.
+**NO visual/UI changes to the graph in this phase** — node appearance, badges, icons, and edges stay
+exactly as they are (UI changes need team confirmation; they are parked in the final UI phase below).
 
 Changes:
 - Load AsyncAPI source docs from `sourceDescriptions`; index operations & channels.
 - Resolve AsyncAPI refs from `operationId`, scoped ids (`$sourceDescriptions.orderEvents.placeOrder`),
   and `channelPath`.
 - Navigation: keep OpenAPI op nav; add AsyncAPI operation nav and `channelPath` channel nav.
-- Visualizer ([arazzo-designer-visualizer](arazzo-designer-visualizer)):
-  - show `$self` in overview; source-type badges (OpenAPI / AsyncAPI / Arazzo).
-  - render `send`/`receive` steps distinctly.
-  - show `channelPath`/`action`/`correlationId`/`timeout`/`dependsOn` in the properties panel.
-  - draw **step-level** `dependsOn` edges (workflow-level already drawn).
+- Validation (LSP) & resolver checks (spec §5.8.5 — `action` is *optional* in the fixed-fields table,
+  but these forms are otherwise ambiguous/undefined, so we surface them):
+  - **`channelPath` present but `action` absent → ERROR.** A channel has no direction (AsyncAPI 3.x
+    puts direction only on operations), so "send or receive?" is undefined. Purely local check — no
+    cross-file resolution needed. (Runtime also errors on this in Phase 9.)
+  - **`operationId`/`action` mismatch** (step says `action: send` but the referenced AsyncAPI operation
+    is `receive`, or vice-versa): the Phase-8 resolver can *detect* it (it resolves the operation and
+    knows its action). Reporting/handling: prefer the AsyncAPI document's action and **warn** — enforced
+    at Phase 9 runtime; an LSP diagnostic is optional if/when the validator gains cross-source resolution.
+- Visualizer ([arazzo-designer-visualizer](arazzo-designer-visualizer)) — **properties panel ONLY**:
+  - when an async step (or any step) is clicked, show its async fields in the properties panel:
+    `channelPath`/`action`/`correlationId`/`timeout`/`dependsOn`.
+  - async steps otherwise render as NORMAL steps — no distinct send/receive styling, no badges,
+    no new edges.
 
 Tests: AsyncAPI source loads; op/channel indexed; `channelPath` navigation resolves; async
-metadata shown; dependency edges render without breaking success/failure/goto edges.
+metadata shown in the properties panel; graph rendering otherwise unchanged.
 
 ### Phase 9: AsyncAPI Adapter Interface — ❌ NOT STARTED
 
@@ -405,6 +416,22 @@ Runner behavior:
 - `action: send` → resolve op/channel, evaluate params & body, serialize, `Send`, store send metadata.
 - `action: receive` → resolve op/channel, evaluate `correlationId`, `Receive`, enforce
   `timeout`, expose `$message`, evaluate `successCriteria`, extract outputs from `$message`.
+- **`channelPath` requires `action`** → without it the runner can't choose send vs receive → hard error.
+- **`operationId`/`action` mismatch** → the AsyncAPI document's operation action WINS; log a warning
+  about the contradiction (spec doesn't define a conflict rule, so we don't hard-fail on this).
+
+Blocking model & `dependsOn` (design decision to finalize here):
+- The spec frames `dependsOn` around *"non-blocking/asynchronous"* steps (§5.8.5). Two viable models:
+  (a) **blocking receive** — the receive step waits (up to `timeout`) inline; `dependsOn` stays a pure
+  gate (Phase 7). Simpler. (b) **non-blocking receive** — the step starts listening in the background,
+  the workflow proceeds, and a later step's `dependsOn` is what *waits* for completion. Pick (a) first
+  unless a real use-case needs (b).
+- When a receive step (or a `dependsOn` on a not-yet-complete async step) is waited on: wait up to
+  `timeout`; **received in time → step completes (success);** **timed out → step fails.** This is the
+  `dependsOn` "started-but-not-completed → wait-with-timeout" branch deferred from Phase 7 — it lands here.
+- Execution-status visualization (existing node red/green driven by run telemetry) then reflects it:
+  a completed async step shows success, a timed-out one shows failure. (No new node *styling* — that's
+  Phase 13; this is just the existing pass/fail status coloring.)
 
 Initial adapters: in-memory/test adapter; clear error when a real broker adapter is required
 but unconfigured: `AsyncAPI execution requires a configured adapter for this protocol`.
@@ -459,6 +486,22 @@ Changes:
 Tests: CLI still lists/runs old workflows; CLI reports async adapter errors clearly; MCP output
 stable for old workflows; new examples parse and validate.
 
+### Phase 13 (FINAL): Visualizer UI Enhancements — ❌ NOT STARTED (⚠️ needs TEAM CONFIRMATION first)
+
+Goal: the graph-appearance changes deliberately pulled OUT of Phase 8. Do these LAST, and only after
+the UI direction is confirmed with the team — until then, async steps render as normal steps.
+
+Changes (all visual):
+- Source-type badges (OpenAPI / AsyncAPI / Arazzo) and `$self` in the overview.
+- Render `send`/`receive` steps distinctly (icons/styling direction TBD with the team).
+- Draw **step-level** `dependsOn` edges (workflow-level `dependsOn` edges: also confirm — none exist
+  today). Must not break existing success/failure/goto edges. Note: no reordering exists at runtime
+  (Phase 7 gate), so the execution highlight stays sequential and needs no change; a step blocked by
+  its `dependsOn` gate could show an error/blocked state.
+
+Tests: dependency edges render without breaking success/failure/goto edges; old workflows render
+unchanged; badges/styling match the confirmed design.
+
 ---
 
 ## Final Acceptance Criteria
@@ -489,7 +532,8 @@ The model/LSP work (Phases 1–2) is done, so an implementing AI should start at
 proceed 3 → 12. Phases 4 and 5 share the selector/expression service and are best done together;
 Phase 6 depends on Phase 4; Phase 7 is independent and can be parallelized with 4–6; Phases
 8–11 form the AsyncAPI runtime track and depend on 3 (resolution) + 4–5 (evaluation) + 9
-(adapter) before 10–11. Phase 12 closes out docs/samples last.
+(adapter) before 10–11. Phase 12 closes out docs/samples; Phase 13 (visualizer UI, needs team
+confirmation) is the very last.
 
 ## Known Issues / Bugs (separate from the v1.1.0 phases — fix independently)
 
