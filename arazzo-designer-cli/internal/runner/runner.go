@@ -567,13 +567,22 @@ func (r *ArazzoRunner) checkStepDependencies(step map[string]interface{}, state 
 	return nil
 }
 
-// parseWorkflowsRefID extracts <workflowId> from a "$workflows.<workflowId>.steps.<stepId>" reference.
+// parseWorkflowsRefID extracts <workflowId> from a "$workflows.<workflowId>.steps.<stepId>"
+// reference. It returns "" for anything that isn't that full form (no ".steps." separator, or an
+// empty workflowId/stepId), so a malformed reference is rejected by the caller rather than silently
+// satisfying the dependsOn gate.
 func parseWorkflowsRefID(ref string) string {
 	rest := strings.TrimPrefix(ref, "$workflows.")
-	if dot := strings.Index(rest, "."); dot >= 0 {
-		return rest[:dot]
+	stepsIdx := strings.Index(rest, ".steps.")
+	if stepsIdx <= 0 {
+		return ""
 	}
-	return ""
+	wfID := rest[:stepsIdx]
+	stepID := rest[stepsIdx+len(".steps."):]
+	if wfID == "" || stepID == "" {
+		return ""
+	}
+	return wfID
 }
 
 // buildSourceDescriptionObjects indexes the raw sourceDescriptions list by name, so the evaluator
