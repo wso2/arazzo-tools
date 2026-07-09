@@ -24,6 +24,13 @@ func TestCheckStepDependencies(t *testing.T) {
 	state.StepsStatus["okStep"] = models.StepStatusSuccess
 	state.StepsStatus["failedStep"] = models.StepStatusFailure
 	state.DependencyOutputs["ranWorkflow"] = map[string]interface{}{"x": 1}
+	// ranWorkflow ran as a dependency: step "s" succeeded, step "skipped" failed, and step
+	// "neverRan" is absent (e.g. jumped over by a goto). The cross-workflow gate must check the
+	// SPECIFIC referenced step, not just that the workflow ran.
+	state.DependencyStepStatus["ranWorkflow"] = map[string]models.StepStatus{
+		"s":       models.StepStatusSuccess,
+		"skipped": models.StepStatusFailure,
+	}
 
 	cases := []struct {
 		name    string
@@ -35,8 +42,11 @@ func TestCheckStepDependencies(t *testing.T) {
 		{"unmet local dep (never ran)", stepWithDeps("B", "laterStep"), true},
 		{"failed prerequisite does not satisfy", stepWithDeps("B", "failedStep"), true},
 		{"multiple deps, one unmet", stepWithDeps("B", "okStep", "laterStep"), true},
-		{"cross-workflow to completed workflow", stepWithDeps("B", "$workflows.ranWorkflow.steps.s"), false},
+		{"cross-workflow step that succeeded", stepWithDeps("B", "$workflows.ranWorkflow.steps.s"), false},
+		{"cross-workflow step that was skipped/failed", stepWithDeps("B", "$workflows.ranWorkflow.steps.skipped"), true},
+		{"cross-workflow step that never ran", stepWithDeps("B", "$workflows.ranWorkflow.steps.neverRan"), true},
 		{"cross-workflow to workflow that didn't run", stepWithDeps("B", "$workflows.nope.steps.s"), true},
+		{"malformed cross-workflow ref (no .steps.)", stepWithDeps("B", "$workflows.ranWorkflow.s"), true},
 		{"cross-document unsupported", stepWithDeps("B", "$sourceDescriptions.ext.wf.steps.s"), true},
 	}
 	for _, tc := range cases {
