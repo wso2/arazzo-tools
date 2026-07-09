@@ -279,6 +279,18 @@ func (v *Validator) validateSteps(workflow *parser.Workflow, doc *parser.ArazzoD
 			})
 		}
 
+		// A 'channelPath' step needs an 'action': a channel has no direction (AsyncAPI 3.x puts
+		// direction on operations), so without 'action' the send/receive intent is undefined and the
+		// runtime cannot proceed.
+		if step.ChannelPath != "" && step.Action == "" {
+			errors = append(errors, ValidationError{
+				Line:     step.LineNumber,
+				Column:   0,
+				Message:  fmt.Sprintf("Step '%s': a 'channelPath' step must also specify 'action' ('send' or 'receive') — the message-flow direction is otherwise undefined", step.StepID),
+				Severity: "error",
+			})
+		}
+
 		// Validate channelPath format and source description type (spec §5.8.5)
 		if step.ChannelPath != "" {
 			parts := strings.SplitN(step.ChannelPath, "#", 2)

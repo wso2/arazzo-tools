@@ -163,6 +163,20 @@ func TestActionEnumAndChannel(t *testing.T) {
 	}
 }
 
+func TestChannelPathRequiresAction(t *testing.T) {
+	bus := "  - name: bus\n    url: ./bus.yaml\n    type: asyncapi\n"
+	// channelPath present but no action -> error (direction undefined)
+	errs := diagnose(t, docWith(bus, "      - stepId: s1\n        channelPath: bus#/channels/c\n"))
+	if !has(errs, "error", "must also specify 'action'") {
+		t.Errorf("expected channelPath-without-action error, got:%s", dump(errs))
+	}
+	// channelPath WITH action -> no such error
+	errs = diagnose(t, docWith(bus, "      - stepId: s1\n        channelPath: bus#/channels/c\n        action: send\n"))
+	if has(errs, "error", "must also specify 'action'") {
+		t.Errorf("channelPath with action should not trigger the error, got:%s", dump(errs))
+	}
+}
+
 func TestTimeout(t *testing.T) {
 	errs := diagnose(t, docWith("", "      - stepId: s1\n        operationId: op\n        timeout: -5\n"))
 	if !has(errs, "error", "'timeout' must be a non-negative integer") {
