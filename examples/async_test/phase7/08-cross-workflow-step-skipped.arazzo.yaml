@@ -1,0 +1,57 @@
+# Phase 7 — Scenario 8: CROSS-WORKFLOW step dependsOn where the WORKFLOW ran but the STEP did NOT
+# → FAILS. This is the case the workflow-only gate used to miss.
+#
+# `provider` runs, but its first step `entry` does an onSuccess `goto` straight to `tail`, jumping
+# OVER `skippedStep`. So `provider` completes successfully, yet `skippedStep` never executed.
+# `consumer` depends specifically on `$workflows.provider.steps.skippedStep`. Checking only "did
+# provider run?" would wrongly pass; checking the SPECIFIC step's status correctly fails, because
+# `skippedStep` never reached success.
+#
+# EXPECTED: run **consumer** → provider runs (entry → goto tail, skippedStep skipped) → consumer's
+# `consume` step is BLOCKED by its dependsOn gate → the workflow ends in ERROR with a message like:
+#   step 'consume' dependsOn '$workflows.provider.steps.skippedStep', but step 'skippedStep' in
+#   workflow 'provider' did not complete successfully
+#
+# Runs against the live Toolshop API (needs internet). No inputs needed.
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 7 - cross-workflow step dependsOn (step skipped by goto)"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: provider
+    steps:
+      - stepId: entry
+        operationId: getBrands
+        successCriteria:
+          - condition: "$statusCode == 200"
+        onSuccess:
+          - name: jumpPastSkipped
+            type: goto
+            stepId: tail                          # jump straight to tail, skipping `skippedStep`
+      - stepId: skippedStep                       # NEVER executes (jumped over) — no success status
+        operationId: getProducts
+        successCriteria:
+          - condition: "$statusCode == 200"
+      - stepId: tail
+        operationId: getProducts
+        successCriteria:
+          - condition: "$statusCode == 200"
+
+  - workflowId: consumer
+    dependsOn:
+      - provider                                  # workflow-level: run provider first
+    steps:
+      - stepId: consume
+        operationId: getProducts
+        dependsOn:
+          - "$workflows.provider.steps.skippedStep"   # provider ran, but this step was skipped → FAILS
+        successCriteria:
+          - condition: "$statusCode == 200"

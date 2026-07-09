@@ -1,0 +1,46 @@
+# Phase 7 — Scenario 7: CROSS-WORKFLOW step dependsOn on a SPECIFIC step that RAN → PASSES.
+#
+# This shows the step-level granularity of the gate. `provider` has TWO steps; `consumer` depends
+# specifically on the second one (`secondProvide`) via `$workflows.provider.steps.secondProvide`.
+# Because `consumer` runs `provider` first (workflow-level dependsOn) and `secondProvide` actually
+# executed and succeeded, the gate is satisfied — the runner checks that THIS step reached success,
+# not merely that `provider` ran.
+#
+# EXPECTED: run **consumer** → provider runs both steps → consumer's `consume` step passes its
+# cross-workflow gate and runs → the workflow completes.
+#
+# Runs against the live Toolshop API (needs internet). No inputs needed.
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 7 - cross-workflow step dependsOn (specific step ran)"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: provider
+    steps:
+      - stepId: firstProvide
+        operationId: getBrands
+        successCriteria:
+          - condition: "$statusCode == 200"
+      - stepId: secondProvide                     # the SPECIFIC step the consumer waits on
+        operationId: getProducts
+        successCriteria:
+          - condition: "$statusCode == 200"
+
+  - workflowId: consumer
+    dependsOn:
+      - provider                                  # workflow-level: run provider first
+    steps:
+      - stepId: consume
+        operationId: getProducts
+        dependsOn:
+          - "$workflows.provider.steps.secondProvide"   # specific step ran & succeeded → SATISFIED
+        successCriteria:
+          - condition: "$statusCode == 200"
