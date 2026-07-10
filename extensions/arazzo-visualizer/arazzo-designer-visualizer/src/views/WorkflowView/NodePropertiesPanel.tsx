@@ -884,10 +884,18 @@ export function NodePropertiesPanel({ node, workflow, definition, traceSpans, fo
 
     const sections: JSX.Element[] = [];
 
-    // General Section (stepId, description)
+    // Step kind — AsyncAPI (channelPath) vs OpenAPI (operationId/operationPath) vs a nested Workflow.
+    const stepKind =
+        stepData.channelPath ? 'AsyncAPI'
+            : (stepData.operationId || stepData.operationPath) ? 'OpenAPI'
+                : stepData.workflowId ? 'Workflow'
+                    : undefined;
+
+    // General Section (stepId, step type, description)
     if (stepData.stepId || stepData.description) {
         const fields: Array<{ label: string; value: string }> = [];
         if (stepData.stepId) fields.push({ label: 'Step ID', value: String(stepData.stepId) });
+        if (stepKind) fields.push({ label: 'Step Type', value: stepKind });
         if (stepData.description) fields.push({ label: 'Description', value: String(stepData.description) });
         sections.push(renderMarkdownSection('General', fields, 'general'));
     }
@@ -899,6 +907,34 @@ export function NodePropertiesPanel({ node, workflow, definition, traceSpans, fo
         if (stepData.operationPath) fields.push({ label: 'Operation Path', value: String(stepData.operationPath) });
         if (stepData.workflowId) fields.push({ label: 'Workflow ID', value: String(stepData.workflowId) });
         sections.push(renderMarkdownSection('Operation Details', fields, 'operation'));
+    }
+
+    // AsyncAPI Details (v1.1.0) — channelPath / action / correlationId / timeout.
+    if (stepData.channelPath || stepData.action || stepData.correlationId ||
+        (stepData.timeout !== undefined && stepData.timeout !== null)) {
+        const fields: Array<{ label: string; value: string }> = [];
+        if (stepData.channelPath) fields.push({ label: 'Channel Path', value: String(stepData.channelPath) });
+        if (stepData.action) fields.push({ label: 'Action', value: String(stepData.action) });
+        if (stepData.correlationId) fields.push({ label: 'Correlation ID', value: String(stepData.correlationId) });
+        if (stepData.timeout !== undefined && stepData.timeout !== null) {
+            fields.push({ label: 'Timeout (ms)', value: String(stepData.timeout) });
+        }
+        if (fields.length > 0) sections.push(renderMarkdownSection('AsyncAPI', fields, 'asyncapi'));
+    }
+
+    // Depends On (v1.1.0 step-level dependencies) — stepIds / cross-workflow references.
+    if (Array.isArray(stepData.dependsOn) && stepData.dependsOn.length > 0) {
+        sections.push(
+            renderSimpleSection(
+                'Depends On',
+                <>
+                    {stepData.dependsOn.map((dep: any, i: number) => (
+                        <FieldValue key={i} style={{ marginBottom: 4 }}>{String(dep)}</FieldValue>
+                    ))}
+                </>,
+                'dependsOn'
+            )
+        );
     }
 
     // Parameters (array)
