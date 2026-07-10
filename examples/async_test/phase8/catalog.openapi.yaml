@@ -1,0 +1,15 @@
+openapi: 3.0.3
+info:
+  title: Catalog API
+  version: 1.0.0
+# Minimal OpenAPI source, only here so one step can be a REST/OpenAPI step — this lets the
+# properties panel show "Step Type: OpenAPI" next to the AsyncAPI steps for contrast.
+servers:
+  - url: https://api.practicesoftwaretesting.com
+paths:
+  /products:
+    get:
+      operationId: getProducts
+      responses:
+        '200':
+          description: OK

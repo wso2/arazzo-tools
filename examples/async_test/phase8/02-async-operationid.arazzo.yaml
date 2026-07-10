@@ -1,0 +1,40 @@
+# Phase 8 — Scenario 2: resolve AsyncAPI OPERATIONS by operationId (Part 1 resolver + Part 2 nav).
+#
+# An async step can be referenced by operationId instead of channelPath — bare, or scoped to a
+# source. The resolver (asyncapi_finder.go: FindOperationByID) finds the operation, reads its
+# `action` from the AsyncAPI doc, and follows its channel `$ref`:
+#   - place   -> bare "placeOrder"                               -> action send,   channel orders
+#   - confirm -> "$sourceDescriptions.orderEvents.onOrderConfirmed" (scoped) -> action receive, channel confirmations
+#
+# Because the OPERATION carries the direction, the STEP does not repeat `action` here — that keeps
+# the LSP clean (its `action`/`correlationId` warnings are tied to channelPath steps).
+#
+# Navigation (Part 2): Ctrl/Cmd-click an operationId to jump to that operation in the AsyncAPI file.
+# Resolver coverage is proven by the Go unit tests (asyncapi_finder_test.go); nothing executes this
+# at runtime yet (Phase 9).
+#
+# Panel note: the properties panel infers "Step Type" from the step's fields, so an async operation
+# referenced by operationId shows as "OpenAPI" (distinguishing it needs source-type resolution — a
+# later enhancement). Use channelPath (Scenario 1) to see "AsyncAPI" in the panel.
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 8 - async operationId resolution"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: orderEvents
+    url: ./order-events.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: byOperationId
+    steps:
+      - stepId: place
+        operationId: placeOrder                                      # bare -> found in orderEvents
+
+      - stepId: confirm
+        operationId: $sourceDescriptions.orderEvents.onOrderConfirmed # scoped to the source
+        dependsOn:
+          - place
