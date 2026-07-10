@@ -314,7 +314,17 @@ Status:
   (JSON default — JSON Pointer — is already in place.)
 - Optional: LSP validation of `targetSelectorType` as an Expression Type Object (version required + valid per type).
 
-### Phase 7: Step Dependencies (`dependsOn`) — ❌ NOT STARTED
+### Phase 7: Step Dependencies (`dependsOn`) — ✅ DONE
+
+**Implemented (matches the design below):**
+- **Runtime step gate** ([runner.go](arazzo-designer-cli/internal/runner/runner.go) `checkStepDependencies`) — checked before each step; no reordering, no triggering; hard error on an unmet prerequisite (spec §5.8.5.1). Reference forms: local `stepId`; `$workflows.<wf>.steps.<s>`; `$sourceDescriptions.<name>.<wf>.steps.<s>` (form-validated, execution deferred).
+- **Cross-workflow step granularity** — the gate verifies the **specific** referenced step reached success (not just that the workflow ran). The runner now surfaces each dependency workflow's per-step status (`WorkflowExecutionResult.StepsStatus` → `ExecutionState.DependencyStepStatus`), so a step skipped via `goto` in a dependency correctly fails the gate.
+- **Workflow-level `dependsOn` cycle guard** ([runner.go](arazzo-designer-cli/internal/runner/runner.go) `executeDependencies` `depStack`) — a circular workflow dep now errors clearly instead of stack-overflowing (trigger behavior kept).
+- **LSP static validation** ([validator.go](arazzo-designer-lsp/validator/validator.go)) — `dependsOn` reference forms + existence + self-reference, plus **cycle detection** for both **step-level** (`validateDependsOnCycles`) and **workflow-level** (`validateWorkflowDependsOnCycles`) `dependsOn`.
+- **Examples**: [examples/async_test/phase7/](examples/async_test/phase7) 01–08 (gate satisfied/unmet, workflow dep, step & workflow cycles, cross-workflow dep, cross-workflow specific-step-ran vs step-skipped-by-goto). Unit tests: `runner_phase7_test.go`, `validator_test.go`.
+- **Deferred (unchanged):** async wait-with-timeout (Phases 8–11); cross-**document** `dependsOn` execution (end-of-project batch); the **visualization** of `dependsOn` edges / blocked-step state (Phase 13, needs team sign-off).
+
+<details><summary>Original design (as implemented) — kept for reference</summary>
 
 **Runner currently ignores `Step.DependsOn`** (parsed into the model at `models/arazzo.go`, never read by the
 execution loop) and runs steps in document order + control flow.
@@ -371,6 +381,8 @@ Tests: existing OpenAPI examples run unchanged; a step whose local `dependsOn` p
 fine; a step whose `dependsOn` prerequisite did not run → workflow fails with a clear message; a failed
 prerequisite does not satisfy the gate; LSP flags a cycle and a missing `stepId`; a **circular WORKFLOW-level
 `dependsOn`** errors clearly instead of crashing (stack overflow).
+
+</details>
 
 ### Phase 8: AsyncAPI Model Resolution — ❌ NOT STARTED
 
