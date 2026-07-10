@@ -384,34 +384,21 @@ prerequisite does not satisfy the gate; LSP flags a cycle and a missing `stepId`
 
 </details>
 
-### Phase 8: AsyncAPI Model Resolution — ❌ NOT STARTED
+### Phase 8: AsyncAPI Model Resolution — 🟡 IN PROGRESS (Parts 1 & 2 done; Part 3 remaining)
 
 Goal: understand AsyncAPI sources (resolve + navigate + surface info) before real broker execution.
 **NO visual/UI changes to the graph in this phase** — node appearance, badges, icons, and edges stay
 exactly as they are (UI changes need team confirmation; they are parked in the final UI phase below).
 
-Changes:
-- Load AsyncAPI source docs from `sourceDescriptions`; index operations & channels.
-- Resolve AsyncAPI refs from `operationId`, scoped ids (`$sourceDescriptions.orderEvents.placeOrder`),
-  and `channelPath`.
-- Navigation: keep OpenAPI op nav; add AsyncAPI operation nav and `channelPath` channel nav.
-- Validation (LSP) & resolver checks (spec §5.8.5 — `action` is *optional* in the fixed-fields table,
-  but these forms are otherwise ambiguous/undefined, so we surface them):
-  - **`channelPath` present but `action` absent → ERROR.** A channel has no direction (AsyncAPI 3.x
-    puts direction only on operations), so "send or receive?" is undefined. Purely local check — no
-    cross-file resolution needed. (Runtime also errors on this in Phase 9.)
-  - **`operationId`/`action` mismatch** (step says `action: send` but the referenced AsyncAPI operation
-    is `receive`, or vice-versa): the Phase-8 resolver can *detect* it (it resolves the operation and
-    knows its action). Reporting/handling: prefer the AsyncAPI document's action and **warn** — enforced
-    at Phase 9 runtime; an LSP diagnostic is optional if/when the validator gains cross-source resolution.
-- Visualizer ([arazzo-designer-visualizer](arazzo-designer-visualizer)) — **properties panel ONLY**:
-  - when an async step (or any step) is clicked, show its async fields in the properties panel:
-    `channelPath`/`action`/`correlationId`/`timeout`/`dependsOn`.
-  - async steps otherwise render as NORMAL steps — no distinct send/receive styling, no badges,
-    no new edges.
+**Status by part:**
+- **Part 1 — CLI resolver ✅ DONE.** [asyncapi_finder.go](arazzo-designer-cli/internal/runner/executor/asyncapi_finder.go) (+ `asyncapi_finder_test.go`): `FindChannelByPath` (`source#/channels/x` via JSON Pointer), `FindOperationByID` (bare + scoped `$sourceDescriptions.<name>.<op>`, follows the operation's channel `$ref`), `ActionMismatch` detection. It **resolves/identifies** async targets only — it is **not** wired into step execution (no `Send`/`Receive`); that is Phase 9 (marked with a `TODO(phase9)` in the file).
+- **Part 2 — LSP indexing + navigation + validation ✅ DONE.**
+  - Indexing: [parser.go](arazzo-designer-lsp/navigation/parser.go) / [types.go](arazzo-designer-lsp/navigation/types.go) index AsyncAPI channels + operations (`extractChannels`, `ChannelInfo`, `AddChannel`/`LookupChannel`).
+  - Navigation: [definition.go](arazzo-designer-lsp/server/definition.go) + [position_utils.go](arazzo-designer-lsp/server/position_utils.go) — go-to-definition for `channelPath` (`extractChannelKeyAtPosition` → channel location) and AsyncAPI operations; OpenAPI op nav unchanged.
+  - Validation: [validator.go](arazzo-designer-lsp/validator/validator.go) — **`channelPath` present but `action` absent → ERROR** (direction undefined), plus channelPath format + source-type (`asyncapi`) checks. The **`operationId`/`action` mismatch** LSP diagnostic is deferred (needs cross-source resolution in the validator; enforcement rides with Phase 9 — prefer the AsyncAPI document's action and warn).
+- **Part 3 — Visualizer properties panel ❌ REMAINING.** [NodePropertiesPanel.tsx](arazzo-designer-visualizer/src/views/WorkflowView/NodePropertiesPanel.tsx) currently renders General / Operation Details / Parameters / Request Body / Success Criteria / On Success / On Failure / Outputs — but **none** of `channelPath` / `action` / `correlationId` / `timeout` / `dependsOn` (the visualizer `src` has zero references to those fields). TODO: add an async-fields section to the panel — **properties panel ONLY**, async steps otherwise render as NORMAL steps (no distinct send/receive styling, no badges, no new edges). First check whether those fields already reach the panel's `nodeData` (it spreads `...stepData`) or need plumbing from the parsed step into the node model.
 
-Tests: AsyncAPI source loads; op/channel indexed; `channelPath` navigation resolves; async
-metadata shown in the properties panel; graph rendering otherwise unchanged.
+Tests: AsyncAPI source loads ✅; op/channel indexed ✅; `channelPath` navigation resolves ✅; channelPath-without-action errors ✅; **async metadata shown in the properties panel ❌ (Part 3)**; graph rendering otherwise unchanged.
 
 ### Phase 9: AsyncAPI Adapter Interface — ❌ NOT STARTED
 
