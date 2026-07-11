@@ -55,9 +55,13 @@ no `run` for these. It is proven two ways:
 ## Notes / current limitations
 - **Nothing here executes.** Async send/receive is Phase 9; these files exercise the LSP + visualizer
   + resolver only. (`01`'s single OpenAPI step would call a live API if run, but that's not the point.)
-- **Step Type is inferred from a step's fields** (`channelPath` ⇒ AsyncAPI, `operationId`/`operationPath`
-  ⇒ OpenAPI, `workflowId` ⇒ Workflow). An async operation referenced by `operationId` (as in `02`)
-  therefore shows as **OpenAPI** in the panel — precise classification needs source-type resolution
-  (a later enhancement). Use `channelPath` (as in `01`) to see **AsyncAPI**.
+- **Step Type** is classified as: `channelPath` or `action` ⇒ **AsyncAPI**; `workflowId` ⇒ **Workflow**;
+  a **scoped** `operationId` (`$sourceDescriptions.<name>.*`) ⇒ that source's declared type; a **bare**
+  `operationId` ⇒ resolved when the document declares exactly one typed source, else **OpenAPI**. So
+  `02`'s operationId steps correctly show **AsyncAPI** (single asyncapi source), and `01`'s
+  `getProducts` shows **OpenAPI**.
+- **Navigation is scoped to the document's `sourceDescriptions`** — an `operationId`/`channelPath`
+  resolves only inside the files this Arazzo doc declares, never into an unrelated spec elsewhere in
+  the workspace.
 - The LSP's `action`/`correlationId` warnings are tied to `channelPath` steps; that's why `02`'s
   operationId steps omit `action` (the operation itself carries the direction, which the resolver reads).

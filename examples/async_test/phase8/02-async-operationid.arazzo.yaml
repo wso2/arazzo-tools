@@ -13,9 +13,9 @@
 # Resolver coverage is proven by the Go unit tests (asyncapi_finder_test.go); nothing executes this
 # at runtime yet (Phase 9).
 #
-# Panel note: the properties panel infers "Step Type" from the step's fields, so an async operation
-# referenced by operationId shows as "OpenAPI" (distinguishing it needs source-type resolution — a
-# later enhancement). Use channelPath (Scenario 1) to see "AsyncAPI" in the panel.
+# Panel note: the properties panel classifies "Step Type" using the declared source type. The scoped
+# operationId ($sourceDescriptions.orderEvents.*) resolves to orderEvents' type; the bare operationId
+# resolves because this document declares exactly one typed source. So BOTH steps show "AsyncAPI".
 
 arazzo: 1.1.0
 
