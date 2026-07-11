@@ -884,12 +884,35 @@ export function NodePropertiesPanel({ node, workflow, definition, traceSpans, fo
 
     const sections: JSX.Element[] = [];
 
-    // Step kind — AsyncAPI (channelPath) vs OpenAPI (operationId/operationPath) vs a nested Workflow.
-    const stepKind =
-        stepData.channelPath ? 'AsyncAPI'
-            : (stepData.operationId || stepData.operationPath) ? 'OpenAPI'
-                : stepData.workflowId ? 'Workflow'
-                    : undefined;
+    // Step kind — classify the step's target:
+    //  - channelPath OR action -> AsyncAPI (action only applies to async steps)
+    //  - workflowId            -> Workflow (nested)
+    //  - operationId scoped "$sourceDescriptions.<name>.*" -> that source's declared type
+    //  - operationId (bare): if the document declares exactly one typed source, use it; else OpenAPI
+    //  - operationPath         -> OpenAPI
+    const sourceDescriptions = definition?.sourceDescriptions ?? [];
+    const mapSourceType = (t?: string): string | undefined =>
+        t === 'asyncapi' ? 'AsyncAPI' : t === 'openapi' ? 'OpenAPI' : t === 'arazzo' ? 'Arazzo' : undefined;
+    const sourceTypeByName = (name: string): string | undefined =>
+        mapSourceType(sourceDescriptions.find(sd => sd.name === name)?.type);
+
+    let stepKind: string | undefined;
+    if (stepData.channelPath || stepData.action) {
+        stepKind = 'AsyncAPI';
+    } else if (stepData.workflowId) {
+        stepKind = 'Workflow';
+    } else if (stepData.operationId) {
+        const opId = String(stepData.operationId);
+        if (opId.startsWith('$sourceDescriptions.')) {
+            const name = opId.slice('$sourceDescriptions.'.length).split('.')[0];
+            stepKind = sourceTypeByName(name) ?? 'OpenAPI';
+        } else {
+            const typed = sourceDescriptions.filter(sd => sd.type);
+            stepKind = (typed.length === 1 ? mapSourceType(typed[0].type) : undefined) ?? 'OpenAPI';
+        }
+    } else if (stepData.operationPath) {
+        stepKind = 'OpenAPI';
+    }
 
     // General Section (stepId, step type, description)
     if (stepData.stepId || stepData.description) {
