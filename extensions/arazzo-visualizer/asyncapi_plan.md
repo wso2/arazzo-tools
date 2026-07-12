@@ -384,7 +384,7 @@ prerequisite does not satisfy the gate; LSP flags a cycle and a missing `stepId`
 
 </details>
 
-### Phase 8: AsyncAPI Model Resolution — 🟡 IN PROGRESS (Parts 1 & 2 done; Part 3 remaining)
+### Phase 8: AsyncAPI Model Resolution — ✅ DONE
 
 Goal: understand AsyncAPI sources (resolve + navigate + surface info) before real broker execution.
 **NO visual/UI changes to the graph in this phase** — node appearance, badges, icons, and edges stay
@@ -394,11 +394,17 @@ exactly as they are (UI changes need team confirmation; they are parked in the f
 - **Part 1 — CLI resolver ✅ DONE.** [asyncapi_finder.go](arazzo-designer-cli/internal/runner/executor/asyncapi_finder.go) (+ `asyncapi_finder_test.go`): `FindChannelByPath` (`source#/channels/x` via JSON Pointer), `FindOperationByID` (bare + scoped `$sourceDescriptions.<name>.<op>`, follows the operation's channel `$ref`), `ActionMismatch` detection. It **resolves/identifies** async targets only — it is **not** wired into step execution (no `Send`/`Receive`); that is Phase 9 (marked with a `TODO(phase9)` in the file).
 - **Part 2 — LSP indexing + navigation + validation ✅ DONE.**
   - Indexing: [parser.go](arazzo-designer-lsp/navigation/parser.go) / [types.go](arazzo-designer-lsp/navigation/types.go) index AsyncAPI channels + operations (`extractChannels`, `ChannelInfo`, `AddChannel`/`LookupChannel`).
-  - Navigation: [definition.go](arazzo-designer-lsp/server/definition.go) + [position_utils.go](arazzo-designer-lsp/server/position_utils.go) — go-to-definition for `channelPath` (`extractChannelKeyAtPosition` → channel location) and AsyncAPI operations; OpenAPI op nav unchanged.
+  - Navigation: [definition.go](arazzo-designer-lsp/server/definition.go) + [position_utils.go](arazzo-designer-lsp/server/position_utils.go) — go-to-definition for `channelPath` (→ channel location), OpenAPI + AsyncAPI operations, and the scoped `$sourceDescriptions.<name>.<op>` form. Hardened during testing:
+    - **Scoped to the document's declared `sourceDescriptions`** (not a workspace/directory scan) — a reference resolves only inside the specs this Arazzo doc declares, never into an unrelated same-named op elsewhere. Per-file lookups (`LookupOperationInFile`/`LookupChannelInFile`) bypass the global deduped map.
+    - **On open/change, only the declared sources are parsed/indexed** ([server.go](arazzo-designer-lsp/server/server.go) `indexDeclaredSources`) — the old directory-scan path (`BuildIndex`/`DiscoverOpenAPIFiles`) is now dead (marked `// NOT USED`).
+    - **`$self`-aware source resolution** ([resolve.go](arazzo-designer-lsp/server/resolve.go)) mirrors the runner (spec §5.5), so navigation resolves relative source URLs exactly as execution does (standalone copy — no CLI-module import).
+    - **Hover uses the same scoped resolver as Go-to-Definition** (`lookupOperationInSources`), so the hover popup can't disagree with the click target.
   - Validation: [validator.go](arazzo-designer-lsp/validator/validator.go) — **`channelPath` present but `action` absent → ERROR** (direction undefined), plus channelPath format + source-type (`asyncapi`) checks. The **`operationId`/`action` mismatch** LSP diagnostic is deferred (needs cross-source resolution in the validator; enforcement rides with Phase 9 — prefer the AsyncAPI document's action and warn).
-- **Part 3 — Visualizer properties panel ❌ REMAINING.** [NodePropertiesPanel.tsx](arazzo-designer-visualizer/src/views/WorkflowView/NodePropertiesPanel.tsx) currently renders General / Operation Details / Parameters / Request Body / Success Criteria / On Success / On Failure / Outputs — but **none** of `channelPath` / `action` / `correlationId` / `timeout` / `dependsOn` (the visualizer `src` has zero references to those fields). TODO: add an async-fields section to the panel — **properties panel ONLY**, async steps otherwise render as NORMAL steps (no distinct send/receive styling, no badges, no new edges). First check whether those fields already reach the panel's `nodeData` (it spreads `...stepData`) or need plumbing from the parsed step into the node model.
+- **Part 3 — Visualizer properties panel ✅ DONE.** [NodePropertiesPanel.tsx](arazzo-designer-visualizer/src/views/WorkflowView/NodePropertiesPanel.tsx) now shows, on a clicked step: a **Step Type** field (AsyncAPI via `channelPath`/`action`; a scoped `operationId` resolves to its source's declared type; a bare `operationId` resolves when the doc declares exactly one typed source, else OpenAPI; `workflowId` → Workflow), an **AsyncAPI** section (`channelPath`/`action`/`correlationId`/`timeout`), and a **Depends On** section. The async fields already reach the panel via `...stepData` (no plumbing needed). **Properties panel ONLY** — no node/graph/badge/edge changes (those stay in Phase 13).
 
-Tests: AsyncAPI source loads ✅; op/channel indexed ✅; `channelPath` navigation resolves ✅; channelPath-without-action errors ✅; **async metadata shown in the properties panel ❌ (Part 3)**; graph rendering otherwise unchanged.
+Tests: AsyncAPI source loads ✅; op/channel indexed ✅; `channelPath` + scoped-`operationId` navigation resolves (scoped to declared sources) ✅; hover matches the click target ✅; `$self`-aware resolution matches the runner ✅; channelPath-without-action errors ✅; async metadata + Step Type shown in the properties panel ✅; graph rendering otherwise unchanged ✅. Examples: [examples/async_test/phase8/](examples/async_test/phase8) (01 panel/nav, 02 operationId, 03 validation).
+
+**Deferred out of Phase 8 (tracked):** the single-clickable-link for a whole `channelPath` value (needs a DocumentLink provider — Ctrl+click/hover already navigate correctly, the link is just segmented); removal of the dead directory-scan code.
 
 ### Phase 9: AsyncAPI Adapter Interface — ❌ NOT STARTED
 
