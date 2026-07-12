@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 
 	"github.com/arazzo/lsp/navigation"
@@ -118,8 +117,9 @@ func (s *Server) indexDeclaredSources(arazzoURI protocol.DocumentURI, content st
 }
 
 // resolveDocSources parses the Arazzo document and resolves each sourceDescription's url to an
-// absolute file URI, relative to the Arazzo file. Remote (http/https) refs are skipped — only local
-// files can be navigated to.
+// on-disk file URI. Relative URLs are resolved against the document's base URI, which is derived from
+// the optional `$self` field (spec §5.5) — the SAME rule the runner uses, so navigation and execution
+// agree. Remote (http/https) refs are skipped: navigation can only jump to a local file.
 func (s *Server) resolveDocSources(arazzoURI protocol.DocumentURI, content string) []resolvedSource {
 	doc, err := parser.NewParser().Parse(content)
 	if err != nil || doc == nil {
@@ -129,18 +129,18 @@ func (s *Server) resolveDocSources(arazzoURI protocol.DocumentURI, content strin
 	if err != nil {
 		return nil
 	}
-	dir := filepath.Dir(arazzoPath)
+	baseURI := resolveBaseURI(doc.Self, arazzoPath)
 
 	var out []resolvedSource
 	for _, sd := range doc.SourceDescriptions {
-		if sd.URL == "" || strings.HasPrefix(sd.URL, "http://") || strings.HasPrefix(sd.URL, "https://") {
+		if sd.URL == "" {
 			continue
 		}
-		p := sd.URL
-		if !filepath.IsAbs(p) {
-			p = filepath.Join(dir, p)
+		target, remote := resolveSourceLocation(baseURI, sd.URL)
+		if remote {
+			continue
 		}
-		out = append(out, resolvedSource{name: sd.Name, typ: sd.Type, fileURI: utils.PathToURI(p)})
+		out = append(out, resolvedSource{name: sd.Name, typ: sd.Type, fileURI: utils.PathToURI(target)})
 	}
 	return out
 }
