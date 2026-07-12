@@ -9,6 +9,12 @@ import (
 	"github.com/arazzo/lsp/utils"
 )
 
+// NOT USED — everything in this file is the old directory-scan discovery path (used only by the now
+// dead Indexer.BuildIndex). It was replaced by the server's indexDeclaredSources, which resolves a
+// document's declared sourceDescriptions instead of scanning nearby folders. The whole file
+// (DiscoverOpenAPIFiles, findFilesInDirectory, findFilesInSubdirectories, isSpecFile, isOpenAPIFile,
+// isAsyncAPIFile, isYAMLorJSON) can be removed together after review.
+//
 // DiscoverOpenAPIFiles finds OpenAPI specification files near the Arazzo file
 // Phase 2: Searches same directory, subdirectories, and parent directory
 func DiscoverOpenAPIFiles(arazzoFileURI string) ([]string, error) {

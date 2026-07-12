@@ -32,6 +32,10 @@ func NewIndexerWithCache(index *OperationIndex, cacheTTL time.Duration) *Indexer
 	}
 }
 
+// NOT USED — the directory-scan indexing path. Superseded by the server's indexDeclaredSources,
+// which indexes ONLY the sources a document declares (relative to the Arazzo file) instead of
+// scanning the surrounding folders. Kept temporarily; safe to remove after review.
+//
 // BuildIndex discovers and indexes OpenAPI files for the given Arazzo file
 func (idx *Indexer) BuildIndex(arazzoFileURI string) error {
 	utils.LogInfo("Building operation index for: %s", arazzoFileURI)
