@@ -102,6 +102,43 @@ func extractChannelKeyAtPosition(content string, position protocol.Position) str
 	return pointer
 }
 
+// extractChannelPathAtPosition returns the FULL `channelPath:` value at the cursor, e.g.
+// "orderBus#/channels/orders" (source ref + JSON pointer, unquoted). Returns "" if the line isn't a
+// channelPath value. Unlike extractChannelKeyAtPosition it keeps the source-name part, which the
+// definition provider needs to scope the lookup to the right source description.
+func extractChannelPathAtPosition(content string, position protocol.Position) string {
+	lines := strings.Split(content, "\n")
+	if int(position.Line) >= len(lines) {
+		return ""
+	}
+	line := lines[position.Line]
+	if !strings.Contains(line, "channelPath") {
+		return ""
+	}
+
+	parts := strings.SplitN(line, "channelPath:", 2)
+	if len(parts) < 2 {
+		parts = strings.SplitN(line, `"channelPath"`, 2)
+		if len(parts) < 2 {
+			return ""
+		}
+		afterColon := strings.SplitN(parts[1], ":", 2)
+		if len(afterColon) < 2 {
+			return ""
+		}
+		parts[1] = afterColon[1]
+	}
+
+	value := strings.TrimSpace(parts[1])
+	value = strings.Trim(value, `"'`)
+	// strip a trailing inline comment, if any
+	if idx := strings.Index(value, " #"); idx != -1 {
+		// note: a real channelPath uses '#' with no leading space; " #" starts a comment
+		value = value[:idx]
+	}
+	return strings.TrimSpace(value)
+}
+
 // isOperationIdField checks if the cursor position is on an operationId field
 func isOperationIdField(content string, position protocol.Position) bool {
 	lines := strings.Split(content, "\n")
