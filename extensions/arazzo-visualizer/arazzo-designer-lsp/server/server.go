@@ -127,16 +127,13 @@ func (s *Server) DidOpen(ctx context.Context, params *protocol.DidOpenTextDocume
 	// Store document content
 	s.documents[uri] = content
 
-	// Build operation index for Arazzo files (async, don't block)
+	// Index ONLY the source descriptions this Arazzo document declares (async, don't block) — the
+	// document resolves its own sources rather than scanning the surrounding directory.
 	go func() {
 		if s.isArazzoFile(string(uri)) {
-			utils.LogInfo("Building operation index for Arazzo file...")
-			err := s.indexer.BuildIndex(string(uri))
-			if err != nil {
-				utils.LogError("Failed to build operation index: %v", err)
-			} else {
-				utils.LogInfo("Operation index built successfully with %d operations", s.operationIndex.Count())
-			}
+			utils.LogInfo("Indexing declared sources for Arazzo file...")
+			s.indexDeclaredSources(uri, content)
+			utils.LogInfo("Declared-source index ready (%d operations, %d channels)", s.operationIndex.Count(), s.operationIndex.ChannelCount())
 		}
 	}()
 
@@ -180,6 +177,12 @@ func (s *Server) DidChange(ctx context.Context, params *protocol.DidChangeTextDo
 		s.documents[uri] = content
 
 		utils.LogInfo("Document content updated, length: %d bytes", len(content))
+
+		// The sourceDescriptions may have changed — re-resolve and index this document's declared
+		// sources so newly-referenced specs become navigable without reopening the file.
+		if s.isArazzoFile(string(uri)) {
+			go s.indexDeclaredSources(uri, content)
+		}
 
 		// Provide diagnostics
 		utils.LogInfo("Running diagnostics for changed document: %s", uri)
