@@ -117,6 +117,50 @@ func (idx *OperationIndex) Lookup(operationID string) (*OperationInfo, bool) {
 	return op, found
 }
 
+// HasFile reports whether a file URI has been indexed (thread-safe).
+func (idx *OperationIndex) HasFile(fileURI string) bool {
+	idx.mutex.RLock()
+	defer idx.mutex.RUnlock()
+	_, ok := idx.Files[fileURI]
+	return ok
+}
+
+// LookupOperationInFile finds an operation by id WITHIN a single indexed file. Unlike Lookup, it does
+// not use the global (deduped, first-wins) Operations map — so an operationId that exists in more than
+// one source file resolves to the operation in the file the caller scopes to, not whichever was
+// indexed first. Returns (nil, false) if the file isn't indexed or has no such operation.
+func (idx *OperationIndex) LookupOperationInFile(fileURI, operationID string) (*OperationInfo, bool) {
+	idx.mutex.RLock()
+	defer idx.mutex.RUnlock()
+	file, ok := idx.Files[fileURI]
+	if !ok {
+		return nil, false
+	}
+	for _, op := range file.Operations {
+		if op.OperationID == operationID {
+			return op, true
+		}
+	}
+	return nil, false
+}
+
+// LookupChannelInFile finds an AsyncAPI channel by key WITHIN a single indexed file (same scoping
+// rationale as LookupOperationInFile).
+func (idx *OperationIndex) LookupChannelInFile(fileURI, key string) (*ChannelInfo, bool) {
+	idx.mutex.RLock()
+	defer idx.mutex.RUnlock()
+	file, ok := idx.Files[fileURI]
+	if !ok {
+		return nil, false
+	}
+	for _, ch := range file.Channels {
+		if ch.Key == key {
+			return ch, true
+		}
+	}
+	return nil, false
+}
+
 // RemoveFile removes all operations from a file (thread-safe)
 func (idx *OperationIndex) RemoveFile(fileURI string) {
 	idx.mutex.Lock()
