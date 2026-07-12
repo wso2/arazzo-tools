@@ -33,16 +33,20 @@ func (s *Server) Hover(ctx context.Context, params *protocol.HoverParams) (*prot
 
 	utils.LogDebug("Looking up operationId for hover: %s", operationID)
 
-	// Ensure index is built
-	if s.operationIndex == nil || s.operationIndex.Count() == 0 {
-		utils.LogWarning("Operation index is empty for hover")
-		return nil, nil
+	// Resolve strictly within this document's declared sources (same as Go-to-Definition) so the
+	// popup can't show an operation from an unrelated spec that merely shares the operationId.
+	sources := s.resolveDocSources(uri, content)
+	for _, src := range sources {
+		if !s.operationIndex.HasFile(src.fileURI) {
+			if err := s.indexer.IndexFile(src.fileURI); err != nil {
+				utils.LogDebug("Could not index source %s (%s): %v", src.name, src.fileURI, err)
+			}
+		}
 	}
 
-	// Look up operation in index
-	opInfo, found := s.operationIndex.Lookup(operationID)
+	opInfo, found := s.lookupOperationInSources(sources, operationID)
 	if !found {
-		utils.LogDebug("Operation not found for hover: %s", operationID)
+		utils.LogDebug("Operation not found for hover in this document's sources: %s", operationID)
 		return nil, nil
 	}
 
