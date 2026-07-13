@@ -7,6 +7,11 @@
 # EXPECTED: run **correlate** with input {"wantOrder":"ORD-B"} → matched = "ORD-B", workflow completes.
 #
 # (In-memory correlation is a simple value-match heuristic; real brokers correlate on message headers.)
+# sample input {"wantOrder":"ORD-B"} (or simply put ORD-B in the UI)
+# NOTE: the inmemory adapter is a test adapter only and is not a real broker. as for the correlation ID
+# it simply checks the whole message body as sees if any field matches the correlationID given. 
+# But in phase 11 we will implement real adapters and thn in the asyncAPI doc it will say specifically 
+# where the correlation ID must go and the sender will put it there.
 
 arazzo: 1.1.0
 
