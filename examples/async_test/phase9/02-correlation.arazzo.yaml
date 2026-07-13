@@ -1,0 +1,56 @@
+# Phase 9 — Scenario 2: CORRELATION. Two messages are sent; the receive picks the correlated one.
+#
+# `emitA` and `emitB` send orders ORD-A and ORD-B on the same channel. `awaitTarget` receives with
+# `correlationId: $inputs.wantOrder`, so it matches the message whose payload carries that value —
+# not simply the first one (FIFO). Run with input {"wantOrder": "ORD-B"} → it returns ORD-B.
+#
+# EXPECTED: run **correlate** with input {"wantOrder":"ORD-B"} → matched = "ORD-B", workflow completes.
+#
+# (In-memory correlation is a simple value-match heuristic; real brokers correlate on message headers.)
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 9 - correlated receive"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: orderBus
+    url: ./order-events.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: correlate
+    inputs:
+      type: object
+      properties:
+        wantOrder:
+          type: string
+    steps:
+      - stepId: emitA
+        channelPath: orderBus#/channels/orders
+        action: send
+        requestBody:
+          payload:
+            orderId: "ORD-A"
+            status: "new"
+
+      - stepId: emitB
+        channelPath: orderBus#/channels/orders
+        action: send
+        requestBody:
+          payload:
+            orderId: "ORD-B"
+            status: "new"
+
+      - stepId: awaitTarget
+        channelPath: orderBus#/channels/orders
+        action: receive
+        correlationId: $inputs.wantOrder
+        timeout: 2000
+        successCriteria:
+          - condition: '$message.payload.orderId == $inputs.wantOrder'
+        outputs:
+          matched: $message.payload.orderId
+    outputs:
+      matched: $steps.awaitTarget.outputs.matched

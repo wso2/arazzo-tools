@@ -1,0 +1,26 @@
+# Phase 9 — Scenario 4: RECEIVE TIMEOUT (fails on purpose). Nothing is sent, so the receive waits
+# up to its `timeout` and then fails — the step (and workflow) end in error instead of hanging forever.
+#
+# EXPECTED: run **timeoutFlow** → `await` waits ~300ms then fails:
+#   receive on channel "orders/new" failed: receive timed out waiting for a message
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 9 - receive timeout"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: orderBus
+    url: ./order-events.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: timeoutFlow
+    steps:
+      - stepId: await
+        channelPath: orderBus#/channels/orders
+        action: receive
+        timeout: 300                       # nothing is ever sent -> times out -> fails
+        successCriteria:
+          - condition: '$message.payload.status == "new"'
