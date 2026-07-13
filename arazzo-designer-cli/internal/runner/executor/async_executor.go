@@ -7,6 +7,7 @@ package executor
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -140,9 +141,18 @@ func (se *StepExecutor) executeReceive(step map[string]interface{}, channel stri
 		}
 	}
 
-	msg, err := se.AsyncAdapter.Receive(channel, correlationID, receiveTimeout(step))
+	timeout := receiveTimeout(step)
+	msg, err := se.AsyncAdapter.Receive(channel, correlationID, timeout)
 	if err != nil {
-		return se.createFailureResult(stepID, step, state, fmt.Sprintf("receive on channel %q failed: %v", channel, err))
+		reason := fmt.Sprintf("receive on channel %q failed: %v", channel, err)
+		if errors.Is(err, ErrReceiveTimeout) {
+			if correlationID != "" {
+				reason = fmt.Sprintf("receive on channel %q timed out after %s: no message matching correlationId %q arrived", channel, timeout, correlationID)
+			} else {
+				reason = fmt.Sprintf("receive on channel %q timed out after %s: no message arrived", channel, timeout)
+			}
+		}
+		return se.createFailureResult(stepID, step, state, reason)
 	}
 
 	// Shape the message for the evaluator's $message root: {header, payload}.
