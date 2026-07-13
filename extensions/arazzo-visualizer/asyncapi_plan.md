@@ -411,7 +411,17 @@ Tests: AsyncAPI source loads ✅; op/channel indexed ✅; **all three targeting 
 
 **Deferred out of Phase 8 (tracked):** the single-clickable-link for a whole `channelPath` value (needs a DocumentLink provider — Ctrl+click/hover already navigate correctly, the link is just segmented); removal of the dead directory-scan code.
 
-### Phase 9: AsyncAPI Adapter Interface — ❌ NOT STARTED
+### Phase 9: AsyncAPI Adapter Interface — ✅ DONE (blocking model; in-memory adapter)
+
+**Implemented (CLI runner):**
+- **Adapter interface + in-memory adapter** — [adapter.go](arazzo-designer-cli/internal/runner/executor/adapter.go) (`Adapter` = `Send`/`Receive`/`Name`, normalized `Message`) and [adapter_inmemory.go](arazzo-designer-cli/internal/runner/executor/adapter_inmemory.go) (broker-less FIFO queues + timeout + a simple correlation heuristic). Default adapter is in-memory; a nil adapter yields the clear "requires a configured adapter" error. Real brokers = Phase 11.
+- **Send/receive wiring** — [async_executor.go](arazzo-designer-cli/internal/runner/executor/async_executor.go): `resolveAsyncTarget` routes a step to the async path when it has a `channelPath` or an `operationId` that resolves to an AsyncAPI operation (OpenAPI ops stay on the HTTP path). `send` builds payload/headers (reusing `ParameterProcessor`), serializes (basic JSON), `Send`s. `receive` evaluates `correlationId`, `Receive`s with `timeout`, exposes `$message`, then **reuses `SuccessCriteriaChecker` and `OutputExtractor`** (fed `$message` instead of `$response` via one added `"message"` context key) — no criteria/output logic duplicated. `$message` was already supported by the evaluator.
+- **Enforcement:** `channelPath` without `action` → runtime hard error; step `action` vs operation `action` mismatch → operation wins + warning.
+- **Blocking model (choice (a)):** receive waits inline up to `timeout`; `dependsOn` stays the Phase-7 gate. Existing run telemetry drives the node red/green (received → success, timed out → failure). Example [examples/async_test/phase9/](examples/async_test/phase9) `roundTrip` runs green end-to-end.
+
+**Deferred:** the **non-blocking** receive model (b) + the `dependsOn` "started-but-not-completed → wait-with-timeout" branch (a later refinement); the real serialization layer (Phase 10); real brokers (Phase 11).
+
+<details><summary>Original design — kept for reference</summary>
 
 Goal: a runtime boundary to send/receive messages without hard-coding any broker.
 
@@ -448,6 +458,8 @@ but unconfigured: `AsyncAPI execution requires a configured adapter for this pro
 
 Tests: in-memory send; in-memory receive matches; receive ignores non-matching correlation ids;
 receive times out; `$message.payload` criteria & outputs work.
+
+</details>
 
 ### Phase 10: Message Serialization Layer — ❌ NOT STARTED
 
