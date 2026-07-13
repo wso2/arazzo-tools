@@ -33,12 +33,14 @@ func (sc *SuccessCriteriaChecker) CheckSuccessCriteria(step map[string]interface
 		return statusCode >= 200 && statusCode < 300
 	}
 
-	// Build context for evaluating expressions
+	// Build context for evaluating expressions. "message" backs $message.* for AsyncAPI receive steps
+	// (nil for HTTP steps, which never reference it); everything else backs the HTTP $response roots.
 	context := map[string]interface{}{
 		"statusCode": response["status_code"],
 		"response":   response,
 		"headers":    response["headers"],
 		"body":       response["body"],
+		"message":    response["message"],
 	}
 
 	for _, criterionRaw := range criteriaRaw {
