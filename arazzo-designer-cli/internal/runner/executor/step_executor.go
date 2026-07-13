@@ -2,6 +2,12 @@
 // It orchestrates the execution of a single step: finds the operation, prepares
 // parameters/body, resolves the server URL, makes the HTTP request, checks
 // success criteria, extracts outputs, and determines the next action.
+//
+// FLOW: the runner calls ExecuteStep for EVERY step. ExecuteStep branches:
+//   - AsyncAPI step (channelPath, or an AsyncAPI operationId) -> executeAsyncStep (async_executor.go)
+//   - otherwise                                               -> the HTTP/OpenAPI path in this file
+// Both paths are methods on the SAME StepExecutor, so they share ParamProcessor / SuccessChecker /
+// OutputExtractor / ActionHandler (the async path just feeds them $message instead of $response).
 package executor
 
 import (
