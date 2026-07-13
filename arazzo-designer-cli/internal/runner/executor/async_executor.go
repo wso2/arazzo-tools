@@ -74,13 +74,13 @@ func resolveAsyncAction(step map[string]interface{}, info *AsyncInfo) (string, e
 	stepAction = strings.TrimSpace(stepAction)
 	opAction := info.Action
 
-	if opAction != "" {
-		if stepAction != "" && stepAction != opAction {
+	if opAction != "" { //operationID is given so we have a acion from the asyncAPI file
+		if stepAction != "" && stepAction != opAction { //if a step action is given then it must match with the asyncAPI file action
 			log.Printf("Warning: step action %q contradicts the AsyncAPI operation's action %q; using the operation's action", stepAction, opAction)
 		}
 		return opAction, nil
 	}
-	if stepAction == "" {
+	if stepAction == "" { //if we reach here that means that a channelPath is given. if there is no action then there is an error
 		return "", fmt.Errorf("a 'channelPath' step requires 'action' (send or receive) — the message-flow direction is otherwise undefined")
 	}
 	if stepAction != "send" && stepAction != "receive" {
