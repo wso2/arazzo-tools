@@ -28,6 +28,7 @@ type StepExecutor struct {
 	ServerProcessor    *ServerProcessor
 	OperationFinder    *OperationFinder
 	HTTPExecutor       *httpexec.HTTPExecutor
+	AsyncAdapter       Adapter // transport for AsyncAPI send/receive steps (Phase 9)
 	Sink               telemetry.SpanEventSink
 }
 
@@ -49,6 +50,7 @@ func NewStepExecutor(
 		ServerProcessor:    NewServerProcessor(sourceDescs),
 		OperationFinder:    NewOperationFinder(sourceDescs),
 		HTTPExecutor:       httpexec.NewHTTPExecutor(sink, runtimeParams != nil && runtimeParams.DisableTLSVerification),
+		AsyncAdapter:       NewInMemoryAdapter(), // Phase 9: default in-memory transport (real brokers: Phase 11)
 		Sink:               sink,
 	}
 }
@@ -131,6 +133,12 @@ func (se *StepExecutor) ExecuteStep(step map[string]interface{}, workflow map[st
 			},
 			IsNestedWorkflow: true,
 		})
+	}
+
+	// AsyncAPI step? (a channelPath, or an operationId that resolves to an AsyncAPI operation.)
+	// These execute via the message adapter instead of the HTTP path.
+	if info, isAsync := se.resolveAsyncTarget(step); isAsync {
+		return endStep(se.executeAsyncStep(step, info, state, stepID))
 	}
 
 	// Find the operation
