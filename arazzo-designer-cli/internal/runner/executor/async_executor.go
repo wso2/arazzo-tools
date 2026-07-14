@@ -53,7 +53,13 @@ func (se *StepExecutor) executeAsyncStep(step map[string]interface{}, info *Asyn
 	if info == nil {
 		return se.createFailureResult(stepID, step, state, "AsyncAPI target could not be resolved (channel or operation not found)")
 	}
-	if se.AsyncAdapter == nil {
+	// Pick the transport from the AsyncAPI `servers` declaration (Phase 11): ws/mqtt -> real broker
+	// adapter, no servers -> the default in-memory adapter.
+	adapter, err := se.adapterFor(info)
+	if err != nil {
+		return se.createFailureResult(stepID, step, state, err.Error())
+	}
+	if adapter == nil {
 		return se.createFailureResult(stepID, step, state, "AsyncAPI execution requires a configured adapter for this protocol")
 	}
 
@@ -71,9 +77,9 @@ func (se *StepExecutor) executeAsyncStep(step map[string]interface{}, info *Asyn
 
 	switch action {
 	case "send":
-		return se.executeSend(step, info, channel, state, stepID, parentSpanID)
+		return se.executeSend(step, adapter, info, channel, state, stepID, parentSpanID)
 	case "receive":
-		return se.executeReceive(step, info, channel, state, stepID, parentSpanID)
+		return se.executeReceive(step, adapter, info, channel, state, stepID, parentSpanID)
 	default:
 		return se.createFailureResult(stepID, step, state, fmt.Sprintf("invalid AsyncAPI action %q", action))
 	}
@@ -105,9 +111,9 @@ func resolveAsyncAction(step map[string]interface{}, info *AsyncInfo) (string, e
 
 // executeSend builds the outgoing message from the step's requestBody + header parameters, serializes
 // it to wire bytes via the Phase-10 serializer chosen by the resolved content type, publishes it on
-// the channel, then — exactly like the receive path — evaluates any `successCriteria` and extracts any
-// `outputs` through the shared checker/extractor.
-func (se *StepExecutor) executeSend(step map[string]interface{}, info *AsyncInfo, channel string, state *models.ExecutionState, stepID, parentSpanID string) *models.StepResult {
+// the channel via the selected adapter, then — exactly like the receive path — evaluates any
+// `successCriteria` and extracts any `outputs` through the shared checker/extractor.
+func (se *StepExecutor) executeSend(step map[string]interface{}, adapter Adapter, info *AsyncInfo, channel string, state *models.ExecutionState, stepID, parentSpanID string) *models.StepResult {
 	var payload interface{}
 	stepContentType := ""
 	if reqBody := toMap(step["requestBody"]); reqBody != nil {
@@ -150,9 +156,9 @@ func (se *StepExecutor) executeSend(step map[string]interface{}, info *AsyncInfo
 	// serializer ran is the one thing Phase 10 decides, and it is invisible from the payload alone.
 	sendAttrs := messageAttrs("messaging.message", payload, headers)
 	sendAttrs["messaging.content_type"] = msg.ContentType
-	span := se.startMessagingSpan(state.TraceID, parentSpanID, "send", channel, se.AsyncAdapter.Name(), sendAttrs)
+	span := se.startMessagingSpan(state.TraceID, parentSpanID, "send", channel, adapter.Name(), sendAttrs)
 
-	if err := se.AsyncAdapter.Send(channel, msg); err != nil {
+	if err := adapter.Send(channel, msg); err != nil {
 		span.end(telemetry.SpanStatusError, err.Error(), nil)
 		return se.createFailureResult(stepID, step, state, fmt.Sprintf("send on channel %q failed: %v", channel, err))
 	}
@@ -187,7 +193,7 @@ func (se *StepExecutor) executeSend(step map[string]interface{}, info *AsyncInfo
 		// carries the decoded payload alongside the bytes, so a receive step never has to decode and
 		// every format looks identical from the workflow's outputs.
 		log.Printf("Step %s: sent a message on channel %q via %s adapter as %s (%d bytes): %s",
-			stepID, channel, se.AsyncAdapter.Name(), msg.ContentType, len(raw), previewBytes(raw))
+			stepID, channel, adapter.Name(), msg.ContentType, len(raw), previewBytes(raw))
 	} else {
 		state.StepsStatus[stepID] = models.StepStatusFailure
 		span.end(telemetry.SpanStatusError, "sent message did not satisfy successCriteria", nil)
@@ -266,7 +272,7 @@ func quoteAll(types []string) []string {
 // executeReceive waits for a (optionally correlated) message on the channel, exposes it as $message,
 // then evaluates successCriteria and extracts outputs through the SAME checker/extractor used by HTTP
 // steps. A received message with no successCriteria counts as success.
-func (se *StepExecutor) executeReceive(step map[string]interface{}, info *AsyncInfo, channel string, state *models.ExecutionState, stepID, parentSpanID string) *models.StepResult {
+func (se *StepExecutor) executeReceive(step map[string]interface{}, adapter Adapter, info *AsyncInfo, channel string, state *models.ExecutionState, stepID, parentSpanID string) *models.StepResult {
 	// Resolve the correlation id. A DECLARED correlationId must always be honoured: silently falling
 	// back to an unfiltered receive would return an unrelated message and report success, which is
 	// worse than failing. Only the ABSENCE of a correlationId means "take the next message".
@@ -283,9 +289,9 @@ func (se *StepExecutor) executeReceive(step map[string]interface{}, info *AsyncI
 	if correlationID != "" {
 		waitAttrs["messaging.correlation_id"] = correlationID
 	}
-	span := se.startMessagingSpan(state.TraceID, parentSpanID, "receive", channel, se.AsyncAdapter.Name(), waitAttrs)
+	span := se.startMessagingSpan(state.TraceID, parentSpanID, "receive", channel, adapter.Name(), waitAttrs)
 
-	msg, err := se.AsyncAdapter.Receive(channel, correlationID, timeout)
+	msg, err := adapter.Receive(channel, correlationID, timeout)
 	if err != nil {
 		reason := fmt.Sprintf("receive on channel %q failed: %v", channel, err)
 		if errors.Is(err, ErrReceiveTimeout) {
@@ -375,7 +381,7 @@ func (se *StepExecutor) executeReceive(step map[string]interface{}, info *AsyncI
 		state.StepsStatus[stepID] = models.StepStatusSuccess
 		span.end(telemetry.SpanStatusOK, "", receivedAttrs)
 		log.Printf("Step %s: received a message on channel %q via %s adapter, decoded as %s",
-			stepID, channel, se.AsyncAdapter.Name(), contentType)
+			stepID, channel, adapter.Name(), contentType)
 	} else {
 		state.StepsStatus[stepID] = models.StepStatusFailure
 		span.end(telemetry.SpanStatusError, "received message did not satisfy successCriteria", receivedAttrs)

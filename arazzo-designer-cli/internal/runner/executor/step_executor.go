@@ -35,9 +35,11 @@ type StepExecutor struct {
 	ServerProcessor    *ServerProcessor
 	OperationFinder    *OperationFinder
 	HTTPExecutor       *httpexec.HTTPExecutor
-	AsyncAdapter       Adapter             // transport for AsyncAPI send/receive steps (Phase 9)
+	AsyncAdapter       Adapter             // default transport when no AsyncAPI servers are declared (Phase 9: in-memory)
 	Serializers        *SerializerRegistry // message wire-format encoders/decoders (Phase 10)
 	Sink               telemetry.SpanEventSink
+
+	asyncAdapters map[string]Adapter // broker adapters cached per protocol://host (Phase 11)
 }
 
 // NewStepExecutor creates a fully initialized StepExecutor.
