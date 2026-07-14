@@ -1,0 +1,38 @@
+# Phase 11 — Scenario 10: IN-MEMORY FALLBACK (no servers declared). The AsyncAPI document has NO
+# `servers` section, so the runner uses the built-in in-memory adapter — no broker, no network. This
+# is the default path every Phase 9/10 example runs on; Phase 11 keeps it working unchanged.
+#
+# EXPECTED: run **localFlow** → send + receive complete in-process with echoedId = "L-1"
+# (needs NO internet / NO broker)
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 11 - in-memory fallback"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: localBus
+    url: ./local.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: localFlow
+    steps:
+      - stepId: emit
+        channelPath: localBus#/channels/events
+        action: send
+        requestBody:
+          payload:
+            id: "L-1"
+
+      - stepId: await
+        channelPath: localBus#/channels/events
+        action: receive
+        timeout: 2000
+        successCriteria:
+          - condition: '$message.payload.id == "L-1"'
+        outputs:
+          echoedId: $message.payload.id
+    outputs:
+      echoedId: $steps.await.outputs.echoedId

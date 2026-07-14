@@ -1,0 +1,48 @@
+# Phase 11 — Scenario 2: REAL WEBSOCKET SERVER round trip. The AsyncAPI `servers` section declares
+# protocol `wss` + host `echo.websocket.org`, so the runner's WebSocket adapter opens a TLS socket to
+# the public echo server: `shout` sends a JSON frame, the server echoes it back, `hear` receives it.
+#
+# The echo server greets new connections with one text line ("Request served by ..."), so the receive
+# uses `correlationId: $inputs.token` — it skips the greeting and matches our echoed JSON frame.
+#
+# EXPECTED: run **wsEcho** with input {"token":"demo-7"} → completes with
+#   echoed = "hello over websocket"   (needs internet access to echo.websocket.org:443)
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 11 - WebSocket echo round trip"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: echoServer
+    url: ./echo.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: wsEcho
+    inputs:
+      type: object
+      properties:
+        token:
+          type: string
+    steps:
+      - stepId: shout
+        channelPath: echoServer#/channels/mirror
+        action: send
+        requestBody:
+          payload:
+            token: $inputs.token
+            text: "hello over websocket"
+
+      - stepId: hear
+        channelPath: echoServer#/channels/mirror
+        action: receive
+        correlationId: $inputs.token
+        timeout: 10000
+        successCriteria:
+          - condition: '$message.payload.token == $inputs.token'
+        outputs:
+          echoed: $message.payload.text
+    outputs:
+      echoed: $steps.hear.outputs.echoed

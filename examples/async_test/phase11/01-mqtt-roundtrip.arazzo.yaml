@@ -1,0 +1,49 @@
+# Phase 11 — Scenario 1: REAL MQTT BROKER round trip. The AsyncAPI `servers` section declares
+# protocol `mqtt` + host `broker.hivemq.com`, so the runner's MQTT adapter connects to the real
+# public HiveMQ broker: `emit` PUBLISHES a JSON reading on the topic and `await` SUBSCRIBES and
+# receives it back — an actual message over the actual internet, no local infrastructure.
+#
+# The topic is public, so the receive uses `correlationId: $inputs.token` to match OUR message
+# (the sent payload carries the same token) and ignore anything strangers publish there.
+#
+# EXPECTED: run **mqttRoundTrip** with input {"token":"demo-42"} → completes with
+#   sentBack = 21.5   (needs internet access to broker.hivemq.com:1883)
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 11 - MQTT round trip via public broker"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: sensorBus
+    url: ./sensors.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: mqttRoundTrip
+    inputs:
+      type: object
+      properties:
+        token:
+          type: string
+    steps:
+      - stepId: emit
+        channelPath: sensorBus#/channels/readings
+        action: send
+        requestBody:
+          payload:
+            token: $inputs.token
+            celsius: 21.5
+
+      - stepId: await
+        channelPath: sensorBus#/channels/readings
+        action: receive
+        correlationId: $inputs.token
+        timeout: 10000
+        successCriteria:
+          - condition: '$message.payload.token == $inputs.token'
+        outputs:
+          sentBack: $message.payload.celsius
+    outputs:
+      sentBack: $steps.await.outputs.sentBack

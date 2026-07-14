@@ -1,0 +1,45 @@
+# Phase 11 — Scenario 6: text/plain over a REAL MQTT broker. The `alerts` channel declares
+# `contentType: text/plain`, so the Phase-10 serializer sends the payload as raw text (not JSON) and
+# — because MQTT carries no format label — the receive side decodes it back as text using that
+# declared channel contentType. Same transport as the JSON examples, different wire format.
+#
+# EXPECTED: run **textAlert** with input {"token":"txt-8"} → completes with heard containing the token
+# (needs internet access to broker.hivemq.com:1883)
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 11 - text/plain over MQTT"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: sensorBus
+    url: ./sensors.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: textAlert
+    inputs:
+      type: object
+      properties:
+        token:
+          type: string
+    steps:
+      - stepId: raise
+        channelPath: sensorBus#/channels/alerts
+        action: send
+        requestBody:
+          contentType: text/plain
+          payload: "ALERT token=txt-8 disk almost full"
+
+      - stepId: hear
+        channelPath: sensorBus#/channels/alerts
+        action: receive
+        correlationId: $inputs.token
+        timeout: 10000
+        successCriteria:
+          - condition: '$message.payload == "ALERT token=txt-8 disk almost full"'
+        outputs:
+          heard: $message.payload
+    outputs:
+      heard: $steps.hear.outputs.heard

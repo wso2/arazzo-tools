@@ -1,0 +1,28 @@
+# Phase 11 — Scenario 5: MQTT RECEIVE TIMEOUT (fails on purpose). The step subscribes to a topic on
+# the real broker that NOTHING is ever published to (`quiet`), waits, and after `timeout` fails
+# instead of blocking forever. Proves the timeout path works against a real broker.
+#
+# EXPECTED: run **mqttTimeout** → `listen` waits ~3s then fails:
+#   receive on channel "arazzo/phase11/quiet-8f2a1c" timed out after 3s: no message arrived
+# (needs internet access to broker.hivemq.com:1883)
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 11 - MQTT receive timeout"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: sensorBus
+    url: ./sensors.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: mqttTimeout
+    steps:
+      - stepId: listen
+        channelPath: sensorBus#/channels/quiet
+        action: receive
+        timeout: 3000                        # nobody ever publishes to `quiet` -> times out
+        successCriteria:
+          - condition: '$message.payload.status == "new"'

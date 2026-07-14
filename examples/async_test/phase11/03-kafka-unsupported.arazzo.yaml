@@ -1,0 +1,29 @@
+# Phase 11 — Scenario 3: KAFKA NOT YET SUPPORTED (fails on purpose). The AsyncAPI server declares
+# protocol `kafka`, which has no adapter yet — the runner fails LOUDLY with a clear message instead
+# of guessing a transport. (A Kafka adapter, together with real Avro/Protobuf schema support, is a
+# planned future phase — see the TODO in adapter_select.go.)
+#
+# EXPECTED: run **kafkaFlow** → the step fails with:
+#   the "kafka" protocol is not yet supported: a Kafka adapter (with Avro/Protobuf schema support)
+#   is a planned future phase — supported protocols: ws, wss, mqtt, mqtts ...
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 11 - kafka protocol unsupported"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: streamBus
+    url: ./stream.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: kafkaFlow
+    steps:
+      - stepId: emit
+        channelPath: streamBus#/channels/events
+        action: send
+        requestBody:
+          payload:
+            kind: "click"

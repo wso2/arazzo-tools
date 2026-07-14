@@ -1,0 +1,28 @@
+# Phase 11 — Scenario 9: UNKNOWN PROTOCOL (fails on purpose). The AsyncAPI server declares protocol
+# `amqp`, which has no adapter in this build. The runner fails LOUDLY with a clear, listing-supported
+# error instead of guessing a transport. (Same guard that stops kafka — see scenario 3.)
+#
+# EXPECTED: run **amqpFlow** → the step fails with:
+#   unsupported AsyncAPI server protocol "amqp" — supported: ws, wss, mqtt, mqtts
+#   (and in-memory when no servers are declared)
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 11 - unknown protocol"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: bus
+    url: ./bus-amqp.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: amqpFlow
+    steps:
+      - stepId: emit
+        channelPath: bus#/channels/jobs
+        action: send
+        requestBody:
+          payload:
+            task: "reindex"

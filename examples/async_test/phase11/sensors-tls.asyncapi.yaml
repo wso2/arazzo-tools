@@ -1,0 +1,21 @@
+asyncapi: 3.0.0
+info:
+  title: Sensor Readings over TLS (public MQTT broker, secure port)
+  version: 1.0.0
+# protocol `mqtts` -> the MQTT adapter connects over TLS: ssl://broker.hivemq.com:8883.
+# Same broker as sensors.asyncapi.yaml, secure port. TLS is handled by the adapter (system CA roots).
+servers:
+  hivemqTLS:
+    host: broker.hivemq.com
+    protocol: mqtts
+channels:
+  readings:
+    address: arazzo/phase11/readings-tls
+    messages:
+      reading:
+        contentType: application/json
+        payload:
+          type: object
+          properties:
+            token: { type: string }
+            celsius: { type: number }

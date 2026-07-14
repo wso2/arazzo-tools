@@ -1,0 +1,17 @@
+asyncapi: 3.0.0
+info:
+  title: Local Bus (no servers -> in-memory adapter)
+  version: 1.0.0
+# NO `servers` section on purpose: with nothing declaring a broker, the runner falls back to the
+# built-in in-memory adapter (Phase 9). This is the default path — it needs zero infrastructure and
+# is what all the Phase 9/10 examples run on. Phase 11 keeps it working unchanged.
+channels:
+  events:
+    address: local/events
+    messages:
+      event:
+        contentType: application/json
+        payload:
+          type: object
+          properties:
+            id: { type: string }

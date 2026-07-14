@@ -1,0 +1,45 @@
+# Phase 11 — Scenario 7: MQTT over TLS (mqtts). The AsyncAPI server declares protocol `mqtts`, so the
+# adapter connects securely to ssl://broker.hivemq.com:8883 (TLS via system CA roots). Otherwise
+# identical to the plain-mqtt round trip.
+#
+# EXPECTED: run **mqttsRoundTrip** with input {"token":"tls-5"} → completes with sentBack = 23.7
+# (needs internet access to broker.hivemq.com:8883)
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 11 - MQTT over TLS"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: sensorBus
+    url: ./sensors-tls.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: mqttsRoundTrip
+    inputs:
+      type: object
+      properties:
+        token:
+          type: string
+    steps:
+      - stepId: emit
+        channelPath: sensorBus#/channels/readings
+        action: send
+        requestBody:
+          payload:
+            token: $inputs.token
+            celsius: 23.7
+
+      - stepId: await
+        channelPath: sensorBus#/channels/readings
+        action: receive
+        correlationId: $inputs.token
+        timeout: 10000
+        successCriteria:
+          - condition: '$message.payload.token == $inputs.token'
+        outputs:
+          sentBack: $message.payload.celsius
+    outputs:
+      sentBack: $steps.await.outputs.sentBack

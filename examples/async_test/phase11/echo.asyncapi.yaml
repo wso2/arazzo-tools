@@ -1,0 +1,23 @@
+asyncapi: 3.0.0
+info:
+  title: WebSocket Echo (public echo server)
+  version: 1.0.0
+# protocol wss + host -> the WebSocket adapter connects to wss://echo.websocket.org/<channel address>.
+# This public server echoes every frame back — a perfect zero-setup "broker" for a send/receive demo.
+# NOTE: it also sends one greeting line ("Request served by ...") when you connect, which is why the
+# example receives WITH a correlationId — the token skips the greeting and matches our echoed message.
+servers:
+  echo:
+    host: echo.websocket.org
+    protocol: wss
+channels:
+  mirror:
+    address: /
+    messages:
+      echoed:
+        contentType: application/json
+        payload:
+          type: object
+          properties:
+            token: { type: string }
+            text: { type: string }
