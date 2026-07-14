@@ -6,7 +6,6 @@
 package executor
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -94,27 +93,34 @@ func resolveAsyncAction(step map[string]interface{}, info *AsyncInfo) (string, e
 }
 
 // executeSend builds the outgoing message from the step's requestBody + header parameters, serializes
-// it (basic JSON in Phase 9), publishes it on the channel, then — exactly like the receive path —
-// evaluates any `successCriteria` and extracts any `outputs` through the shared checker/extractor.
+// it to wire bytes via the Phase-10 serializer chosen by the requestBody's contentType (default JSON),
+// publishes it on the channel, then — exactly like the receive path — evaluates any `successCriteria`
+// and extracts any `outputs` through the shared checker/extractor.
 func (se *StepExecutor) executeSend(step map[string]interface{}, channel string, state *models.ExecutionState, stepID, parentSpanID string) *models.StepResult {
 	var payload interface{}
+	contentType := ""
 	if reqBody := toMap(step["requestBody"]); reqBody != nil {
 		if prepared := se.ParamProcessor.PrepareRequestBody(reqBody, state); prepared != nil {
 			payload = prepared["payload"]
+			contentType, _ = prepared["contentType"].(string)
 		}
 	}
 	headers := headerParams(se.ParamProcessor.PrepareParameters(step, state))
 
-	// Basic Phase-9 serialization; Phase 10 formalizes the layer. A payload that cannot be encoded
-	// must not be published as an empty message and reported as a successful send.
-	raw, err := json.Marshal(payload)
+	// Serialize the logical payload into the wire form the channel carries (Phase 10). A payload that
+	// cannot be encoded must not be published as an empty message and reported as a successful send.
+	serializer, err := se.serializerRegistry().For(contentType)
+	if err != nil {
+		return se.createFailureResult(stepID, step, state, fmt.Sprintf("send on channel %q: %v", channel, err))
+	}
+	raw, err := serializer.Serialize(payload)
 	if err != nil {
 		return se.createFailureResult(stepID, step, state, fmt.Sprintf("send on channel %q: could not serialize payload: %v", channel, err))
 	}
 	msg := &Message{
 		Payload:     payload,
 		Headers:     headers,
-		ContentType: "application/json",
+		ContentType: serializer.ContentType(),
 		Raw:         raw,
 		Metadata:    map[string]interface{}{},
 	}
@@ -220,10 +226,26 @@ func (se *StepExecutor) executeReceive(step map[string]interface{}, channel stri
 		return se.createFailureResult(stepID, step, state, reason)
 	}
 
+	// Decode the wire bytes into a payload when the adapter delivered only Raw (Phase 10). The
+	// in-memory test adapter already carries the decoded Payload, so this is a no-op there; a real
+	// broker (Phase 11) delivers bytes + contentType and this is where they become $message.payload.
+	payload := msg.Payload
+	if payload == nil && len(msg.Raw) > 0 {
+		serializer, serr := se.serializerRegistry().For(msg.ContentType)
+		if serr != nil {
+			return se.createFailureResult(stepID, step, state, fmt.Sprintf("receive on channel %q: cannot decode message: %v", channel, serr))
+		}
+		decoded, derr := serializer.Deserialize(msg.Raw)
+		if derr != nil {
+			return se.createFailureResult(stepID, step, state, fmt.Sprintf("receive on channel %q: could not deserialize message body: %v", channel, derr))
+		}
+		payload = decoded
+	}
+
 	// Shape the message for the evaluator's $message root: {header, payload}.
 	message := map[string]interface{}{
 		"header":  msg.Headers,
-		"payload": msg.Payload,
+		"payload": payload,
 	}
 	// The reused SuccessChecker / OutputExtractor read the message from response["message"].
 	responseForCheck := map[string]interface{}{"message": message}
@@ -266,7 +288,7 @@ func (se *StepExecutor) executeReceive(step map[string]interface{}, channel stri
 	return &models.StepResult{
 		StepID:       stepID,
 		Success:      success,
-		ResponseBody: msg.Payload,
+		ResponseBody: payload,
 		Outputs:      outputs,
 		Error:        failureReason,
 		NextAction:   se.ActionHandler.DetermineNextAction(step, success, state),
@@ -307,6 +329,15 @@ func (se *StepExecutor) resolveCorrelationID(step map[string]interface{}, state 
 	}
 
 	return corrExpr, ""
+}
+
+// serializerRegistry returns the executor's serializer registry, defaulting to the standard set if a
+// StepExecutor was constructed without one (all normal construction goes through NewStepExecutor).
+func (se *StepExecutor) serializerRegistry() *SerializerRegistry {
+	if se.Serializers == nil {
+		se.Serializers = NewDefaultSerializerRegistry()
+	}
+	return se.Serializers
 }
 
 // headerParams pulls the "header" bucket out of the prepared parameters map for use as message headers.

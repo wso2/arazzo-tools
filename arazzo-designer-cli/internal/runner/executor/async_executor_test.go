@@ -449,3 +449,76 @@ func TestAsyncSendOutputsDriveCorrelation(t *testing.T) {
 		t.Errorf("correlation via the send step's outputs picked the wrong message: got %v, want ORD-B", r.Outputs["got"])
 	}
 }
+
+// ---- Phase 10: serialization wiring through ExecuteStep ----
+
+// A message delivered as raw bytes only (the shape a real broker produces) is deserialized via the
+// content type into $message.payload — the in-memory adapter carries Payload, so we seed Raw-only.
+func TestAsyncReceiveDeserializesRawBytes(t *testing.T) {
+	se := newAsyncExecutor()
+	state := models.NewExecutionState("wf", nil, nil, nil)
+
+	// Seed a bytes-only message directly on the channel address ("orders/new") — no decoded Payload.
+	_ = se.AsyncAdapter.Send("orders/new", &Message{
+		ContentType: "application/json",
+		Raw:         []byte(`{"orderId":"Z9","status":"new"}`),
+	})
+
+	r := se.ExecuteStep(map[string]interface{}{
+		"stepId": "recv", "channelPath": "orderBus#/channels/orders", "action": "receive",
+		"successCriteria": []interface{}{map[string]interface{}{"condition": `$message.payload.status == "new"`}},
+		"outputs":         map[string]interface{}{"id": "$message.payload.orderId"},
+	}, nil, state)
+	if !r.Success {
+		t.Fatalf("receive of raw-only message failed: %s", r.Error)
+	}
+	if r.Outputs["id"] != "Z9" {
+		t.Errorf("expected deserialized payload orderId=Z9, got %v", r.Outputs["id"])
+	}
+}
+
+// A text/plain send serializes the payload as raw text (not JSON-quoted).
+func TestAsyncSendUsesContentTypeSerializer(t *testing.T) {
+	se := newAsyncExecutor()
+	state := models.NewExecutionState("wf", nil, nil, nil)
+
+	r := se.ExecuteStep(map[string]interface{}{
+		"stepId": "send", "channelPath": "orderBus#/channels/orders", "action": "send",
+		"requestBody": map[string]interface{}{
+			"contentType": "text/plain",
+			"payload":     "hello world",
+		},
+	}, nil, state)
+	if !r.Success {
+		t.Fatalf("text/plain send failed: %s", r.Error)
+	}
+
+	// Pull the raw bytes back off the adapter and confirm they are plain text, not JSON.
+	msg, err := se.AsyncAdapter.Receive("orders/new", "", time.Second)
+	if err != nil {
+		t.Fatalf("receive: %v", err)
+	}
+	if string(msg.Raw) != "hello world" {
+		t.Errorf("text/plain send should produce raw text %q, got %q", "hello world", msg.Raw)
+	}
+	if msg.ContentType != "text/plain" {
+		t.Errorf("expected contentType text/plain, got %q", msg.ContentType)
+	}
+}
+
+// An unsupported content type fails loudly at send instead of guessing a wire format.
+func TestAsyncSendUnsupportedContentTypeFails(t *testing.T) {
+	se := newAsyncExecutor()
+	state := models.NewExecutionState("wf", nil, nil, nil)
+
+	r := se.ExecuteStep(map[string]interface{}{
+		"stepId": "send", "channelPath": "orderBus#/channels/orders", "action": "send",
+		"requestBody": map[string]interface{}{
+			"contentType": "application/octet-stream",
+			"payload":     map[string]interface{}{"x": 1},
+		},
+	}, nil, state)
+	if r.Success {
+		t.Error("send with an unsupported content type should fail clearly")
+	}
+}
