@@ -1,0 +1,38 @@
+# Phase 10 — Scenario 1: TEXT/PLAIN serialization. The send step declares `contentType: text/plain`,
+# so the serializer layer encodes the payload as raw UTF-8 text (NOT JSON-quoted). The receive step
+# reads it back as `$message.payload` — a plain string, not an object.
+#
+# EXPECTED: run **textFlow** → sends "system reboot at 02:00" on the alerts channel, receives it back,
+# successCriteria on the raw string passes, workflow completes with heard = "system reboot at 02:00".
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 10 - text/plain round trip"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: notify
+    url: ./notifications.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: textFlow
+    steps:
+      - stepId: raise
+        channelPath: notify#/channels/alerts
+        action: send
+        requestBody:
+          contentType: text/plain
+          payload: "system reboot at 02:00"
+
+      - stepId: hear
+        channelPath: notify#/channels/alerts
+        action: receive
+        timeout: 2000
+        successCriteria:
+          - condition: '$message.payload == "system reboot at 02:00"'
+        outputs:
+          heard: $message.payload
+    outputs:
+      heard: $steps.hear.outputs.heard

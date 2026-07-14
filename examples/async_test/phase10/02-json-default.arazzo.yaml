@@ -1,0 +1,39 @@
+# Phase 10 — Scenario 2: JSON serialization (default). With no `contentType` the serializer layer
+# defaults to application/json, so the object payload is JSON-encoded on send and decoded back into a
+# structured `$message.payload` on receive — the criteria/outputs read fields off the object.
+#
+# EXPECTED: run **jsonFlow** → sends {kind:"deploy", note:"v2 shipped"}, receives it, completes with
+# note = "v2 shipped".
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 10 - json default round trip"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: notify
+    url: ./notifications.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: jsonFlow
+    steps:
+      - stepId: emit
+        channelPath: notify#/channels/events
+        action: send
+        requestBody:
+          payload:                       # no contentType -> defaults to application/json
+            kind: "deploy"
+            note: "v2 shipped"
+
+      - stepId: take
+        channelPath: notify#/channels/events
+        action: receive
+        timeout: 2000
+        successCriteria:
+          - condition: '$message.payload.kind == "deploy"'
+        outputs:
+          note: $message.payload.note
+    outputs:
+      note: $steps.take.outputs.note

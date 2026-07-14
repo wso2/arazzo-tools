@@ -1,0 +1,50 @@
+asyncapi: 3.0.0
+info:
+  title: Notifications
+  version: 1.0.0
+channels:
+  # A JSON channel (structured payload) and a plain-text channel (free-form text). Phase 10 lets the
+  # SAME runner carry both by choosing a serializer from the step's requestBody `contentType`.
+  events:
+    address: notify/events
+    messages:
+      event:
+        contentType: application/json
+        payload:
+          type: object
+          properties:
+            kind: { type: string }
+            note: { type: string }
+  alerts:
+    address: notify/alerts
+    messages:
+      alert:
+        contentType: text/plain
+        payload:
+          type: string
+  # A binary channel whose messages are declared as Protobuf — the serializer for it is a stub in
+  # Phase 10 (real codec + descriptor config arrive in Phase 11), so using it fails clearly.
+  metrics:
+    address: notify/metrics
+    messages:
+      metric:
+        contentType: application/x-protobuf
+        payload:
+          type: object
+  # A binary channel whose messages are declared as Avro — likewise a Phase-10 stub.
+  audit:
+    address: notify/audit
+    messages:
+      entry:
+        contentType: application/avro
+        payload:
+          type: object
+operations:
+  publishEvent:
+    action: send
+    channel:
+      $ref: '#/channels/events'
+  publishAlert:
+    action: send
+    channel:
+      $ref: '#/channels/alerts'

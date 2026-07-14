@@ -1,0 +1,31 @@
+# Phase 10 — Scenario 3: UNSUPPORTED content type (fails on purpose). The send declares a content
+# type no serializer handles, so the runner fails LOUDLY at send instead of guessing a wire format.
+#
+# EXPECTED: run **badFlow** → send fails with:
+#   send on channel "notify/events": no serializer registered for content type
+#   "application/octet-stream" (supported: application/avro, application/json, ...)
+#
+# (application/x-protobuf and application/avro are recognized but stubbed — they fail with a clear
+#  "needs schema config" message, completed with real brokers in Phase 11.)
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 10 - unsupported content type"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: notify
+    url: ./notifications.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: badFlow
+    steps:
+      - stepId: emit
+        channelPath: notify#/channels/events
+        action: send
+        requestBody:
+          contentType: application/octet-stream   # no serializer for this -> hard error
+          payload:
+            kind: "deploy"

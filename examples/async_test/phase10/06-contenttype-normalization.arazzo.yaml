@@ -1,0 +1,64 @@
+# Phase 10 — Scenario 6: CONTENT-TYPE NORMALIZATION. The registry doesn't require an exact string:
+#   - a structured "+json" suffix (e.g. application/vnd.order+json) selects the JSON serializer, and
+#   - media-type parameters (e.g. "application/json; charset=utf-8") are stripped before matching
+# so both round-trip as JSON exactly like a plain "application/json".
+#
+# EXPECTED (two workflows, run each separately):
+#   suffixFlow → id = "S-1"  (application/vnd.order+json accepted as JSON)
+#   paramsFlow → id = "P-1"  (application/json; charset=utf-8 accepted as JSON)
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 10 - content-type normalization"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: notify
+    url: ./notifications.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  # A vendor "+json" structured suffix is treated as JSON.
+  - workflowId: suffixFlow
+    steps:
+      - stepId: emit
+        channelPath: notify#/channels/events
+        action: send
+        requestBody:
+          contentType: application/vnd.order+json
+          payload:
+            kind: "order"
+            id: "S-1"
+      - stepId: take
+        channelPath: notify#/channels/events
+        action: receive
+        timeout: 2000
+        successCriteria:
+          - condition: '$message.payload.kind == "order"'
+        outputs:
+          id: $message.payload.id
+    outputs:
+      id: $steps.take.outputs.id
+
+  # A content type carrying a "; charset=utf-8" parameter still selects JSON.
+  - workflowId: paramsFlow
+    steps:
+      - stepId: emit
+        channelPath: notify#/channels/events
+        action: send
+        requestBody:
+          contentType: "application/json; charset=utf-8"
+          payload:
+            kind: "order"
+            id: "P-1"
+      - stepId: take
+        channelPath: notify#/channels/events
+        action: receive
+        timeout: 2000
+        successCriteria:
+          - condition: '$message.payload.kind == "order"'
+        outputs:
+          id: $message.payload.id
+    outputs:
+      id: $steps.take.outputs.id

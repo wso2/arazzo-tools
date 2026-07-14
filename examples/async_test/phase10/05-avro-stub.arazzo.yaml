@@ -1,0 +1,30 @@
+# Phase 10 — Scenario 5: AVRO stub (fails on purpose). Avro is a recognized content type but cannot
+# be encoded without a schema/registry, so Phase 10 registers it as a stub that fails LOUDLY instead
+# of silently mis-encoding. (The real codec + schema config arrive with brokers in Phase 11.)
+#
+# EXPECTED: run **avroFlow** → send fails with:
+#   send on channel "notify/audit": could not serialize payload: avro serialization
+#   (application/avro) is not yet implemented: it needs an Avro schema/registry ...
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 10 - avro stub"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: notify
+    url: ./notifications.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: avroFlow
+    steps:
+      - stepId: emit
+        channelPath: notify#/channels/audit
+        action: send
+        requestBody:
+          contentType: application/avro            # recognized but stubbed -> clear failure
+          payload:
+            actor: "svc-账单"
+            action: "charge"

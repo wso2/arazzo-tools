@@ -1,0 +1,30 @@
+# Phase 10 — Scenario 4: PROTOBUF stub (fails on purpose). Protobuf is a recognized content type but
+# cannot be encoded without a .proto/descriptor, so Phase 10 registers it as a stub that fails LOUDLY
+# instead of silently mis-encoding. (The real codec + schema config arrive with brokers in Phase 11.)
+#
+# EXPECTED: run **protoFlow** → send fails with:
+#   send on channel "notify/metrics": could not serialize payload: protobuf serialization
+#   (application/x-protobuf) is not yet implemented: it needs a .proto/descriptor ...
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 10 - protobuf stub"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: notify
+    url: ./notifications.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: protoFlow
+    steps:
+      - stepId: emit
+        channelPath: notify#/channels/metrics
+        action: send
+        requestBody:
+          contentType: application/x-protobuf     # recognized but stubbed -> clear failure
+          payload:
+            cpu: 0.83
+            mem: 0.51
