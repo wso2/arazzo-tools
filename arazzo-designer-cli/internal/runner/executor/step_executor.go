@@ -6,6 +6,7 @@
 // FLOW: the runner calls ExecuteStep for EVERY step. ExecuteStep branches:
 //   - AsyncAPI step (channelPath, or an AsyncAPI operationId) -> executeAsyncStep (async_executor.go)
 //   - otherwise                                               -> the HTTP/OpenAPI path in this file
+//
 // Both paths are methods on the SAME StepExecutor, so they share ParamProcessor / SuccessChecker /
 // OutputExtractor / ActionHandler (the async path just feeds them $message instead of $response).
 package executor
@@ -34,7 +35,8 @@ type StepExecutor struct {
 	ServerProcessor    *ServerProcessor
 	OperationFinder    *OperationFinder
 	HTTPExecutor       *httpexec.HTTPExecutor
-	AsyncAdapter       Adapter // transport for AsyncAPI send/receive steps (Phase 9)
+	AsyncAdapter       Adapter             // transport for AsyncAPI send/receive steps (Phase 9)
+	Serializers        *SerializerRegistry // message wire-format encoders/decoders (Phase 10)
 	Sink               telemetry.SpanEventSink
 }
 
@@ -56,7 +58,8 @@ func NewStepExecutor(
 		ServerProcessor:    NewServerProcessor(sourceDescs),
 		OperationFinder:    NewOperationFinder(sourceDescs),
 		HTTPExecutor:       httpexec.NewHTTPExecutor(sink, runtimeParams != nil && runtimeParams.DisableTLSVerification),
-		AsyncAdapter:       NewInMemoryAdapter(), // Phase 9: default in-memory transport (real brokers: Phase 11)
+		AsyncAdapter:       NewInMemoryAdapter(),           // Phase 9: default in-memory transport (real brokers: Phase 11)
+		Serializers:        NewDefaultSerializerRegistry(), // Phase 10: JSON/text serializers (+ Avro/Protobuf stubs)
 		Sink:               sink,
 	}
 }
