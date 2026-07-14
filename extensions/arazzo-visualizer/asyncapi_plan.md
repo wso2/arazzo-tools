@@ -651,7 +651,54 @@ Protobuf/Avro expectations until implemented.
 
 </details>
 
-### Phase 11: First Real Broker Adapter — ❌ NOT STARTED
+### Phase 11: Real Broker Adapters — ✅ DONE (WebSocket + MQTT; Kafka deferred)
+
+Goal: real network transports behind the Phase-9 `Adapter` interface, selected from the AsyncAPI
+document (Arazzo has no broker field — `servers.protocol`/`host` is the source of truth).
+
+**Implemented (CLI runner):**
+- **Shared `messageBuffer`** — [adapter_buffer.go](arazzo-designer-cli/internal/runner/executor/adapter_buffer.go).
+  The per-channel FIFO + correlation matching + wait-until-deadline logic extracted from the
+  in-memory adapter so ALL adapters reuse it (brokers deliver asynchronously; the runner consumes
+  synchronously — this is the queue between). Correlation gained a **raw-bytes fallback**
+  (`bytes.Contains` on `Raw`) for messages that arrive as bytes with no decoded payload.
+- **`WSAdapter`** — [adapter_ws.go](arazzo-designer-cli/internal/runner/executor/adapter_ws.go)
+  (gorilla/websocket). One connection per channel (`ws(s)://host/<channel address>`), a reader
+  goroutine drains incoming frames into the buffer, Send writes text frames (write-mutex, deadlines),
+  TLS via `wss`, dead connections dropped + redialed on next use.
+- **`MQTTAdapter`** — [adapter_mqtt.go](arazzo-designer-cli/internal/runner/executor/adapter_mqtt.go)
+  (eclipse/paho.mqtt.golang). Channel address = topic; QoS 1; `mqtt`→`tcp://…:1883`,
+  `mqtts`→`ssl://…:8883`; **subscribes to a topic BEFORE publishing** so a same-workflow
+  send→receive round trip works against a real broker (the broker echoes our own publication back to
+  our subscription). The paho client sits behind a tiny `mqttClient` interface so unit tests use a fake.
+- **Adapter selection** — [adapter_select.go](arazzo-designer-cli/internal/runner/executor/adapter_select.go).
+  `adapterFor` reads the source's `servers` (first by sorted name): ws/wss → WSAdapter,
+  mqtt/mqtts → MQTTAdapter, **kafka → clear "not yet supported" error**, unknown → clear error,
+  **no servers → the default in-memory adapter** (all Phase 9/10 docs + tests unchanged). Adapters
+  cached per `protocol://host` on the StepExecutor (one connection per broker). On receive, bytes are
+  decoded using the **channel's declared message `contentType`** (`channelMessageContentType`) when
+  the transport carries none — the Phase-10 deserialize path now exercised for real.
+
+**Tests** ([adapter_phase11_test.go](arazzo-designer-cli/internal/runner/executor/adapter_phase11_test.go)):
+buffer raw-byte correlation; WS round trip + connect-failure + **full ExecuteStep e2e against a real
+local WebSocket echo server** (httptest); MQTT subscribe-before-publish + round trip + timeout + URL
+mapping via a fake client; **opt-in real-broker integration test** (`ARAZZO_TEST_MQTT_BROKER`) —
+verified green against broker.hivemq.com; adapter selection incl. kafka/unknown errors, in-memory
+fallback, per-broker caching; contentType fallback. Examples — [examples/async_test/phase11/](examples/async_test/phase11) cover
+**every MQTT/WS/selection case** (all verified e2e; network ones over the **real public internet**):
+01 MQTT round trip (channelPath, HiveMQ), 02 WebSocket echo (`wss`, echo.websocket.org), 03
+kafka-unsupported (fails), 04 MQTT via operationId, 05 MQTT receive timeout (fails), 06 text/plain
+over MQTT, 07 MQTT over TLS (`mqtts`, port 8883), 08 WS receive timeout (fails), 09 unknown protocol
+`amqp` (fails), 10 in-memory fallback (no `servers`, no network). Correlation tokens filter
+public-topic noise + the WS greeting banner. Phase 9 + 10 examples re-run green (in-memory untouched).
+Gotcha surfaced: `correlationId` is a runtime EXPRESSION — a bare literal evaluates to empty
+(unfiltered/FIFO), so the timeout examples pass the token via `$inputs`.
+
+**Deferred (TODO in adapter_select.go):** Kafka adapter + real Avro/Protobuf codecs w/
+schema-registry config (they belong together); MQTT credentials/custom TLS; correlation from
+schema-declared locations.
+
+<details><summary>Original design — kept for reference</summary>
 
 Goal: one production-grade adapter after the generic runtime is proven. Candidates: WebSocket
 (easiest demo), Kafka (enterprise streaming), MQTT (IoT). Responsibilities per adapter: map
@@ -661,6 +708,8 @@ applicable).
 
 Tests: integration tests behind opt-in env vars; unit tests with mocked broker clients;
 end-to-end sample for the chosen broker.
+
+</details>
 
 ### Phase 12: CLI, MCP, Documentation, And Samples — ❌ NOT STARTED (partial samples exist)
 
