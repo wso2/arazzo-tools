@@ -480,7 +480,44 @@ receive times out; `$message.payload` criteria & outputs work.
 
 </details>
 
-### Phase 10: Message Serialization Layer — ❌ NOT STARTED
+### Phase 10: Message Serialization Layer — ✅ DONE (JSON + text; Avro/Protobuf stubbed)
+
+Goal: separate message **shape** (headers/payload the runtime reasons about) from **wire format**
+(the bytes a channel carries) so adapters don't each reinvent serialization.
+
+**Implemented (CLI runner):**
+- **`Serializer` interface + `SerializerRegistry`** — [serializer.go](arazzo-designer-cli/internal/runner/executor/serializer.go).
+  `Serializer` = `Serialize`/`Deserialize` + `Name`/`ContentType`. The registry maps a content type
+  to a serializer: empty → default JSON; `; charset=…` parameters stripped; case-insensitive; a
+  `<x>+json` structured suffix → JSON; an **unknown content type is a hard error** listing the
+  supported types (never guesses a wire format).
+- **Serializers:** JSON (`application/json`, default) and **text/plain** are fully implemented;
+  **Protobuf** (`application/x-protobuf`, `application/protobuf`) and **Avro** (`application/avro`,
+  `avro/binary`) are registered as clear **"needs schema config" stubs** — they select cleanly but
+  fail with an explanatory error on use (schema wiring lands with real brokers in Phase 11).
+- **Wired into the runtime** — [async_executor.go](arazzo-designer-cli/internal/runner/executor/async_executor.go):
+  `executeSend` picks the serializer from `requestBody.contentType` and encodes the payload to
+  `Message.Raw` (replacing the inline `json.Marshal`); `executeReceive` **deserializes `Raw` back
+  into `$message.payload`** when the adapter delivers bytes-only. The in-memory adapter still carries
+  the decoded `Payload`, so existing JSON workflows are byte-for-byte unchanged; the deserialize path
+  is what a real broker (Phase 11) will exercise. Registry lives on `StepExecutor.Serializers`
+  (default set from `NewDefaultSerializerRegistry`).
+
+**Tests:** `serializer_test.go` (registry selection incl. params/case/`+json`/unknown-error; JSON
+round-trip + empty/invalid body; text round-trip; stub serializers fail clearly) and new
+`async_executor_test.go` cases (receive **deserializes raw bytes** into `$message.payload`; text/plain
+send produces raw text; unsupported content type fails at send). Examples cover **every scenario**:
+[examples/async_test/phase10/](examples/async_test/phase10) — 01 text/plain, 02 JSON default,
+03 unsupported-content-type (fails), 04 protobuf-stub (fails), 05 avro-stub (fails),
+06 content-type normalization (`+json` suffix + `; charset` params → JSON). The one path not
+expressible as an example — receive-side deserialize of raw bytes (real-broker path; the in-memory
+adapter always carries a decoded payload) — is covered by the unit test. All green (module
+build/vet/test + examples e2e).
+
+**Deferred:** real Protobuf/Avro/CloudEvents codecs + schema-registry config (Phase 11 alongside the
+brokers that need them); binary passthrough is not yet a distinct serializer (add when a broker needs it).
+
+<details><summary>Original design — kept for reference</summary>
 
 Goal: separate message shape from wire format so adapters don't each reinvent serialization.
 
@@ -497,6 +534,8 @@ fail clearly rather than guess when schema info is absent.
 Tests: JSON send serializes; JSON receive deserializes into `$message.payload`; unsupported
 content type fails clearly; registry selects the right serializer; placeholder tests document
 Protobuf/Avro expectations until implemented.
+
+</details>
 
 ### Phase 11: First Real Broker Adapter — ❌ NOT STARTED
 
