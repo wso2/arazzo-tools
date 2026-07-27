@@ -1,0 +1,42 @@
+# Phase 5 — Scenario 7: the $message.* expressions (AsyncAPI).  ⚠️ ILLUSTRATIVE — NOT RUNNABLE YET.
+#
+# $message.header.<token> and $message.payload[#/pointer] read header/payload data from an incoming
+# asynchronous message (spec §5.9). The EVALUATOR support is implemented in Phase 5 — when a message
+# is in scope it resolves exactly like $response.body does for HTTP.
+#
+# However, there is no AsyncAPI runtime yet (broker connection / receive loop = Phases 9–11), so
+# nothing populates the message at runtime. If you run this today, $message.* resolves to nil
+# ("(not available)"). This file documents the expression syntax that already works in the evaluator
+# (see the unit test evaluator.TestEvaluate_Message for the exact, passing behavior).
+#
+# This is intentionally NOT wired to the live REST API — it shows the async shape only.
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 5 - $message expressions (illustrative; needs the future AsyncAPI runtime)"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: orders
+    url: ./orders-asyncapi.yaml   # (placeholder — an AsyncAPI document would go here)
+    type: asyncapi
+
+workflows:
+  - workflowId: messageExpression
+    steps:
+      - stepId: awaitOrderConfirmed
+        # AsyncAPI step shape (v1.1.0): receive on a channel instead of calling an HTTP operation.
+        channelPath: "/orders/confirmed"
+        action: receive
+        successCriteria:
+          # $message.payload#/... mirrors $response.body#/...
+          - condition: '$message.payload#/status == "confirmed"'
+        outputs:
+          # header value + payload field, read via $message.*
+          correlationId: "$message.header.correlationId"
+          orderId: "$message.payload#/orderId"
+
+    outputs:
+      orderId: $steps.awaitOrderConfirmed.outputs.orderId
+      correlationId: $steps.awaitOrderConfirmed.outputs.correlationId

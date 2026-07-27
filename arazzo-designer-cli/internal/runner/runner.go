@@ -249,6 +249,15 @@ func (r *ArazzoRunner) ExecuteWorkflow(workflowID string, inputs map[string]inte
 	state.TraceID = traceID
 	state.WorkflowSpanID = workflowSpanID
 
+	// Populate v1.1.0 runtime-expression context from the Arazzo document so the evaluator can
+	// resolve $self, $components.*, $sourceDescriptions.<name>.<field>, and $workflows.<id>.*.
+	if self, ok := r.ArazzoDoc["$self"].(string); ok {
+		state.Self = self
+	}
+	state.Components = toMap(r.ArazzoDoc["components"])
+	state.SourceDescriptionObjects = buildSourceDescriptionObjects(r.ArazzoDoc["sourceDescriptions"])
+	state.WorkflowsByID = buildWorkflowsByID(r.Workflows)
+
 	// Get steps
 	steps := toSlice(wf["steps"])
 	if len(steps) == 0 {
@@ -477,6 +486,39 @@ func (r *ArazzoRunner) executeDependencies(wf map[string]interface{}) (map[strin
 	}
 
 	return depOutputs, nil
+}
+
+// buildSourceDescriptionObjects indexes the raw sourceDescriptions list by name, so the evaluator
+// can resolve "$sourceDescriptions.<name>.<field>" (e.g. url, type) per spec §5.9.2. Each value is
+// the Source Description Object as authored ({name, url, type}).
+func buildSourceDescriptionObjects(raw interface{}) map[string]interface{} {
+	out := make(map[string]interface{})
+	for _, sdRaw := range toSlice(raw) {
+		sd := toMap(sdRaw)
+		if sd == nil {
+			continue
+		}
+		if name, ok := sd["name"].(string); ok && name != "" {
+			out[name] = sd
+		}
+	}
+	return out
+}
+
+// buildWorkflowsByID indexes workflows by their workflowId so the evaluator can resolve
+// "$workflows.<id>.<field>".
+func buildWorkflowsByID(workflows []interface{}) map[string]interface{} {
+	out := make(map[string]interface{})
+	for _, wfRaw := range workflows {
+		wf := toMap(wfRaw)
+		if wf == nil {
+			continue
+		}
+		if id, ok := wf["workflowId"].(string); ok && id != "" {
+			out[id] = wf
+		}
+	}
+	return out
 }
 
 // mergeDefaultInputs merges workflow-level parameter defaults into inputs.

@@ -203,7 +203,7 @@ parameter values + request-body payloads (nested) + payload replacement values
 ([parameter_processor.go](../../arazzo-designer-cli/internal/runner/executor/parameter_processor.go)), and the central `processValue` recursion. `jsonpointer` reuses
 `ResolveJSONPointer` (RFC 6901); `jsonpath` reuses the `ojg` engine (RFC 9535). **XPath returns
 a clear "not yet supported" error** (deferred to the next step). LSP: `validateExpressionType`
-([validator.go](../../arazzo-designer-cli/../arazzo-designer-lsp/validator/validator.go)) validates Expression Type Objects on criterion `type` (version required + valid per
+([validator.go](arazzo-designer-lsp/validator/validator.go)) validates Expression Type Objects on criterion `type` (version required + valid per
 type). Plain string expressions are untouched. Tests: `evaluator/selector_test.go`,
 `executor/output_extractor_test.go`, `executor/parameter_processor_test.go`, and an LSP
 `TestExpressionType` — all green; full CLI + LSP suites green.
@@ -243,9 +243,32 @@ Changes:
 Tests: selector from `$response.body`; from `$message.payload`; JSON Pointer; JSONPath; XPath
 on XML; unsupported type/version fails clearly.
 
-### Phase 5: Runtime Expression Upgrade — ❌ NOT STARTED
+### Phase 5: Runtime Expression Upgrade — ✅ DONE (branch `asyncV1-phase5`)
 
-Goal: bring the evaluator to v1.1.0. **Current evaluator lacks `$message`/`$self`/`$sourceDescriptions`/`$components` and compound boolean criteria.**
+Implemented in `internal/evaluator/evaluator.go` (+ `internal/models/models.go`, `internal/runner/runner.go`):
+- **New expression roots (spec §5.9):** `$self`; `$message.header.*` / `$message.payload[#/…]` (AsyncAPI,
+  resolves from the evaluation context — nil until an async runtime populates it); `$components.<type>.<name>`;
+  `$workflows.<id>.<field>`; `$url` / `$method` (from context).
+- **`$sourceDescriptions.<name>.<ref>` with the §5.9.2 two-step priority:** match `<ref>` against an
+  `operationId` (OpenAPI/AsyncAPI) or `workflowId` (Arazzo) in the referenced doc first; only on no match,
+  treat `<ref>` as a Source Description Object field (e.g. `url`, `type`). Source kind comes from the SD
+  Object's `type` (fallback: the spec's marker key). NOTE: this is the **general expression** form; the
+  operation-targeting forms in `operationId` / `operationPath` were already handled by `operation_finder.go`.
+- **Compound boolean criteria:** `EvaluateSimpleCondition` is now a quote-aware recursive-descent evaluator
+  supporting `!`, `&&`, `||`, parentheses, plus the existing comparisons / property-deref / array-indexing
+  (operands run through the full expression evaluator). Signature unchanged, so all callers are untouched.
+- **Embedded `{$…}` serialization:** primitives embed as text; objects/arrays embed as JSON; unresolved
+  placeholders are left in place with a context-aware warning.
+- **State threading:** `ExecutionState` gains `Self`, `Components`, `SourceDescriptionObjects`, `WorkflowsByID`,
+  populated by the runner from the Arazzo document.
+- **LSP:** no change needed — `validateRuntimeExpressions` only special-cases `steps`/`workflows` (no default
+  branch), so the new roots are not flagged.
+- **Tests:** `internal/evaluator/evaluator_phase5_test.go` (all roots, §5.9.2 priority, compound/grouped
+  conditions, embedded JSON). Build + vet + full suites green on both modules.
+- **Deferred / not done:** case-insensitive string comparison (no clear spec requirement located; left
+  case-sensitive — revisit if the spec mandates it for a specific operator).
+
+Goal (original): bring the evaluator to v1.1.0. **Previously the evaluator lacked `$message`/`$self`/`$sourceDescriptions`(general)/`$components` and compound boolean criteria.**
 
 Changes:
 - Add expression roots to [evaluator.go](../../arazzo-designer-cli/internal/evaluator/evaluator.go):
@@ -267,7 +290,7 @@ Tests: `$message.payload.status == "confirmed"`; `$message.header.correlationId`
 resolves; `$sourceDescriptions.petstore.url` resolves; object/array embedded serialization;
 compound criteria with `&&`/`||`/`!`/parentheses/indexing.
 
-### Phase 6: Payload Replacement Upgrade — 🟡 MOSTLY DONE (only XPath targets remain)
+### Phase 6: Payload Replacement Upgrade — ✅ DONE except XPath (deferred to the end-of-project XPath push)
 
 Status:
 - **Value side — ✅ done (Phase 4):** a replacement `value` can be a literal, a runtime expression,
@@ -275,12 +298,15 @@ Status:
 - **Target side — ✅ done for JSON Pointer + JSONPath:** `applyReplacements` now reads
   `targetSelectorType` (string or Expression Type Object, via `evaluator.ResolveExpressionType`) and
   routes the `target` accordingly — **JSON Pointer** (`setJSONPointer`, the default when omitted) and
-  **JSONPath** (`evaluator.SetJSONPath`, backed by `ojg`'s `Set`). Tests: `evaluator.TestSetJSONPath`
-  and `executor.TestApplyReplacements_JSONPathTarget`; example `phase4_selectors/07-jsonpath-replacement-target`.
+  **JSONPath** (`evaluator.SetJSONPath`, backed by `ojg`'s `Set`). **JSON Pointer targets support array
+  indices** (e.g. `/items/0/product_id`, mirroring the read side) and a failed/nil replacement value
+  is skipped rather than injecting garbage. Tests: `evaluator.TestSetJSONPath`,
+  `executor.TestApplyReplacements_JSONPathTarget`, `executor.TestApplyReplacements_JSONPointerArrayIndex`;
+  examples `phase4_selectors/07-jsonpath-replacement-target` and `08-jsonpointer-array-target`.
 - **Target side — ❌ XPath only:** an `xpath` `targetSelectorType` logs a clear "not yet supported"
   warning. This is the **only** remaining replacement gap and it **depends on the XPath engine that
-  Phase 4 also deferred** — so finish it together with the Phase 4 XPath selectors as one final
-  XPath push.
+  Phase 4 also deferred** — so finish it together with the Phase 4 XPath selectors as one final XPath
+  push (see the "End-of-project cleanup batch" note under Known Issues / Bugs).
 
 **Remaining for the XPath follow-up:**
 - Add the XML/XPath engine and route `xpath` replacement targets (and `xpath` selectors from Phase 4) to it.
@@ -288,23 +314,63 @@ Status:
   (JSON default — JSON Pointer — is already in place.)
 - Optional: LSP validation of `targetSelectorType` as an Expression Type Object (version required + valid per type).
 
-### Phase 7: OpenAPI Runtime Preservation And Step Dependencies — ❌ NOT STARTED
+### Phase 7: Step Dependencies (`dependsOn`) — ❌ NOT STARTED
 
-Goal: dependency-aware ordering without breaking current REST flows. **Runner currently ignores `Step.DependsOn` and runs steps sequentially.**
+**Runner currently ignores `Step.DependsOn`** (parsed into the model at `models/arazzo.go`, never read by the
+execution loop) and runs steps in document order + control flow.
 
-Changes:
-- Keep current sequential execution when no dependencies are declared.
-- Honor explicit step `dependsOn`; infer dependencies from `$steps.<id>.outputs.*` where safe.
-- Detect impossible graphs: missing step id (local, `$workflows.*` cross-workflow,
-  `$sourceDescriptions.*` cross-document), cycles, never-completing deps.
-- `dependsOn` is a **prerequisite relationship only** — it does not *trigger* the referenced
-  step and must not re-execute an already-completed prerequisite; the runner waits if needed.
-- Keep `onSuccess`/`onFailure`/`goto`/`end`/`retry` behavior compatible; clarify precedence
-  between retry exhaustion and following failure actions.
+**Design decision (grounded in spec §5.8.5.1):** `dependsOn` is a **completion GATE**, not a reordering
+directive and not a trigger. The spec: *"A list of steps that MUST be completed before this step can be
+executed. `dependsOn` only establishes a prerequisite relationship … and does not trigger execution of the
+referenced steps,"* and it is intended primarily for *non-blocking/asynchronous* steps. Therefore:
+- **NO reordering, NO model mutation, NO triggering.** The runner keeps executing in the existing order
+  (document order + `goto`/`onSuccess`/`onFailure`/`retry`, all unchanged). It only adds a *gate check*
+  before each step.
+- **"Completed" = the prerequisite step ran and reached terminal SUCCESS.** A prerequisite that ran but
+  failed does NOT satisfy the gate.
 
-Tests: existing OpenAPI examples still run; explicit `dependsOn` waits; cross-workflow
-`$workflows.<wf>.steps.<s>` resolves & waits; completed step not re-executed; implicit
-`$steps.x.outputs.y` dependency respected; cycle fails clearly; retry still works.
+**Runtime gate (CLI), before executing each step:**
+- **REST / OpenAPI (synchronous):** a prerequisite is either done or not. If a `dependsOn` step has not
+  completed → **HARD ERROR**: mark this step failed and fail the workflow with a clear message naming the
+  step and the unmet dependency. No waiting/timeout.
+- **AsyncAPI (async / non-blocking):** only if a prerequisite **started but hasn't reported completion yet**,
+  **wait up to a hardcoded timeout** for it to complete → proceed on completion, else hard error. A
+  prerequisite that **never started** is an immediate hard error (no waiting). *This wait branch is designed
+  here but WIRED with the AsyncAPI runtime (Phases 8–11) — no async step executes before then, so Phase 7's
+  implemented deliverable is the synchronous gate + LSP validation.*
+- **Reference forms:** local `stepId` → full runtime gate; `$workflows.<wf>.steps.<s>` (cross-workflow) →
+  check that step's completion if the workflow ran, else error; `$sourceDescriptions.<name>.<wf>.steps.<s>`
+  (cross-document) → **validate the form only**; execution rides with the deferred external-Arazzo-source batch.
+
+**LSP static validation** (catch at authoring time — extends the existing `dependsOn` checks that already
+validate the reference forms + local step existence):
+- missing / unknown `stepId` → error (partly exists).
+- **cycles** (A→B→A) → error.
+- a dependency that **cannot have completed** by document/flow order (e.g. defined later with no path that
+  runs it first) → error/warning so the author fixes it before running.
+
+**Bundled fix — WORKFLOW-level `dependsOn` cycle detection (pre-existing gap, small change, same area):**
+The pre-existing WORKFLOW-level `dependsOn` is otherwise correct — unlike step `dependsOn` it *does* TRIGGER
+the referenced workflows (spec §5.8.4.1 has no "does not trigger" clause; a workflow is a separate entry
+point that must be run to complete), collects their outputs into `$dependencies.<wfId>.*`, and fails clearly
+on a failed/unknown dependency. BUT `executeDependencies` (`runner.go`) has **no visited/in-progress guard**,
+so circular workflow deps (A dependsOn B, B dependsOn A) **infinite-recurse → stack-overflow crash**. Add a
+visited set threaded through `ExecuteWorkflow`/`executeDependencies` to detect the cycle and **error clearly**
+instead. (Keep the trigger behavior.) Optional while here: warn instead of silently `continue`-skipping a
+cross-document `$sourceDescriptions.<name>.<workflowId>` dependency (full cross-doc execution stays deferred).
+
+**Visualization (SEPARATE task, not Phase-7 runtime):** because there is no reordering, the execution
+highlight stays sequential (unchanged). Add a **distinct `dependsOn` edge** to the graph and an **error/blocked
+state** on a step whose gate fails. Tracked separately (belongs with the Phase-8 visualization work).
+
+**Not in Phase 7:** async wait-with-timeout implementation (lands with Phases 8–11); cross-document
+`dependsOn` execution (end-of-project Arazzo-source batch); any reordering/topological scheduling (explicitly
+rejected as non-spec).
+
+Tests: existing OpenAPI examples run unchanged; a step whose local `dependsOn` prerequisite completed runs
+fine; a step whose `dependsOn` prerequisite did not run → workflow fails with a clear message; a failed
+prerequisite does not satisfy the gate; LSP flags a cycle and a missing `stepId`; a **circular WORKFLOW-level
+`dependsOn`** errors clearly instead of crashing (stack overflow).
 
 ### Phase 8: AsyncAPI Model Resolution And Visualization — ❌ NOT STARTED
 
@@ -427,6 +493,9 @@ Phase 6 depends on Phase 4; Phase 7 is independent and can be parallelized with 
 
 ## Known Issues / Bugs (separate from the v1.1.0 phases — fix independently)
 
+> **End-of-project cleanup batch.** None of these are v1.1.0 phase work. Best tackled together at the
+> very end, after Phases 1–12, in one final pass: (1) the final XPath push (XPath selectors + `targetSelectorType: xpath`, see Phases 4/6), (2) the server-stop UI bug below, and (3) executable `type: arazzo` source descriptions below.
+
 ### BUG: stopping the Arazzo server doesn't reset the "server running" UI state
 **Not related to v1.1.0** — a pre-existing extension lifecycle bug; tracked here so it isn't lost.
 
@@ -469,3 +538,26 @@ reset on stop: status-bar play/stop toggle, CodeLenses, and the webview prompt.
 `initializeMCPServerRunner`/task-end listener), `arazzo-designer-extension/src/extension.ts`
 (`arazzoServerRunning` context callback, status-bar items), `mcp/runWorkflowCodeLens.ts`,
 `mcp/mcpPlaygroundWebview.ts` (webview running state).
+
+### GAP: `type: arazzo` source descriptions (external Arazzo documents) are not executable
+**Pre-existing since v1.0.1 — NOT a v1.1.0 item.** Recorded here so it isn't lost; tackle at the very
+end alongside the final XPath push and the server-stop bug (do not weave it into the phases).
+
+**Current behavior:**
+- `loader.LoadSourceDescriptions` loads/parses *any* source (including `type: arazzo`) into the sources
+  map, and Phase 5 can now READ `$sourceDescriptions.<name>.<workflowId>` as a *value* (returns the
+  external workflow object — see `findWorkflowIDInSpec`).
+- BUT the runner only ever **executes local** workflows: `executeDependencies` explicitly skips
+  `$sourceDescriptions.*` deps (`runner.go` ~line 476), and step `workflowId` / `goto` / `dependsOn`
+  in the cross-document form are never actually invoked.
+
+**Missing:** invoking a workflow defined in an *external* Arazzo source — i.e. a step `workflowId`
+(or `operationId`) / `goto` / `dependsOn` pointing at
+`$sourceDescriptions.<name>.<workflowId>[.steps.<stepId>]` should load that external document's
+workflow and execute it, threading inputs/outputs across documents. This also covers the deep
+§5.5.2 external-Arazzo-document identity matching already flagged as deferred in Phase 3.
+
+**Scope when done:** resolve external workflow references; execute them via a sub-runner over the
+loaded external Arazzo doc; map inputs → external workflow inputs and collect its outputs back;
+guard against cycles across documents. (The LSP already validates the external `dependsOn` form, so
+that side needs no change.)

@@ -1,0 +1,46 @@
+# Phase 5 — Scenario 1: COMPOUND boolean success criteria.
+#
+# Before Phase 5 a "simple" criterion could only be ONE comparison ("$statusCode == 200").
+# Now it understands boolean composition: && (and), || (or), ! (not), and parentheses for grouping.
+# Each step below uses a compound condition that should PASS against the live Toolshop responses.
+#
+# How to verify: run the workflow — every step's criteria pass, so the workflow completes
+# successfully. Flip a value (e.g. change 200 to 500) to see a step correctly fail.
+#
+# Runs against the live Toolshop API (needs internet).
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 5 - Compound boolean success criteria"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: compoundCriteria
+    steps:
+      - stepId: listBrands
+        operationId: getBrands
+        successCriteria:
+          # AND + grouped OR + a JSON-Pointer presence check on the first brand's id
+          - condition: "($statusCode == 200 || $statusCode == 201) && $response.body#/0/id != null"
+        outputs:
+          firstBrandId: "$response.body#/0/id"
+
+      - stepId: listProducts
+        operationId: getProducts
+        successCriteria:
+          # AND with a numeric comparison
+          - condition: "$statusCode == 200 && $response.body#/data/0/price >= 0"
+          # NOT applied to a grouped comparison
+          - condition: "!($statusCode == 404)"
+        outputs:
+          firstProductPrice: "$response.body#/data/0/price"
+
+    outputs:
+      firstBrandId: $steps.listBrands.outputs.firstBrandId
+      firstProductPrice: $steps.listProducts.outputs.firstProductPrice

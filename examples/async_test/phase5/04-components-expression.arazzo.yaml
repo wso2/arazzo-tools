@@ -1,0 +1,38 @@
+# Phase 5 — Scenario 4: the $components.<type>.<name> expression.
+#
+# $components reads reusable objects from the document's top-level `components` (spec §5.9). Here we
+# define a reusable parameter and read one of its fields as an expression value.
+#
+# How to verify: run it — the workflow output `configuredLimit` equals the component's value ("10"),
+# and `paramName` equals "limit".
+#
+# Runs against the live Toolshop API (needs internet).
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 5 - $components expression"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+components:
+  parameters:
+    defaultLimit:
+      name: limit
+      value: "10"
+
+workflows:
+  - workflowId: componentsExpression
+    steps:
+      - stepId: ping
+        operationId: getBrands
+        successCriteria:
+          - condition: "$statusCode == 200"
+
+    outputs:
+      configuredLimit: "$components.parameters.defaultLimit.value"   # -> "10"
+      paramName: "$components.parameters.defaultLimit.name"          # -> "limit"

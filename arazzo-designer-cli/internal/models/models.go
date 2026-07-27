@@ -50,6 +50,17 @@ type ExecutionState struct {
 	DependencyOutputs map[string]map[string]interface{} // workflowId -> outputs
 	RuntimeParams     *RuntimeParams
 
+	// v1.1.0 runtime-expression context (populated by the runner from the Arazzo document):
+	//   Self                     -> resolves "$self" (the document's $self / canonical URI).
+	//   Components               -> resolves "$components.<type>.<name>" (the Components Object).
+	//   SourceDescriptionObjects -> name -> the Source Description Object ({name,url,type}); used for
+	//                               "$sourceDescriptions.<name>.<field>" access (spec §5.9.2 fallback).
+	//   WorkflowsByID            -> workflowId -> the workflow map; resolves "$workflows.<id>.<field>".
+	Self                     string
+	Components               map[string]interface{}
+	SourceDescriptionObjects map[string]interface{}
+	WorkflowsByID            map[string]interface{}
+
 	// Trace context — populated by the runner so step/HTTP executors can
 	// emit child spans under the workflow span.
 	TraceID        string

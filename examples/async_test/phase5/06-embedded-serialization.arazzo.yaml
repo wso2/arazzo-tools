@@ -1,0 +1,80 @@
+# Phase 5 — Scenario 6: embedded-expression serialization in a {$...} template.
+#
+# When an expression is embedded inside a larger string with {$...}, the result is serialized:
+#   - primitives  -> their text form          (e.g. "Bearer abc")
+#   - objects/arrays -> JSON                  (e.g. {"product_id":"x","quantity":2})  (was Go's map[...])
+# Unresolved {$...} placeholders are left in place with a warning.
+#
+# Templates are interpolated for PARAMETER VALUES and REQUEST BODIES (not for plain outputs), so this
+# example puts them in the addItem request body. The `debug_*` fields are ignored by the API (it only
+# reads product_id + quantity), so the call still returns 200.
+#
+# How to verify: run it with an input `order` object, e.g.
+#     order: { "product_id": "ignored", "quantity": 2 }
+# Inspect the outgoing request body (the extension's request view / runner logs): `debug_order` will
+# be the JSON serialization of your `order` object, and `debug_label` will be a plain interpolated
+# string. (The unit test evaluator.TestEmbeddedSerialization is the exact proof.)
+#
+# Runs against the live Toolshop API (needs internet).
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 5 - embedded {$...} serialization"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: embeddedSerialization
+    inputs:
+      type: object
+      properties:
+        order:
+          type: object   # an OBJECT input — embedded as JSON below
+      required:
+        - order
+    steps:
+      - stepId: listProducts
+        operationId: getProducts
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          productsBody: "$response.body"
+
+      - stepId: createCart
+        operationId: createCart
+        outputs:
+          cartId: "$response.body#/id"
+
+      - stepId: addProductToCart
+        operationId: addItem
+        parameters:
+          - name: cartId
+            in: path
+            value: "$steps.createCart.outputs.cartId"
+        requestBody:
+          contentType: application/json
+          payload:
+            product_id: "PLACEHOLDER"
+            quantity: 1
+            # OBJECT embedded in a string -> serialized as JSON in the sent body:
+            debug_order: "order-context={$inputs.order}"
+            # PRIMITIVE embedded in a string -> plain text:
+            debug_label: "cart={$steps.createCart.outputs.cartId}"
+          replacements:
+            - target: /product_id
+              value:
+                context: $steps.listProducts.outputs.productsBody
+                selector: /data/0/id
+                type: jsonpointer
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          addResult: "$response.body#/result"
+
+    outputs:
+      addResult: $steps.addProductToCart.outputs.addResult

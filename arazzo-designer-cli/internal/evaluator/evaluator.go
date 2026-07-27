@@ -3,6 +3,7 @@
 package evaluator
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"regexp"
@@ -109,11 +110,280 @@ func EvaluateExpression(expr string, state *models.ExecutionState, sourceDescs m
 		return evaluateDependenciesExpression(expr, state)
 	}
 
-	// Handle $workflows.workflowId -- not typically used in runner context
-	// Handle $url, $method -- not commonly used
-	// Handle $components references -- not commonly used at runtime
+	// --- v1.1.0 runtime-expression roots (spec §5.9) ---
+
+	// $self -> the document's canonical URI (the $self field).
+	if expr == "$self" {
+		if state != nil && state.Self != "" {
+			return state.Self
+		}
+		return nil
+	}
+
+	// $message.header.X / $message.payload[.path] / $message (AsyncAPI messages).
+	if expr == "$message" || strings.HasPrefix(expr, "$message.") {
+		return evaluateMessageExpression(expr, context)
+	}
+
+	// $sourceDescriptions.<name>.<reference> (spec §5.9.2 resolution priority).
+	if strings.HasPrefix(expr, "$sourceDescriptions.") {
+		return evaluateSourceDescriptionsExpression(expr, state, sourceDescs)
+	}
+
+	// $components.<type>.<name> (the Components Object).
+	if strings.HasPrefix(expr, "$components.") {
+		return evaluateComponentsExpression(expr, state)
+	}
+
+	// $workflows.<workflowId>.<field>.
+	if strings.HasPrefix(expr, "$workflows.") {
+		return evaluateWorkflowsExpression(expr, state)
+	}
+
+	// $url / $method of the current request (from context when available).
+	if expr == "$url" {
+		if context != nil {
+			return context["url"]
+		}
+		return nil
+	}
+	if expr == "$method" {
+		if context != nil {
+			return context["method"]
+		}
+		return nil
+	}
 
 	return nil
+}
+
+// evaluateMessageExpression resolves $message.* runtime expressions (AsyncAPI). The message lives in
+// the evaluation context under "message" as {header: {...}, payload: ...}; absent until an AsyncAPI
+// runtime populates it, in which case this returns nil (the expression is simply unresolved).
+func evaluateMessageExpression(expr string, context map[string]interface{}) interface{} {
+	if context == nil {
+		return nil
+	}
+	msg, ok := context["message"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	if expr == "$message" {
+		return msg
+	}
+	// $message.header.<token> — single header value (case-insensitive fallback like $response.header).
+	if strings.HasPrefix(expr, "$message.header.") {
+		name := strings.TrimPrefix(expr, "$message.header.")
+		headers, _ := msg["header"].(map[string]interface{})
+		if headers == nil {
+			return nil
+		}
+		if v, ok := headers[name]; ok {
+			return v
+		}
+		for k, v := range headers {
+			if strings.EqualFold(k, name) {
+				return v
+			}
+		}
+		return nil
+	}
+	// $message.payload or $message.payload.<path> (the #/pointer form is handled by evaluateJSONPointer).
+	if strings.HasPrefix(expr, "$message.payload") {
+		rest := strings.TrimPrefix(expr, "$message.payload")
+		payload := msg["payload"]
+		if rest == "" {
+			return payload
+		}
+		if strings.HasPrefix(rest, ".") {
+			return navigatePath(payload, strings.TrimPrefix(rest, "."))
+		}
+		return payload
+	}
+	return nil
+}
+
+// evaluateSourceDescriptionsExpression resolves $sourceDescriptions.<name>.<reference> per spec
+// §5.9.2: first try to match <reference> against an operationId (OpenAPI/AsyncAPI source) or a
+// workflowId (Arazzo source) in the referenced description; only if there is no match, treat
+// <reference> as a field of the Source Description Object (e.g. url, type).
+func evaluateSourceDescriptionsExpression(expr string, state *models.ExecutionState, sourceDescs map[string]interface{}) interface{} {
+	rest := strings.TrimPrefix(expr, "$sourceDescriptions.")
+	name := rest
+	reference := ""
+	if dot := strings.Index(rest, "."); dot >= 0 {
+		name = rest[:dot]
+		reference = rest[dot+1:]
+	}
+	if name == "" {
+		return nil
+	}
+
+	// The loaded spec content (keyed by source name) used for operationId / workflowId matching.
+	var spec map[string]interface{}
+	if sourceDescs != nil {
+		spec, _ = sourceDescs[name].(map[string]interface{})
+	}
+
+	// Bare "$sourceDescriptions.<name>" -> the Source Description Object, if known.
+	if reference == "" {
+		return sourceDescriptionObject(state, name)
+	}
+
+	// Split the reference into an id segment (matched against operationId/workflowId) and any
+	// trailing navigation applied to the matched object.
+	idSeg := reference
+	remainder := ""
+	if dot := strings.Index(reference, "."); dot >= 0 {
+		idSeg = reference[:dot]
+		remainder = reference[dot+1:]
+	}
+
+	// Priority 1: operationId / workflowId match in the referenced document.
+	if spec != nil {
+		var matched map[string]interface{}
+		var found bool
+		switch sourceKind(state, name, spec) {
+		case "arazzo":
+			matched, found = findWorkflowIDInSpec(spec, idSeg)
+		case "asyncapi":
+			matched, found = findAsyncAPIOperationIDInSpec(spec, idSeg)
+		default: // openapi
+			matched, found = findOperationIDInSpec(spec, idSeg)
+		}
+		if found {
+			if remainder == "" {
+				return matched
+			}
+			return navigatePath(matched, remainder)
+		}
+	}
+
+	// Priority 2: a field of the Source Description Object (e.g. url, type, name).
+	if sd, ok := sourceDescriptionObject(state, name).(map[string]interface{}); ok {
+		return navigatePath(sd, reference)
+	}
+	return nil
+}
+
+// sourceDescriptionObject returns the authored Source Description Object ({name,url,type}) for a name.
+func sourceDescriptionObject(state *models.ExecutionState, name string) interface{} {
+	if state == nil || state.SourceDescriptionObjects == nil {
+		return nil
+	}
+	return state.SourceDescriptionObjects[name]
+}
+
+// sourceKind reports the referenced source's kind ("openapi", "asyncapi", or "arazzo"), preferring
+// the declared type on the Source Description Object and falling back to the spec's marker key.
+func sourceKind(state *models.ExecutionState, name string, spec map[string]interface{}) string {
+	if sd, ok := sourceDescriptionObject(state, name).(map[string]interface{}); ok {
+		if t, _ := sd["type"].(string); t != "" {
+			return t
+		}
+	}
+	if spec != nil {
+		if _, ok := spec["openapi"]; ok {
+			return "openapi"
+		}
+		if _, ok := spec["asyncapi"]; ok {
+			return "asyncapi"
+		}
+		if _, ok := spec["arazzo"]; ok {
+			return "arazzo"
+		}
+	}
+	return "openapi"
+}
+
+// findOperationIDInSpec searches an OpenAPI spec's paths for an operation with the given operationId.
+func findOperationIDInSpec(spec map[string]interface{}, opID string) (map[string]interface{}, bool) {
+	paths, ok := spec["paths"].(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+	for _, pathItemRaw := range paths {
+		pathItem, ok := pathItemRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		for _, opRaw := range pathItem {
+			op, ok := opRaw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if id, _ := op["operationId"].(string); id == opID {
+				return op, true
+			}
+		}
+	}
+	return nil, false
+}
+
+// findAsyncAPIOperationIDInSpec looks up an operation in an AsyncAPI 3.x spec, where the top-level
+// `operations` field is a map keyed by operation id.
+func findAsyncAPIOperationIDInSpec(spec map[string]interface{}, opID string) (map[string]interface{}, bool) {
+	ops, ok := spec["operations"].(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+	op, ok := ops[opID].(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+	return op, true
+}
+
+// findWorkflowIDInSpec searches an Arazzo spec's workflows for one with the given workflowId.
+func findWorkflowIDInSpec(spec map[string]interface{}, wfID string) (map[string]interface{}, bool) {
+	wfs, ok := spec["workflows"].([]interface{})
+	if !ok {
+		return nil, false
+	}
+	for _, wfRaw := range wfs {
+		wf, ok := wfRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if id, _ := wf["workflowId"].(string); id == wfID {
+			return wf, true
+		}
+	}
+	return nil, false
+}
+
+// evaluateComponentsExpression resolves $components.<type>.<name> against the Components Object.
+func evaluateComponentsExpression(expr string, state *models.ExecutionState) interface{} {
+	if state == nil || state.Components == nil {
+		return nil
+	}
+	rest := strings.TrimPrefix(expr, "$components.")
+	if rest == "" {
+		return state.Components
+	}
+	return navigatePath(state.Components, rest)
+}
+
+// evaluateWorkflowsExpression resolves $workflows.<workflowId>.<field> against the document's workflows.
+func evaluateWorkflowsExpression(expr string, state *models.ExecutionState) interface{} {
+	if state == nil || state.WorkflowsByID == nil {
+		return nil
+	}
+	rest := strings.TrimPrefix(expr, "$workflows.")
+	id := rest
+	field := ""
+	if dot := strings.Index(rest, "."); dot >= 0 {
+		id = rest[:dot]
+		field = rest[dot+1:]
+	}
+	wf, ok := state.WorkflowsByID[id]
+	if !ok {
+		return nil
+	}
+	if field == "" {
+		return wf
+	}
+	return navigatePath(wf, field)
 }
 
 // evaluateJSONPointer handles expressions like $response.body#/path/to/value
@@ -405,30 +675,192 @@ func HandleArrayAccess(expr string, state *models.ExecutionState) interface{} {
 	return result
 }
 
-// EvaluateSimpleCondition evaluates a simple condition like "$statusCode == 200".
+// EvaluateSimpleCondition evaluates an Arazzo "simple" condition. Beyond a single comparison
+// ("$statusCode == 200") it supports boolean composition: logical NOT (!), AND (&&), OR (||), and
+// parentheses for grouping — e.g. "($statusCode == 200 && $response.body.ok == true) || !$error".
+// Operands are runtime expressions or literals (resolveValue) and comparisons reuse compareValues.
 func EvaluateSimpleCondition(condition string, state *models.ExecutionState, sourceDescs map[string]interface{}, context map[string]interface{}) bool {
 	condition = strings.TrimSpace(condition)
+	if condition == "" {
+		return false
+	}
+	p := &condParser{s: condition, state: state, src: sourceDescs, ctx: context}
+	result := p.parseOr()
+	p.skipWS()
+	// A well-formed condition is fully consumed with balanced parentheses. If not (trailing/unparsed
+	// input, or a missing closing paren), the condition is malformed — fail safe to false rather than
+	// returning a partial-parse result that could wrongly read as true.
+	if p.bad || p.pos != len(p.s) {
+		log.Printf("Warning: malformed condition %q (unparsed input or unbalanced parentheses); treating as false", condition)
+		return false
+	}
+	return result
+}
 
-	// Parse the condition: left operator right
-	operators := []string{"==", "!=", ">=", "<=", ">", "<"}
-	for _, op := range operators {
-		idx := strings.Index(condition, op)
-		if idx < 0 {
+// condParser is a small recursive-descent evaluator for boolean conditions. Precedence (lowest to
+// highest): || , && , unary ! , then a primary which is either a parenthesised sub-condition or a
+// single comparison. Quotes are respected so operators inside string literals are not treated as
+// syntax.
+type condParser struct {
+	s     string
+	pos   int
+	bad   bool // set when the condition is malformed (e.g. a missing closing parenthesis)
+	state *models.ExecutionState
+	src   map[string]interface{}
+	ctx   map[string]interface{}
+}
+
+func (p *condParser) parseOr() bool {
+	v := p.parseAnd()
+	for {
+		p.skipWS()
+		if p.hasPrefix("||") {
+			p.pos += 2
+			r := p.parseAnd()
+			v = v || r
 			continue
 		}
-
-		left := strings.TrimSpace(condition[:idx])
-		right := strings.TrimSpace(condition[idx+len(op):])
-
-		leftVal := resolveValue(left, state, sourceDescs, context)
-		rightVal := resolveValue(right, state, sourceDescs, context)
-
-		return compareValues(leftVal, rightVal, op)
+		break
 	}
+	return v
+}
 
-	// If no operator found, evaluate as a truthy expression
-	val := resolveValue(condition, state, sourceDescs, context)
-	return isTruthy(val)
+func (p *condParser) parseAnd() bool {
+	v := p.parseUnary()
+	for {
+		p.skipWS()
+		if p.hasPrefix("&&") {
+			p.pos += 2
+			r := p.parseUnary()
+			v = v && r
+			continue
+		}
+		break
+	}
+	return v
+}
+
+func (p *condParser) parseUnary() bool {
+	p.skipWS()
+	// A leading '!' is logical NOT — but not '!=', which is a comparison operator.
+	if p.pos < len(p.s) && p.s[p.pos] == '!' && !(p.pos+1 < len(p.s) && p.s[p.pos+1] == '=') {
+		p.pos++
+		return !p.parseUnary()
+	}
+	return p.parsePrimary()
+}
+
+func (p *condParser) parsePrimary() bool {
+	p.skipWS()
+	if p.pos < len(p.s) && p.s[p.pos] == '(' {
+		p.pos++
+		v := p.parseOr()
+		p.skipWS()
+		if p.pos < len(p.s) && p.s[p.pos] == ')' {
+			p.pos++
+		} else {
+			p.bad = true // opened '(' without a matching ')'
+		}
+		return v
+	}
+	return p.evalComparison(p.readComparisonChunk())
+}
+
+// readComparisonChunk consumes a single comparison operand-and-operator run, stopping at a top-level
+// boolean operator (&&, ||) or a closing paren, while ignoring those inside quoted strings.
+func (p *condParser) readComparisonChunk() string {
+	start := p.pos
+	var quote byte
+	for p.pos < len(p.s) {
+		c := p.s[p.pos]
+		if quote != 0 {
+			// An escaped character (e.g. \") inside a string literal must not end the string.
+			if c == '\\' && p.pos+1 < len(p.s) {
+				p.pos += 2
+				continue
+			}
+			if c == quote {
+				quote = 0
+			}
+			p.pos++
+			continue
+		}
+		switch {
+		case c == '\'' || c == '"':
+			quote = c
+		case c == ')':
+			return strings.TrimSpace(p.s[start:p.pos])
+		case c == '&' && p.pos+1 < len(p.s) && p.s[p.pos+1] == '&':
+			return strings.TrimSpace(p.s[start:p.pos])
+		case c == '|' && p.pos+1 < len(p.s) && p.s[p.pos+1] == '|':
+			return strings.TrimSpace(p.s[start:p.pos])
+		}
+		p.pos++
+	}
+	return strings.TrimSpace(p.s[start:p.pos])
+}
+
+// evalComparison evaluates a single comparison chunk: "left OP right" for a relational operator, or
+// a bare expression treated as truthy when no operator is present.
+func (p *condParser) evalComparison(chunk string) bool {
+	if chunk == "" {
+		return false
+	}
+	// Two-character operators first so '>=' / '<=' / '==' / '!=' win over '>' / '<'.
+	for _, op := range []string{"==", "!=", ">=", "<="} {
+		if idx := topLevelIndex(chunk, op); idx >= 0 {
+			return p.compareSides(chunk[:idx], chunk[idx+len(op):], op)
+		}
+	}
+	for _, op := range []string{">", "<"} {
+		if idx := topLevelIndex(chunk, op); idx >= 0 {
+			return p.compareSides(chunk[:idx], chunk[idx+len(op):], op)
+		}
+	}
+	return isTruthy(resolveValue(strings.TrimSpace(chunk), p.state, p.src, p.ctx))
+}
+
+func (p *condParser) compareSides(left, right, op string) bool {
+	l := resolveValue(strings.TrimSpace(left), p.state, p.src, p.ctx)
+	r := resolveValue(strings.TrimSpace(right), p.state, p.src, p.ctx)
+	return compareValues(l, r, op)
+}
+
+func (p *condParser) skipWS() {
+	for p.pos < len(p.s) && (p.s[p.pos] == ' ' || p.s[p.pos] == '\t' || p.s[p.pos] == '\n' || p.s[p.pos] == '\r') {
+		p.pos++
+	}
+}
+
+func (p *condParser) hasPrefix(s string) bool {
+	return strings.HasPrefix(p.s[p.pos:], s)
+}
+
+// topLevelIndex finds the first index of op in s that lies outside any quoted string, or -1.
+func topLevelIndex(s, op string) int {
+	var quote byte
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if quote != 0 {
+			// Skip an escaped character so an escaped quote doesn't prematurely end the string.
+			if c == '\\' && i+1 < len(s) {
+				i++
+				continue
+			}
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		if c == '\'' || c == '"' {
+			quote = c
+			continue
+		}
+		if strings.HasPrefix(s[i:], op) {
+			return i
+		}
+	}
+	return -1
 }
 
 // resolveValue resolves a value from an expression or literal.
@@ -600,8 +1032,9 @@ func processValue(value interface{}, state *models.ExecutionState, sourceDescs m
 		if IsSelectorObject(v) {
 			result, err := EvaluateSelectorObject(v, state, sourceDescs, nil)
 			if err != nil {
+				// Fail safe: don't leak the raw {context,selector,type} descriptor downstream.
 				log.Printf("Warning: selector object evaluation failed: %v", err)
-				return v
+				return nil
 			}
 			return result
 		}
@@ -614,6 +1047,9 @@ func processValue(value interface{}, state *models.ExecutionState, sourceDescs m
 }
 
 // resolveTemplateString replaces {$...} placeholders in a string with their evaluated values.
+// Primitives embed as their text form; objects/arrays embed as JSON (so an embedded structure is
+// serialized consistently rather than as Go's map[...] formatting). An expression that does not
+// resolve is left in place, with a context-aware warning.
 func resolveTemplateString(template string, state *models.ExecutionState, sourceDescs map[string]interface{}) string {
 	re := regexp.MustCompile(`\{(\$[^}]+)\}`)
 	return re.ReplaceAllStringFunc(template, func(match string) string {
@@ -621,9 +1057,25 @@ func resolveTemplateString(template string, state *models.ExecutionState, source
 		expr := match[1 : len(match)-1]
 		val := EvaluateExpression(expr, state, sourceDescs, nil)
 		if val == nil {
-			log.Printf("Warning: Template expression %s evaluated to nil", expr)
+			log.Printf("Warning: template expression %q in %q evaluated to nil; leaving the placeholder unresolved", expr, template)
 			return match
 		}
-		return fmt.Sprintf("%v", val)
+		return embedValue(val)
 	})
+}
+
+// embedValue renders a value for embedding inside a string: strings as-is, objects/arrays as JSON,
+// and other primitives via their default formatting.
+func embedValue(val interface{}) string {
+	switch v := val.(type) {
+	case string:
+		return v
+	case map[string]interface{}, []interface{}:
+		if b, err := json.Marshal(v); err == nil {
+			return string(b)
+		}
+		return fmt.Sprintf("%v", v)
+	default:
+		return fmt.Sprintf("%v", v)
+	}
 }
