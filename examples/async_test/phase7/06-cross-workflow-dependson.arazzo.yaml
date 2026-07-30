@@ -1,0 +1,41 @@
+# Phase 7 — Scenario 6: CROSS-WORKFLOW step dependsOn → PASSES when the other workflow has completed.
+#
+# A step can depend on a step in ANOTHER workflow using `$workflows.<workflowId>.steps.<stepId>`.
+# For that prerequisite to be "completed", the other workflow must actually have run. Here `consumer`
+# uses WORKFLOW-level dependsOn to run `provider` first; then `consumer`'s step uses a cross-workflow
+# STEP dependsOn pointing at `provider`'s step — which is satisfied because provider already completed.
+#
+# EXPECTED: run **consumer** → provider runs first, then consumer's `consume` step passes its
+# cross-workflow gate and runs → the workflow completes.
+#
+# Runs against the live Toolshop API (needs internet). No inputs needed.
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 7 - cross-workflow step dependsOn"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: provider
+    steps:
+      - stepId: provide
+        operationId: getBrands
+        successCriteria:
+          - condition: "$statusCode == 200"
+
+  - workflowId: consumer
+    dependsOn:
+      - provider                  # workflow-level: run provider first so its steps complete
+    steps:
+      - stepId: consume
+        operationId: getProducts
+        dependsOn:
+          - "$workflows.provider.steps.provide"   # cross-workflow step gate — satisfied (provider ran)
+        successCriteria:
+          - condition: "$statusCode == 200"

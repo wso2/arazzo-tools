@@ -1,0 +1,43 @@
+# Phase 7 — Scenario 1: step dependsOn a prerequisite that HAS ALREADY completed → PASSES.
+#
+# `dependsOn` is a completion GATE (spec §5.8.5.1): a step may run only after its prerequisites have
+# completed successfully. Here `listProducts` dependsOn `listBrands`, which runs earlier in the
+# document, so by the time we reach `listProducts` its prerequisite is done → the gate is satisfied.
+#
+# EXPECTED: the workflow completes successfully (both steps run, in order).
+#
+# Runs against the live Toolshop API (needs internet). No inputs needed.
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 7 - step dependsOn satisfied"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: satisfiedDep
+    steps:
+      - stepId: listBrands
+        operationId: getBrands
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          firstBrandId: "$response.body#/0/id"
+
+      - stepId: listProducts
+        operationId: getProducts
+        dependsOn:
+          - listBrands            # already completed above → gate passes
+        successCriteria:
+          - condition: "$statusCode == 200"
+        outputs:
+          firstProductId: "$response.body#/data/0/id"
+
+    outputs:
+      firstBrandId: "$steps.listBrands.outputs.firstBrandId"
+      firstProductId: "$steps.listProducts.outputs.firstProductId"

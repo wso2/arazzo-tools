@@ -153,6 +153,10 @@ func (v *Validator) validateSourceDescriptions(doc *parser.ArazzoDocument) []Val
 func (v *Validator) validateWorkflows(doc *parser.ArazzoDocument) []ValidationError {
 	var errors []ValidationError
 
+	// Detect circular workflow-level dependsOn across the document — spec §5.8.4.1 (workflow dependsOn
+	// TRIGGERS the referenced workflows, so a cycle would infinite-recurse at runtime).
+	errors = append(errors, v.validateWorkflowDependsOnCycles(doc)...)
+
 	workflowIDs := make(map[string]bool)
 
 	for _, workflow := range doc.Workflows {
@@ -196,6 +200,9 @@ func (v *Validator) validateWorkflows(doc *parser.ArazzoDocument) []ValidationEr
 // validateSteps validates all steps in a workflow
 func (v *Validator) validateSteps(workflow *parser.Workflow, doc *parser.ArazzoDocument) []ValidationError {
 	var errors []ValidationError
+
+	// Detect local (same-workflow) dependsOn cycles up front — spec §5.8.5.1 requires a resolvable order.
+	errors = append(errors, v.validateDependsOnCycles(workflow)...)
 
 	stepIDs := make(map[string]bool)
 
@@ -641,6 +648,136 @@ func (v *Validator) validateDependsOn(step *parser.Step, workflow *parser.Workfl
 // Per spec §5.8.7.1 (SuccessAction) and §5.8.8.1 (FailureAction):
 //   - 'parameters' are ONLY meaningful when the action specifies a 'workflowId'
 //   - the 'in' field MUST NOT be used (parameters map to workflow inputs, not HTTP operations)
+// validateDependsOnCycles detects circular local dependsOn relationships within a single workflow
+// (e.g. A dependsOn B, B dependsOn A), which have no resolvable execution order (spec §5.8.5.1).
+// Only bare (local) stepId references participate; cross-workflow / cross-document forms are validated
+// by validateDependsOn.
+func (v *Validator) validateDependsOnCycles(workflow *parser.Workflow) []ValidationError {
+	exists := make(map[string]bool)
+	line := make(map[string]int)
+	for _, step := range workflow.Steps {
+		exists[step.StepID] = true
+		line[step.StepID] = step.LineNumber
+	}
+	// edges: stepId -> the local stepIds it dependsOn
+	edges := make(map[string][]string)
+	for _, step := range workflow.Steps {
+		for _, dep := range step.DependsOn {
+			if dep == "" || strings.HasPrefix(dep, "$") {
+				continue // cross-workflow/cross-document refs can't form a same-workflow cycle
+			}
+			if exists[dep] {
+				edges[step.StepID] = append(edges[step.StepID], dep)
+			}
+		}
+	}
+
+	var errors []ValidationError
+	const (
+		unvisited = 0
+		inStack   = 1
+		done      = 2
+	)
+	stateOf := make(map[string]int)
+	reported := make(map[string]bool)
+
+	var visit func(node string)
+	visit = func(node string) {
+		stateOf[node] = inStack
+		for _, next := range edges[node] {
+			switch stateOf[next] {
+			case inStack: // back-edge → cycle
+				key := node + "\x00" + next
+				if !reported[key] {
+					reported[key] = true
+					errors = append(errors, ValidationError{
+						Line:     line[node],
+						Column:   0,
+						Message:  fmt.Sprintf("Step '%s': circular dependsOn detected (part of a dependency cycle involving '%s')", node, next),
+						Severity: "error",
+					})
+				}
+			case unvisited:
+				visit(next)
+			}
+		}
+		stateOf[node] = done
+	}
+
+	for _, step := range workflow.Steps {
+		if stateOf[step.StepID] == unvisited {
+			visit(step.StepID)
+		}
+	}
+	return errors
+}
+
+// validateWorkflowDependsOnCycles detects circular workflow-level dependsOn relationships across the
+// whole document (e.g. workflow A dependsOn B, B dependsOn A), which have no resolvable execution
+// order and would infinite-recurse at runtime (spec §5.8.4.1 — workflow dependsOn TRIGGERS the
+// referenced workflows). This mirrors the runner's depStack cycle guard (runner.go executeDependencies).
+// Only local workflowId references participate; cross-document ($sourceDescriptions.*) refs are
+// resolved/executed elsewhere and cannot form an in-document cycle.
+func (v *Validator) validateWorkflowDependsOnCycles(doc *parser.ArazzoDocument) []ValidationError {
+	exists := make(map[string]bool)
+	line := make(map[string]int)
+	for _, wf := range doc.Workflows {
+		exists[wf.WorkflowID] = true
+		line[wf.WorkflowID] = wf.LineNumber
+	}
+	// edges: workflowId -> the local workflowIds it dependsOn
+	edges := make(map[string][]string)
+	for _, wf := range doc.Workflows {
+		for _, dep := range wf.DependsOn {
+			if dep == "" || strings.HasPrefix(dep, "$") {
+				continue // cross-document refs can't form a same-document cycle
+			}
+			if exists[dep] {
+				edges[wf.WorkflowID] = append(edges[wf.WorkflowID], dep)
+			}
+		}
+	}
+
+	var errors []ValidationError
+	const (
+		unvisited = 0
+		inStack   = 1
+		done      = 2
+	)
+	stateOf := make(map[string]int)
+	reported := make(map[string]bool)
+
+	var visit func(node string)
+	visit = func(node string) {
+		stateOf[node] = inStack
+		for _, next := range edges[node] {
+			switch stateOf[next] {
+			case inStack: // back-edge → cycle
+				key := node + "\x00" + next
+				if !reported[key] {
+					reported[key] = true
+					errors = append(errors, ValidationError{
+						Line:     line[node],
+						Column:   0,
+						Message:  fmt.Sprintf("Workflow '%s': circular dependsOn detected (part of a dependency cycle involving '%s')", node, next),
+						Severity: "error",
+					})
+				}
+			case unvisited:
+				visit(next)
+			}
+		}
+		stateOf[node] = done
+	}
+
+	for _, wf := range doc.Workflows {
+		if stateOf[wf.WorkflowID] == unvisited {
+			visit(wf.WorkflowID)
+		}
+	}
+	return errors
+}
+
 func (v *Validator) validateActionParameters(params []parser.Parameter, workflowID string, specRef string, actionRef string, stepID string, lineNumber int) []ValidationError {
 	var errors []ValidationError
 	if len(params) == 0 {

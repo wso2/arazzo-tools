@@ -1,0 +1,41 @@
+# Phase 7 — Scenario 5: CIRCULAR step-level dependsOn within one workflow (LSP + runtime). (fails on purpose)
+#
+# `a` dependsOn `b` and `b` dependsOn `a` — a local dependency cycle with no resolvable order.
+#
+# Two things catch this:
+#   - **LSP (static):** open this file in the editor with the Arazzo extension → a red error on the
+#     step: "circular dependsOn detected (depends on 'b', which depends back on 'a')".
+#   - **Runtime:** running the workflow fails at the first step — `a` dependsOn `b`, which hasn't run
+#     (and won't be triggered) → "step 'a' dependsOn 'b', which has not completed successfully".
+#
+# EXPECTED (intentional failure): a red squiggle in the editor, and a failed run at runtime.
+#
+# (No network needed — the runtime gate blocks step `a` before any HTTP call.)
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 7 - circular step dependsOn (intentional failure)"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: localCycle
+    steps:
+      - stepId: a
+        operationId: getBrands
+        dependsOn:
+          - b                     # a needs b...
+        successCriteria:
+          - condition: "$statusCode == 200"
+
+      - stepId: b
+        operationId: getProducts
+        dependsOn:
+          - a                     # ...and b needs a → CYCLE
+        successCriteria:
+          - condition: "$statusCode == 200"

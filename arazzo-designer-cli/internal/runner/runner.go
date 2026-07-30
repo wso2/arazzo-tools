@@ -27,6 +27,10 @@ type ArazzoRunner struct {
 	RuntimeParams      *models.RuntimeParams
 	StepExecutor       *executor.StepExecutor
 	Sink               telemetry.SpanEventSink
+
+	// depStack is the active workflow-level dependsOn resolution chain, used to detect circular
+	// workflow dependencies (which would otherwise infinite-recurse). It is not used for goto/nested.
+	depStack []string
 }
 
 // NewArazzoRunner creates a new ArazzoRunner from an Arazzo document path.
@@ -231,7 +235,7 @@ func (r *ArazzoRunner) ExecuteWorkflow(workflowID string, inputs map[string]inte
 	}
 
 	// Execute dependencies first
-	depOutputs, err := r.executeDependencies(wf)
+	depOutputs, depStepStatus, err := r.executeDependencies(wf)
 	if err != nil {
 		endWorkflow(telemetry.SpanStatusError, fmt.Sprintf("Dependency execution failed: %v", err))
 		return &models.WorkflowExecutionResult{
@@ -246,6 +250,7 @@ func (r *ArazzoRunner) ExecuteWorkflow(workflowID string, inputs map[string]inte
 
 	// Create execution state
 	state := models.NewExecutionState(workflowID, inputs, depOutputs, r.RuntimeParams)
+	state.DependencyStepStatus = depStepStatus
 	state.TraceID = traceID
 	state.WorkflowSpanID = workflowSpanID
 
@@ -290,6 +295,22 @@ func (r *ArazzoRunner) ExecuteWorkflow(workflowID string, inputs map[string]inte
 
 		log.Printf("--- Step %d/%d: %s ---", stepIndex+1, len(steps), stepID)
 
+		// v1.1.0: enforce step-level dependsOn as a completion GATE (spec §5.8.5.1). Prerequisites MUST
+		// have completed successfully before this step runs; dependsOn does NOT trigger them and does NOT
+		// reorder execution. On an unmet prerequisite, hard-fail this step and the workflow.
+		if depErr := r.checkStepDependencies(step, state); depErr != nil {
+			log.Printf("Step %s blocked by dependsOn: %v", stepID, depErr)
+			state.StepsStatus[stepID] = models.StepStatusFailure
+			endWorkflow(telemetry.SpanStatusError, depErr.Error())
+			return &models.WorkflowExecutionResult{
+				Status:      models.WorkflowStatusError,
+				WorkflowID:  workflowID,
+				StepOutputs: r.collectStepOutputs(state),
+				Inputs:      inputs,
+				Error:       depErr.Error(),
+			}
+		}
+
 		// Execute the step
 		result := r.StepExecutor.ExecuteStep(step, wf, state)
 
@@ -328,6 +349,7 @@ func (r *ArazzoRunner) ExecuteWorkflow(workflowID string, inputs map[string]inte
 					WorkflowID:  workflowID,
 					Outputs:     outputs,
 					StepOutputs: r.collectStepOutputs(state),
+					StepsStatus: state.StepsStatus,
 					Inputs:      inputs,
 					Error:       result.Error,
 				}
@@ -456,36 +478,129 @@ func (r *ArazzoRunner) ExecuteWorkflow(workflowID string, inputs map[string]inte
 		WorkflowID:  workflowID,
 		Outputs:     outputs,
 		StepOutputs: r.collectStepOutputs(state),
+		StepsStatus: state.StepsStatus,
 		Inputs:      inputs,
 		Error:       finalError,
 	}
 }
 
-// executeDependencies executes all workflows this workflow depends on.
-func (r *ArazzoRunner) executeDependencies(wf map[string]interface{}) (map[string]map[string]interface{}, error) {
+// executeDependencies executes all workflows this workflow depends on. Workflow-level dependsOn DOES
+// trigger the referenced workflows (spec §5.8.4.1 — unlike step dependsOn), then exposes their outputs
+// via $dependencies. A visited chain (depStack) guards against circular workflow dependencies, which
+// would otherwise infinite-recurse into a stack overflow.
+//
+// It returns two maps keyed by dependency workflowId: the workflow outputs (for $dependencies) and the
+// per-step status (for the cross-workflow step-level dependsOn gate, so it can check that a specific
+// step in a dependency completed successfully — not merely that the workflow ran).
+func (r *ArazzoRunner) executeDependencies(wf map[string]interface{}) (map[string]map[string]interface{}, map[string]map[string]models.StepStatus, error) {
 	depOutputs := make(map[string]map[string]interface{})
+	depStepStatus := make(map[string]map[string]models.StepStatus)
 
 	dependsOn := toSlice(wf["dependsOn"])
+	if len(dependsOn) == 0 {
+		return depOutputs, depStepStatus, nil
+	}
+
+	// Cycle guard: record the workflow whose dependencies we're resolving; pop on the way out.
+	currentID, _ := wf["workflowId"].(string)
+	r.depStack = append(r.depStack, currentID)
+	defer func() { r.depStack = r.depStack[:len(r.depStack)-1] }()
+
 	for _, depRaw := range dependsOn {
 		depID, ok := depRaw.(string)
 		if !ok {
 			continue
 		}
 
-		// Handle $sourceDescriptions.xxx references
+		// Handle $sourceDescriptions.xxx references (cross-document — execution deferred)
 		if strings.HasPrefix(depID, "$sourceDescriptions") {
-			continue // Source description dependencies are resolved elsewhere
+			log.Printf("Warning: cross-document workflow dependsOn '%s' is not yet executed (skipped)", depID)
+			continue
+		}
+
+		// Circular dependency: depID is already being resolved higher up the chain.
+		for _, active := range r.depStack {
+			if active == depID {
+				return nil, nil, fmt.Errorf("circular workflow dependsOn detected: %s -> %s", strings.Join(r.depStack, " -> "), depID)
+			}
 		}
 
 		log.Printf("Executing dependency workflow: %s", depID)
 		depResult := r.ExecuteWorkflow(depID, nil)
 		if depResult.Status == models.WorkflowStatusError {
-			return nil, fmt.Errorf("dependency workflow '%s' failed: %s", depID, depResult.Error)
+			return nil, nil, fmt.Errorf("dependency workflow '%s' failed: %s", depID, depResult.Error)
 		}
 		depOutputs[depID] = depResult.Outputs
+		depStepStatus[depID] = depResult.StepsStatus
 	}
 
-	return depOutputs, nil
+	return depOutputs, depStepStatus, nil
+}
+
+// checkStepDependencies enforces the step-level `dependsOn` completion gate (spec §5.8.5.1). It
+// returns an error if any prerequisite has not completed SUCCESSFULLY. It never reorders steps and
+// never triggers the referenced steps — a synchronous prerequisite is simply required to have
+// already run. Reference forms: a local stepId; `$workflows.<wf>.steps.<s>` (cross-workflow, satisfied
+// only if that SPECIFIC step reached success in a workflow that ran as a dependency);
+// `$sourceDescriptions.<name>.<wf>.steps.<s>` (cross-document — execution deferred, reported as
+// unsupported).
+func (r *ArazzoRunner) checkStepDependencies(step map[string]interface{}, state *models.ExecutionState) error {
+	deps := toSlice(step["dependsOn"])
+	if len(deps) == 0 {
+		return nil
+	}
+	stepID, _ := step["stepId"].(string)
+	for _, dRaw := range deps {
+		dep, _ := dRaw.(string)
+		dep = strings.TrimSpace(dep)
+		if dep == "" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(dep, "$sourceDescriptions."):
+			return fmt.Errorf("step '%s' dependsOn '%s': cross-document step dependencies are not yet supported", stepID, dep)
+		case strings.HasPrefix(dep, "$workflows."):
+			wfID, depStepID, ok := parseWorkflowsRef(dep)
+			if !ok {
+				return fmt.Errorf("step '%s' has a malformed dependsOn reference '%s'", stepID, dep)
+			}
+			// The workflow must have run as a dependency (its per-step statuses are recorded), AND the
+			// specific referenced step must have reached success. Checking the workflow alone is not
+			// enough: a step can be skipped (e.g. jumped over by a goto) while the workflow still
+			// completes, in which case that step never reached success.
+			stepStatuses, ran := state.DependencyStepStatus[wfID]
+			if !ran {
+				return fmt.Errorf("step '%s' dependsOn '%s', but workflow '%s' has not run as a dependency", stepID, dep, wfID)
+			}
+			if stepStatuses[depStepID] != models.StepStatusSuccess {
+				return fmt.Errorf("step '%s' dependsOn '%s', but step '%s' in workflow '%s' did not complete successfully", stepID, dep, depStepID, wfID)
+			}
+		default:
+			// Local stepId — must have run and reached terminal success.
+			if state.StepsStatus[dep] != models.StepStatusSuccess {
+				return fmt.Errorf("step '%s' dependsOn '%s', which has not completed successfully", stepID, dep)
+			}
+		}
+	}
+	return nil
+}
+
+// parseWorkflowsRef splits a "$workflows.<workflowId>.steps.<stepId>" reference into its workflowId
+// and stepId. ok is false for anything that isn't that full form (no ".steps." separator, or an empty
+// workflowId/stepId), so a malformed reference is rejected by the caller rather than silently
+// satisfying the dependsOn gate.
+func parseWorkflowsRef(ref string) (workflowID, stepID string, ok bool) {
+	rest := strings.TrimPrefix(ref, "$workflows.")
+	stepsIdx := strings.Index(rest, ".steps.")
+	if stepsIdx <= 0 {
+		return "", "", false
+	}
+	workflowID = rest[:stepsIdx]
+	stepID = rest[stepsIdx+len(".steps."):]
+	if workflowID == "" || stepID == "" {
+		return "", "", false
+	}
+	return workflowID, stepID, true
 }
 
 // buildSourceDescriptionObjects indexes the raw sourceDescriptions list by name, so the evaluator

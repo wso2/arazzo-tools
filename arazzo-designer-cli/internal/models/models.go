@@ -48,7 +48,12 @@ type ExecutionState struct {
 	StepsStatus       map[string]StepStatus  // stepId -> status
 	WorkflowOutputs   map[string]interface{}
 	DependencyOutputs map[string]map[string]interface{} // workflowId -> outputs
-	RuntimeParams     *RuntimeParams
+	// DependencyStepStatus holds the per-step status of each workflow that ran as a dependency
+	// (workflowId -> stepId -> status). It lets the step-level dependsOn gate verify that a SPECIFIC
+	// step in another workflow completed successfully — e.g. "$workflows.<wf>.steps.<s>" — not merely
+	// that the workflow ran (spec §5.8.5.1). Populated by the runner from each dependency's result.
+	DependencyStepStatus map[string]map[string]StepStatus
+	RuntimeParams        *RuntimeParams
 
 	// v1.1.0 runtime-expression context (populated by the runner from the Arazzo document):
 	//   Self                     -> resolves "$self" (the document's $self / canonical URI).
@@ -76,13 +81,14 @@ func NewExecutionState(workflowID string, inputs map[string]interface{}, depOutp
 		depOutputs = make(map[string]map[string]interface{})
 	}
 	return &ExecutionState{
-		WorkflowID:        workflowID,
-		Inputs:            inputs,
-		StepsData:         make(map[string]interface{}),
-		StepsStatus:       make(map[string]StepStatus),
-		WorkflowOutputs:   make(map[string]interface{}),
-		DependencyOutputs: depOutputs,
-		RuntimeParams:     runtimeParams,
+		WorkflowID:           workflowID,
+		Inputs:               inputs,
+		StepsData:            make(map[string]interface{}),
+		StepsStatus:          make(map[string]StepStatus),
+		WorkflowOutputs:      make(map[string]interface{}),
+		DependencyOutputs:    depOutputs,
+		DependencyStepStatus: make(map[string]map[string]StepStatus),
+		RuntimeParams:        runtimeParams,
 	}
 }
 
@@ -92,8 +98,12 @@ type WorkflowExecutionResult struct {
 	WorkflowID  string                            `json:"workflow_id"`
 	Outputs     map[string]interface{}            `json:"outputs"`
 	StepOutputs map[string]map[string]interface{} `json:"step_outputs,omitempty"`
-	Inputs      map[string]interface{}            `json:"inputs,omitempty"`
-	Error       string                            `json:"error,omitempty"`
+	// StepsStatus is the per-step terminal status (stepId -> status) of this run. It is surfaced so a
+	// caller (notably executeDependencies) can tell whether a SPECIFIC step succeeded, which the
+	// cross-workflow step-level dependsOn gate needs (spec §5.8.5.1).
+	StepsStatus map[string]StepStatus  `json:"steps_status,omitempty"`
+	Inputs      map[string]interface{} `json:"inputs,omitempty"`
+	Error       string                 `json:"error,omitempty"`
 }
 
 // RuntimeParams holds runtime parameters for workflow execution.
