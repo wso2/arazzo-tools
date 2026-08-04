@@ -34,54 +34,99 @@ func (s *Server) Definition(ctx context.Context, params *protocol.DefinitionPara
 		return nil, nil
 	}
 
-	// Extract the reference at the cursor: an operationId (bare or scoped), or a channelPath value.
+	// Extract the reference at the cursor. A step targets something in exactly one of three ways:
+	// operationId (bare or scoped), channelPath, or operationPath.
 	operationID := extractOperationIdAtPosition(content, params.Position)
-	channelPath := ""
+	channelPath, operationPath := "", ""
 	if operationID == "" {
 		channelPath = extractChannelPathAtPosition(content, params.Position)
 	}
 	if operationID == "" && channelPath == "" {
-		utils.LogDebug("No operationId or channelPath found at position")
+		operationPath = extractOperationPathAtPosition(content, params.Position)
+	}
+	if operationID == "" && channelPath == "" && operationPath == "" {
+		utils.LogDebug("No operationId, channelPath or operationPath found at position")
 		return nil, nil
 	}
 
 	// Resolve the document's declared sources to file URIs, and make sure each is parsed/indexed.
+	sources := s.ensureSourcesIndexed(uri, content)
+
+	switch {
+	// AsyncAPI channelPath -> channel definition, in the NAMED source only.
+	case channelPath != "":
+		if ch, found := s.lookupChannelInSources(sources, channelPath); found {
+			utils.LogInfo("Found channel in %s at line %d", ch.FileName, ch.LineNumber)
+			return []protocol.Location{locationAt(ch.FileURI, ch.LineNumber)}, nil
+		}
+		utils.LogDebug("Channel %q not found in this document's sources", channelPath)
+
+	// operationPath -> the operation the JSON Pointer addresses, in the NAMED source only.
+	case operationPath != "":
+		if op, found := s.lookupOperationByPath(sources, operationPath); found {
+			utils.LogInfo("Found operation via operationPath in %s at line %d", op.FileName, op.LineNumber)
+			return []protocol.Location{locationAt(op.FileURI, op.LineNumber)}, nil
+		}
+		utils.LogDebug("operationPath %q did not resolve in this document's sources", operationPath)
+
+	// operationId (bare or scoped) -> operation definition within this document's declared sources.
+	default:
+		if op, found := s.lookupOperationInSources(sources, operationID); found {
+			utils.LogInfo("Found operation %q in %s at line %d", operationID, op.FileName, op.LineNumber)
+			return []protocol.Location{locationAt(op.FileURI, op.LineNumber)}, nil
+		}
+		utils.LogDebug("Operation %q not found in this document's sources", operationID)
+	}
+	return nil, nil
+}
+
+// ensureSourcesIndexed resolves the document's declared sources and indexes any that aren't yet, so
+// a lookup immediately after can find their operations/channels.
+func (s *Server) ensureSourcesIndexed(uri protocol.DocumentURI, content string) []resolvedSource {
 	sources := s.resolveDocSources(uri, content)
 	for _, src := range sources {
 		if !s.operationIndex.HasFile(src.fileURI) {
 			if err := s.indexer.IndexFile(src.fileURI); err != nil {
 				utils.LogDebug("Could not index source %s (%s): %v", src.name, src.fileURI, err)
+				continue
+			}
+			if specType, ok := s.operationIndex.FileSpecType(src.fileURI); ok {
+				s.sourceRegistry.setResolvedType(uri, src.fileURI, specType)
 			}
 		}
 	}
+	return sources
+}
 
-	// AsyncAPI channelPath -> channel definition, in the NAMED source only.
-	if operationID == "" {
-		srcName, channelKey := splitChannelPath(channelPath)
-		if channelKey == "" {
-			return nil, nil
-		}
-		fileURI := sourceFileURI(sources, srcName)
-		if fileURI == "" {
-			utils.LogDebug("channelPath source %q is not a declared source description", srcName)
-			return nil, nil
-		}
-		if ch, found := s.operationIndex.LookupChannelInFile(fileURI, channelKey); found {
-			utils.LogInfo("Found channel %q in %s at line %d", channelKey, ch.FileName, ch.LineNumber)
-			return []protocol.Location{locationAt(ch.FileURI, ch.LineNumber)}, nil
-		}
-		utils.LogDebug("Channel %q not found in source %q", channelKey, srcName)
-		return nil, nil
+// lookupChannelInSources resolves a `channelPath` value to its channel definition, scoped to the
+// source description it names. Accepts both the bare-name and runtime-expression source forms.
+func (s *Server) lookupChannelInSources(sources []resolvedSource, channelPath string) (*navigation.ChannelInfo, bool) {
+	srcName, channelKey := splitChannelPath(channelPath)
+	if channelKey == "" {
+		return nil, false
 	}
+	fileURI := sourceFileURI(sources, srcName)
+	if fileURI == "" {
+		utils.LogDebug("channelPath source %q is not a declared source description", srcName)
+		return nil, false
+	}
+	return s.operationIndex.LookupChannelInFile(fileURI, channelKey)
+}
 
-	// operationId (bare or scoped "$sourceDescriptions.<name>.<op>") -> operation definition,
-	// resolved only within this document's declared sources.
-	if op, found := s.lookupOperationInSources(sources, operationID); found {
-		utils.LogInfo("Found operation %q in %s at line %d", operationID, op.FileName, op.LineNumber)
-		return []protocol.Location{locationAt(op.FileURI, op.LineNumber)}, nil
+// lookupOperationByPath resolves an `operationPath` value ("<sourceRef>#<jsonPointer>") to the
+// operation the pointer addresses, scoped to the source description it names. Shared by Definition
+// and Hover so the two always agree.
+func (s *Server) lookupOperationByPath(sources []resolvedSource, operationPath string) (*navigation.OperationInfo, bool) {
+	srcName, pointer, ok := utils.SplitSourceRefAndPointer(operationPath)
+	if !ok {
+		return nil, false
 	}
-	utils.LogDebug("Operation %q not found in this document's sources", operationID)
-	return nil, nil
+	fileURI := sourceFileURI(sources, srcName)
+	if fileURI == "" {
+		utils.LogDebug("operationPath source %q is not a declared source description", srcName)
+		return nil, false
+	}
+	return s.operationIndex.LookupOperationByPointerInFile(fileURI, utils.SplitJSONPointer(pointer))
 }
 
 // lookupOperationInSources resolves an operationId to its OperationInfo, scoped to the given declared
@@ -89,7 +134,7 @@ func (s *Server) Definition(ctx context.Context, params *protocol.DefinitionPara
 // is searched across the document's declared sources (first match wins). Shared by Definition and
 // Hover so both agree on the same resolution.
 func (s *Server) lookupOperationInSources(sources []resolvedSource, operationID string) (*navigation.OperationInfo, bool) {
-	if srcName, opID, scoped := parseScopedOperationID(operationID); scoped {
+	if srcName, opID, scoped := utils.ParseScopedOperationID(operationID); scoped {
 		fileURI := sourceFileURI(sources, srcName)
 		if fileURI == "" {
 			return nil, false
@@ -107,20 +152,40 @@ func (s *Server) lookupOperationInSources(sources []resolvedSource, operationID 
 // indexDeclaredSources parses an Arazzo document and indexes ONLY the source-description files it
 // declares (resolved relative to the Arazzo file). This is the scoped alternative to a workspace/
 // directory scan: a document sees exactly the specs it references and nothing else. Safe to call
-// repeatedly — IndexFile is cache-backed and keyed by file URI.
+// repeatedly — IndexFile is cache-backed and keyed by file URI. After each file is indexed the type
+// it actually turned out to be is recorded on the document's source registry entry.
 func (s *Server) indexDeclaredSources(arazzoURI protocol.DocumentURI, content string) {
 	for _, src := range s.resolveDocSources(arazzoURI, content) {
 		if err := s.indexer.IndexFile(src.fileURI); err != nil {
 			utils.LogDebug("Could not index declared source %s (%s): %v", src.name, src.fileURI, err)
+			continue
+		}
+		if specType, ok := s.operationIndex.FileSpecType(src.fileURI); ok {
+			s.sourceRegistry.setResolvedType(arazzoURI, src.fileURI, specType)
 		}
 	}
 }
 
-// resolveDocSources parses the Arazzo document and resolves each sourceDescription's url to an
-// on-disk file URI. Relative URLs are resolved against the document's base URI, which is derived from
-// the optional `$self` field (spec §5.5) — the SAME rule the runner uses, so navigation and execution
-// agree. Remote (http/https) refs are skipped: navigation can only jump to a local file.
+// resolveDocSources returns the document's declared sources that live on disk, as needed by
+// navigation and hover. It refreshes the per-document source registry as a side effect, so the
+// registry always reflects the content the editor last handed us.
 func (s *Server) resolveDocSources(arazzoURI protocol.DocumentURI, content string) []resolvedSource {
+	all := s.refreshDocumentSources(arazzoURI, content)
+	out := make([]resolvedSource, 0, len(all))
+	for _, ds := range all {
+		if ds.Remote || ds.FileURI == "" {
+			continue // remote sources can't be navigated to
+		}
+		out = append(out, resolvedSource{name: ds.Name, typ: ds.EffectiveType(), fileURI: ds.FileURI})
+	}
+	return out
+}
+
+// refreshDocumentSources parses the Arazzo document, resolves each sourceDescription's url to an
+// on-disk file URI, and stores the result in the per-document registry. Relative URLs resolve
+// against the document's base URI, derived from the optional `$self` field (spec §5.5) — the SAME
+// rule the runner uses, so navigation and execution agree on which file a source means.
+func (s *Server) refreshDocumentSources(arazzoURI protocol.DocumentURI, content string) []DocumentSource {
 	doc, err := parser.NewParser().Parse(content)
 	if err != nil || doc == nil {
 		return nil
@@ -131,18 +196,29 @@ func (s *Server) resolveDocSources(arazzoURI protocol.DocumentURI, content strin
 	}
 	baseURI := resolveBaseURI(doc.Self, arazzoPath)
 
-	var out []resolvedSource
+	sources := make([]DocumentSource, 0, len(doc.SourceDescriptions))
 	for _, sd := range doc.SourceDescriptions {
-		if sd.URL == "" {
-			continue
+		ds := DocumentSource{Name: sd.Name, URL: sd.URL, DeclaredType: sd.Type}
+		if sd.URL != "" {
+			target, remote := resolveSourceLocation(baseURI, sd.URL)
+			ds.Remote = remote
+			if !remote {
+				ds.FileURI = utils.PathToURI(target)
+			}
 		}
-		target, remote := resolveSourceLocation(baseURI, sd.URL)
-		if remote {
-			continue
+		// Keep a previously detected type across refreshes, then refresh it if the file is indexed.
+		if prev, ok := s.sourceRegistry.lookup(arazzoURI, sd.Name); ok && prev.FileURI == ds.FileURI {
+			ds.ResolvedType = prev.ResolvedType
 		}
-		out = append(out, resolvedSource{name: sd.Name, typ: sd.Type, fileURI: utils.PathToURI(target)})
+		if ds.FileURI != "" {
+			if specType, ok := s.operationIndex.FileSpecType(ds.FileURI); ok {
+				ds.ResolvedType = specType
+			}
+		}
+		sources = append(sources, ds)
 	}
-	return out
+	s.sourceRegistry.set(arazzoURI, sources)
+	return sources
 }
 
 // sourceFileURI returns the resolved file URI for the source description with the given name (or "").
@@ -156,46 +232,19 @@ func sourceFileURI(sources []resolvedSource, name string) string {
 }
 
 // splitChannelPath splits a channelPath value "<sourceRef>#<jsonPointer>" into the source-description
-// name and the channel key (the last JSON-pointer segment). The source ref may be a bare name or a
-// "{$sourceDescriptions.<name>.url}" expression. Returns ("","") if there is no '#'.
+// name and the channel key (the last JSON-pointer token). The source ref may be a bare name or the
+// spec's "{$sourceDescriptions.<name>.url}" expression — both normalize to the same name (see
+// utils.NormalizeSourceRef). Returns ("","") when the value isn't "<ref>#<pointer>" shaped.
 func splitChannelPath(value string) (sourceName, channelKey string) {
-	hash := strings.Index(value, "#")
-	if hash < 0 {
+	sourceName, pointer, ok := utils.SplitSourceRefAndPointer(value)
+	if !ok {
 		return "", ""
 	}
-	sourceName = resolveSourceRefName(strings.Trim(value[:hash], "{}"))
-	pointer := value[hash+1:]
-	if slash := strings.LastIndex(pointer, "/"); slash != -1 {
-		pointer = pointer[slash+1:]
+	tokens := utils.SplitJSONPointer(pointer)
+	if len(tokens) == 0 {
+		return "", ""
 	}
-	channelKey = strings.Trim(strings.TrimSpace(pointer), `"',`)
-	return sourceName, channelKey
-}
-
-// resolveSourceRefName turns a "$sourceDescriptions.<name>.url" expression into "<name>"; a bare name
-// is returned unchanged.
-func resolveSourceRefName(ref string) string {
-	const prefix = "$sourceDescriptions."
-	const suffix = ".url"
-	if strings.HasPrefix(ref, prefix) && strings.HasSuffix(ref, suffix) {
-		return ref[len(prefix) : len(ref)-len(suffix)]
-	}
-	return ref
-}
-
-// parseScopedOperationID splits "$sourceDescriptions.<name>.<operationId>" into its source name and
-// operationId. ok is false for a bare operationId (no "$sourceDescriptions." prefix).
-func parseScopedOperationID(ref string) (sourceName, operationID string, ok bool) {
-	const prefix = "$sourceDescriptions."
-	if !strings.HasPrefix(ref, prefix) {
-		return "", "", false
-	}
-	rest := ref[len(prefix):]
-	dot := strings.Index(rest, ".")
-	if dot < 0 {
-		return "", "", false
-	}
-	return rest[:dot], rest[dot+1:], true
+	return sourceName, strings.Trim(tokens[len(tokens)-1], `"',`)
 }
 
 // locationAt builds an LSP Location pointing at the start of the given (0-indexed) line.
