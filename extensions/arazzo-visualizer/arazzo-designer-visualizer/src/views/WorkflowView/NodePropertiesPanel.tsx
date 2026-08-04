@@ -889,12 +889,34 @@ export function NodePropertiesPanel({ node, workflow, definition, traceSpans, fo
     //  - workflowId            -> Workflow (nested)
     //  - operationId scoped "$sourceDescriptions.<name>.*" -> that source's declared type
     //  - operationId (bare): if the document declares exactly one typed source, use it; else OpenAPI
-    //  - operationPath         -> OpenAPI
+    //  - operationPath         -> the referenced source's declared type (NOT always OpenAPI: the spec
+    //                            words operationPath as "an operation" and its own AsyncAPI example
+    //                            uses operationPath against a `type: asyncapi` source)
     const sourceDescriptions = definition?.sourceDescriptions ?? [];
     const mapSourceType = (t?: string): string | undefined =>
         t === 'asyncapi' ? 'AsyncAPI' : t === 'openapi' ? 'OpenAPI' : t === 'arazzo' ? 'Arazzo' : undefined;
     const sourceTypeByName = (name: string): string | undefined =>
         mapSourceType(sourceDescriptions.find(sd => sd.name === name)?.type);
+
+    // Extract the source-description NAME an `operationPath` points at. Its shape differs from the
+    // scoped `operationId` form, so this cannot reuse that branch's parsing:
+    //   catalog#/paths/~1products/get                          -> catalog   (bare name before '#')
+    //   '{$sourceDescriptions.catalog.url}#/paths/~1p/get'     -> catalog   (expression before '#')
+    //   $sourceDescriptions.asyncOrderApi.placeOrder           -> asyncOrderApi (no '#'; the form the
+    //                                                             spec's own AsyncAPI example uses)
+    // In the '#' forms the trailing segment is a FIELD of the source (".url") and is dropped; in the
+    // scoped-operationId form the trailing segment is the operation id — which is why that branch
+    // keeps it and this one does not.
+    const sourceNameFromOperationPath = (raw: string): string => {
+        let ref = String(raw).trim().replace(/^['"]|['"]$/g, '').trim();
+        const hash = ref.indexOf('#');
+        if (hash >= 0) {
+            ref = ref.slice(0, hash);
+        }
+        ref = ref.trim().replace(/^\{/, '').replace(/\}$/, '').trim();
+        const prefix = '$sourceDescriptions.';
+        return ref.startsWith(prefix) ? ref.slice(prefix.length).split('.')[0] : ref;
+    };
 
     let stepKind: string | undefined;
     if (stepData.channelPath || stepData.action) {
@@ -911,7 +933,7 @@ export function NodePropertiesPanel({ node, workflow, definition, traceSpans, fo
             stepKind = (typed.length === 1 ? mapSourceType(typed[0].type) : undefined) ?? 'OpenAPI';
         }
     } else if (stepData.operationPath) {
-        stepKind = 'OpenAPI';
+        stepKind = sourceTypeByName(sourceNameFromOperationPath(String(stepData.operationPath))) ?? 'OpenAPI';
     }
 
     // General Section (stepId, step type, description)
