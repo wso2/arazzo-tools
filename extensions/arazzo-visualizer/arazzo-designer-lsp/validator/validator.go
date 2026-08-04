@@ -373,7 +373,7 @@ func (v *Validator) validateSteps(workflow *parser.Workflow, doc *parser.ArazzoD
 		// source too. A bare operationId is resolved across sources at runtime, so there is nothing
 		// to check here.
 		if step.OperationID != "" {
-			if sdName, opID, scoped := utils.ParseScopedOperationID(step.OperationID); scoped {
+			if sdName, _, scoped := utils.ParseScopedOperationID(step.OperationID); scoped {
 				if _, found := findSourceDescription(doc, sdName); !found {
 					errors = append(errors, ValidationError{
 						Line:     step.LineNumber,
@@ -382,7 +382,6 @@ func (v *Validator) validateSteps(workflow *parser.Workflow, doc *parser.ArazzoD
 						Severity: "warning",
 					})
 				}
-				_ = opID
 			} else if strings.HasPrefix(strings.TrimSpace(step.OperationID), "$") {
 				// A '$' prefix that isn't the scoped form is a malformed runtime expression.
 				errors = append(errors, ValidationError{

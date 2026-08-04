@@ -110,6 +110,10 @@ func extractFieldValueAtPosition(content string, position protocol.Position, fie
 	return strings.TrimSpace(strings.Trim(strings.TrimSpace(value), `,`))
 }
 
+// NOT USED — no production caller (Definition/Hover use extractChannelPathAtPosition, which keeps
+// the source-name part needed to scope the lookup). Kept because it is still covered by a test and
+// documents the key-only form; safe to remove together with that test.
+//
 // extractChannelKeyAtPosition returns the channel KEY from a `channelPath:` value at the cursor,
 // e.g. "orderBus#/channels/orders" -> "orders". Returns "" if the line isn't a channelPath value.
 func extractChannelKeyAtPosition(content string, position protocol.Position) string {
