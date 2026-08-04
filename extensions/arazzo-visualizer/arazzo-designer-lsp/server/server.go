@@ -131,13 +131,14 @@ func (s *Server) DidOpen(ctx context.Context, params *protocol.DidOpenTextDocume
 
 	// Index ONLY the source descriptions this Arazzo document declares (async, don't block) — the
 	// document resolves its own sources rather than scanning the surrounding directory.
-	go func() {
-		if s.isArazzoFile(string(uri)) {
+	// isArazzoFile reads s.documents, so it is evaluated on the handler goroutine (see DidSave).
+	if s.isArazzoFile(string(uri)) {
+		go func() {
 			utils.LogInfo("Indexing declared sources for Arazzo file...")
 			s.indexDeclaredSources(uri, content)
 			utils.LogInfo("Declared-source index ready (%d operations, %d channels)", s.operationIndex.Count(), s.operationIndex.ChannelCount())
-		}
-	}()
+		}()
+	}
 
 	// Provide diagnostics
 	s.provideDiagnostics(ctx, uri, content)
@@ -216,15 +217,23 @@ func (s *Server) DidSave(ctx context.Context, params *protocol.DidSaveTextDocume
 	//     and re-index the sources it declares (file-scoped, never a workspace scan).
 	//   - a SOURCE spec (OpenAPI/AsyncAPI) was saved -> drop its stale entries and re-index it so
 	//     navigation and hover point at the updated definitions.
+	//
+	// Everything read from `s.documents` is captured HERE, on the handler goroutine, and passed by
+	// value into the background goroutine. Reading the map inside the goroutine would race with
+	// other handlers writing it (a concurrent map read/write is a fatal runtime error, not an error
+	// value), and the index/registry the goroutine then touches are themselves mutex-protected.
+	content := s.documents[uri]
+	isArazzo := s.isArazzoFile(string(uri))
+	isSpecSource := !isArazzo && s.isSpecSourceFile(string(uri))
+
 	go func() {
-		content := s.documents[uri]
-		if s.isArazzoFile(string(uri)) {
+		if isArazzo {
 			utils.LogInfo("Arazzo file saved, re-indexing its declared sources: %s", uri)
 			s.indexDeclaredSources(uri, content)
 			utils.LogInfo("Declared-source index refreshed (%d operations, %d channels)", s.operationIndex.Count(), s.operationIndex.ChannelCount())
 			return
 		}
-		if s.isSpecSourceFile(string(uri)) {
+		if isSpecSource {
 			utils.LogInfo("Source spec saved, re-indexing: %s", uri)
 			if err := s.indexer.ReindexFile(string(uri)); err != nil {
 				utils.LogError("Failed to re-index source spec: %v", err)
