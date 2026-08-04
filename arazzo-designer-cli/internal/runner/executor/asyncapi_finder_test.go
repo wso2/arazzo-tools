@@ -43,6 +43,10 @@ func TestAsyncFinder_ChannelByPath(t *testing.T) {
 	if af.FindChannelByPath("orderBus#/channels/ghost") != nil {
 		t.Error("unknown channel should resolve to nil")
 	}
+	// an empty fragment must not resolve (it would otherwise yield the whole document)
+	if af.FindChannelByPath("orderBus#") != nil {
+		t.Error("an empty JSON Pointer fragment should not resolve to a channel")
+	}
 	if af.FindChannelByPath("no-hash-here") != nil {
 		t.Error("missing '#' should resolve to nil")
 	}

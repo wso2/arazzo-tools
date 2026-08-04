@@ -49,6 +49,9 @@ func (af *AsyncFinder) FindChannelByPath(channelPath string) *AsyncInfo {
 	}
 	sourceRef := resolveSourceDescriptionRef(strings.Trim(channelPath[:hash], "{}"))
 	pointer := channelPath[hash+1:]
+	if strings.TrimSpace(pointer) == "" {
+		return nil // an empty fragment would resolve to the whole document, not a channel
+	}
 
 	name, spec := af.findSource(sourceRef)
 	if spec == nil {
@@ -147,12 +150,15 @@ func (af *AsyncFinder) findSource(ref string) (string, map[string]interface{}) {
 	return "", nil
 }
 
-// lastPointerSegment returns the final segment of a JSON Pointer ("/channels/orders" -> "orders").
+// lastPointerSegment returns the final segment of a JSON Pointer ("/channels/orders" -> "orders"),
+// decoded per RFC 6901 §3 so an escaped key resolves to its real name ("/channels/orders~1new" ->
+// "orders/new"). "~1" must be decoded before "~0" so that "~01" yields "~1", not "/".
 func lastPointerSegment(pointer string) string {
 	pointer = strings.TrimPrefix(pointer, "/")
 	if pointer == "" {
 		return ""
 	}
 	segs := strings.Split(pointer, "/")
-	return segs[len(segs)-1]
+	last := segs[len(segs)-1]
+	return strings.ReplaceAll(strings.ReplaceAll(last, "~1", "/"), "~0", "~")
 }
