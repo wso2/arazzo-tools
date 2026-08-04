@@ -172,9 +172,12 @@ func (idx *OperationIndex) LookupOperationByPointerInFile(fileURI string, tokens
 	if !ok || len(tokens) == 0 {
 		return nil, false
 	}
+	// The pointer must address the operation EXACTLY: a longer pointer (e.g.
+	// /paths/~1products/get/responses/200) targets something inside the operation, not the operation
+	// itself, and must not resolve to it.
 	switch tokens[0] {
 	case "paths":
-		if len(tokens) < 3 {
+		if len(tokens) != 3 {
 			return nil, false
 		}
 		path, method := tokens[1], strings.ToUpper(tokens[2])
@@ -184,7 +187,7 @@ func (idx *OperationIndex) LookupOperationByPointerInFile(fileURI string, tokens
 			}
 		}
 	case "operations":
-		if len(tokens) < 2 {
+		if len(tokens) != 2 {
 			return nil, false
 		}
 		for _, op := range file.Operations {
