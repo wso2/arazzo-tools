@@ -60,21 +60,26 @@ func extractOperationIdAtPosition(content string, position protocol.Position) st
 	return value
 }
 
-// extractChannelKeyAtPosition returns the channel KEY from a `channelPath:` value at the cursor,
-// e.g. "orderBus#/channels/orders" -> "orders". Returns "" if the line isn't a channelPath value.
-func extractChannelKeyAtPosition(content string, position protocol.Position) string {
+// extractFieldValueAtPosition returns the scalar value of "<field>:" on the cursor's line, unquoted
+// and with any trailing inline comment removed. It is the shared basis for the `channelPath` and
+// `operationPath` extractors, which have the same "<sourceRef>#<jsonPointer>" shape.
+//
+// Quoting matters here: the spec's runtime-expression form starts with '{', which YAML would read as
+// a flow mapping, so those values are always quoted (e.g. '{$sourceDescriptions.cat.url}#/paths/~1p/get').
+// A '#' inside a quoted scalar is part of the value, not a comment — so quotes are handled first.
+func extractFieldValueAtPosition(content string, position protocol.Position, field string) string {
 	lines := strings.Split(content, "\n")
 	if int(position.Line) >= len(lines) {
 		return ""
 	}
 	line := lines[position.Line]
-	if !strings.Contains(line, "channelPath") {
+	if !strings.Contains(line, field) {
 		return ""
 	}
 
-	parts := strings.SplitN(line, "channelPath:", 2)
+	parts := strings.SplitN(line, field+":", 2)
 	if len(parts) < 2 {
-		parts = strings.SplitN(line, `"channelPath"`, 2)
+		parts = strings.SplitN(line, `"`+field+`"`, 2)
 		if len(parts) < 2 {
 			return ""
 		}
@@ -86,20 +91,30 @@ func extractChannelKeyAtPosition(content string, position protocol.Position) str
 	}
 
 	value := strings.TrimSpace(parts[1])
-	value = strings.Trim(value, `"'`)
-
-	// value looks like "sourceName#/channels/orders" — take the segment after the last '/'.
-	hash := strings.Index(value, "#")
-	if hash < 0 {
+	if value == "" {
 		return ""
 	}
-	pointer := value[hash+1:]
-	if slash := strings.LastIndex(pointer, "/"); slash != -1 {
-		pointer = pointer[slash+1:]
+
+	// Quoted scalar: the value is everything up to the matching closing quote.
+	if q := value[0]; q == '"' || q == '\'' {
+		if end := strings.IndexByte(value[1:], q); end >= 0 {
+			return strings.TrimSpace(value[1 : 1+end])
+		}
+		return strings.TrimSpace(strings.Trim(value, `"'`))
 	}
-	// strip a trailing comment / quote if any
-	pointer = strings.Trim(strings.TrimSpace(pointer), `"',`)
-	return pointer
+
+	// Unquoted scalar: " #" starts a YAML comment (a real reference's '#' has no leading space).
+	if idx := strings.Index(value, " #"); idx != -1 {
+		value = value[:idx]
+	}
+	return strings.TrimSpace(strings.Trim(strings.TrimSpace(value), `,`))
+}
+
+// extractChannelKeyAtPosition returns the channel KEY from a `channelPath:` value at the cursor,
+// e.g. "orderBus#/channels/orders" -> "orders". Returns "" if the line isn't a channelPath value.
+func extractChannelKeyAtPosition(content string, position protocol.Position) string {
+	_, key := splitChannelPath(extractChannelPathAtPosition(content, position))
+	return key
 }
 
 // extractChannelPathAtPosition returns the FULL `channelPath:` value at the cursor, e.g.
@@ -107,36 +122,14 @@ func extractChannelKeyAtPosition(content string, position protocol.Position) str
 // channelPath value. Unlike extractChannelKeyAtPosition it keeps the source-name part, which the
 // definition provider needs to scope the lookup to the right source description.
 func extractChannelPathAtPosition(content string, position protocol.Position) string {
-	lines := strings.Split(content, "\n")
-	if int(position.Line) >= len(lines) {
-		return ""
-	}
-	line := lines[position.Line]
-	if !strings.Contains(line, "channelPath") {
-		return ""
-	}
+	return extractFieldValueAtPosition(content, position, "channelPath")
+}
 
-	parts := strings.SplitN(line, "channelPath:", 2)
-	if len(parts) < 2 {
-		parts = strings.SplitN(line, `"channelPath"`, 2)
-		if len(parts) < 2 {
-			return ""
-		}
-		afterColon := strings.SplitN(parts[1], ":", 2)
-		if len(afterColon) < 2 {
-			return ""
-		}
-		parts[1] = afterColon[1]
-	}
-
-	value := strings.TrimSpace(parts[1])
-	value = strings.Trim(value, `"'`)
-	// strip a trailing inline comment, if any
-	if idx := strings.Index(value, " #"); idx != -1 {
-		// note: a real channelPath uses '#' with no leading space; " #" starts a comment
-		value = value[:idx]
-	}
-	return strings.TrimSpace(value)
+// extractOperationPathAtPosition returns the FULL `operationPath:` value at the cursor, e.g.
+// "{$sourceDescriptions.catalog.url}#/paths/~1products/get". Returns "" if the line isn't an
+// operationPath value.
+func extractOperationPathAtPosition(content string, position protocol.Position) string {
+	return extractFieldValueAtPosition(content, position, "operationPath")
 }
 
 // isOperationIdField checks if the cursor position is on an operationId field
