@@ -114,22 +114,41 @@ func extractFieldValueAtPosition(content string, position protocol.Position, fie
 	if idx := strings.Index(value, " #"); idx != -1 {
 		value = value[:idx]
 	}
-	return strings.TrimSpace(strings.Trim(strings.TrimSpace(value), `,`))
+	// In a flow mapping the value ends at the next ',' or the closing '}' rather than at end of line.
+	// An unquoted value can't legitimately contain either: the runtime-expression source form starts
+	// with '{', which YAML would read as a flow mapping, so that form is always quoted and handled above.
+	if idx := strings.IndexAny(value, ",}"); idx != -1 {
+		value = value[:idx]
+	}
+	return strings.TrimSpace(value)
 }
 
 // NOT USED — no production caller (Definition/Hover use extractChannelPathAtPosition, which keeps
 // the source-name part needed to scope the lookup). Kept because it is still covered by a test and
 // documents the key-only form; safe to remove together with that test.
 //
-// isKeyPrefix reports whether everything before a matched property key on its line is only what may
-// legally precede one: indentation, an optional YAML sequence dash, and an optional opening quote
-// (for the `"key": value` form). Anything else — a longer key like `x-channelPath`, or a `#` comment
-// marker — means the match was not the property key itself.
+// isKeyPrefix reports whether a matched field name is the WHOLE property key rather than the tail of
+// a longer one or text inside a comment, judged from what precedes it on the line.
+//
+// The test is the character immediately before the match: a key can only follow whitespace, the
+// start of the line, or a flow-mapping punctuator (`{`, `,`) or an opening quote — never an
+// identifier character. That rejects `x-channelPath` (preceded by '-') and `mychannelPath`
+// (preceded by 'y') while still accepting indentation, `- channelPath:` sequence items, and
+// flow-style `{stepId: s, channelPath: …}`. A '#' anywhere before the match means the key is inside
+// a comment.
 func isKeyPrefix(prefix string) bool {
-	p := strings.TrimSpace(prefix)
-	p = strings.TrimPrefix(p, "-")
-	p = strings.TrimSpace(p)
-	return p == "" || p == `"` || p == "'"
+	if strings.Contains(prefix, "#") {
+		return false // the line is commented out at or before this point
+	}
+	if prefix == "" {
+		return true
+	}
+	switch last := prefix[len(prefix)-1]; {
+	case last == ' ', last == '\t', last == '{', last == ',', last == '"', last == '\'':
+		return true
+	default:
+		return false
+	}
 }
 
 // extractChannelKeyAtPosition returns the channel KEY from a `channelPath:` value at the cursor,

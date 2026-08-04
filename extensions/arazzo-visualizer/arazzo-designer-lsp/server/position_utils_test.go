@@ -34,9 +34,11 @@ func TestExtractFieldValueRequiresWholeKey(t *testing.T) {
 		{"    channelPath: bus#/channels/orders", "bus#/channels/orders"},   // the key itself
 		{"    - channelPath: bus#/channels/orders", "bus#/channels/orders"}, // sequence item
 		{`    "channelPath": "bus#/channels/orders"`, "bus#/channels/orders"},
-		{"    x-channelPath: bus#/channels/orders", ""}, // extension key, not this field
-		{"    # channelPath: bus#/channels/orders", ""}, // commented out
-		{"    myChannelPath: bus#/channels/orders", ""}, // longer key ending in the field name
+		{"    {channelPath: bus#/channels/orders}", "bus#/channels/orders"},               // flow mapping
+		{"    - {stepId: s1, channelPath: bus#/channels/orders}", "bus#/channels/orders"}, // flow mapping in a sequence
+		{"    x-channelPath: bus#/channels/orders", ""},                                   // extension key, not this field
+		{"    # channelPath: bus#/channels/orders", ""},                                   // commented out
+		{"    mychannelPath: bus#/channels/orders", ""},                                   // longer key ending in the field name
 	}
 	for _, c := range cases {
 		if got := extractFieldValueAtPosition(c.line+"\n", protocol.Position{Line: 0}, "channelPath"); got != c.want {
