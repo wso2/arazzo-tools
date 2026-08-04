@@ -70,6 +70,26 @@ func TestAsyncFinder_OperationByID(t *testing.T) {
 	}
 
 	// unknown
+	// A bare operationId defined in more than one declared source is ambiguous: resolving it would
+	// otherwise depend on Go's randomized map iteration order.
+	ambiguous := NewAsyncFinder(map[string]interface{}{
+		"busA": map[string]interface{}{
+			"operations": map[string]interface{}{"shared": map[string]interface{}{"action": "send"}},
+		},
+		"busB": map[string]interface{}{
+			"operations": map[string]interface{}{"shared": map[string]interface{}{"action": "receive"}},
+		},
+	})
+	for i := 0; i < 20; i++ {
+		if info := ambiguous.FindOperationByID("shared"); info != nil {
+			t.Fatalf("an operationId present in two sources must not resolve, got source %q", info.Source)
+		}
+	}
+	// The scoped form stays unambiguous.
+	if info := ambiguous.FindOperationByID("$sourceDescriptions.busB.shared"); info == nil || info.Action != "receive" {
+		t.Errorf("scoped form should resolve in the named source, got %+v", info)
+	}
+
 	if af.FindOperationByID("doesNotExist") != nil {
 		t.Error("unknown operationId should resolve to nil")
 	}

@@ -6,6 +6,7 @@
 package executor
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/wso2/arazzo-designer-cli/internal/evaluator"
@@ -79,12 +80,28 @@ func (af *AsyncFinder) FindOperationByID(operationID string) *AsyncInfo {
 	if name, opID, ok := parseQualifiedOperationID(operationID); ok {
 		return af.findOperationInSource(name, opID)
 	}
+	// A bare operationId must resolve to exactly ONE declared source. Ranging over the map directly
+	// would pick an arbitrary match (Go randomizes map iteration), so an ambiguous id could resolve
+	// differently between runs. Sources are visited in a stable order and an ambiguous id resolves to
+	// nothing — the spec already requires the scoped form once several non-arazzo sources exist.
+	names := make([]string, 0, len(af.SourceDescriptions))
 	for name := range af.SourceDescriptions {
-		if info := af.findOperationInSource(name, operationID); info != nil {
-			return info
-		}
+		names = append(names, name)
 	}
-	return nil
+	sort.Strings(names)
+
+	var found *AsyncInfo
+	for _, name := range names {
+		info := af.findOperationInSource(name, operationID)
+		if info == nil {
+			continue
+		}
+		if found != nil {
+			return nil // ambiguous: the same operationId exists in more than one declared source
+		}
+		found = info
+	}
+	return found
 }
 
 // findOperationInSource looks up an operation by id in one AsyncAPI source (operations are a map
@@ -142,9 +159,16 @@ func (af *AsyncFinder) findSource(ref string) (string, map[string]interface{}) {
 	if descRaw, ok := af.SourceDescriptions[ref]; ok {
 		return ref, toMap(descRaw)
 	}
-	for name, descRaw := range af.SourceDescriptions {
+	// Fallback for refs that name a source indirectly (e.g. by url). Visited in a stable order so the
+	// result can't vary between runs when more than one name matches (Go randomizes map iteration).
+	names := make([]string, 0, len(af.SourceDescriptions))
+	for name := range af.SourceDescriptions {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
 		if strings.Contains(name, ref) || strings.HasSuffix(ref, name) || strings.Contains(ref, name) {
-			return name, toMap(descRaw)
+			return name, toMap(af.SourceDescriptions[name])
 		}
 	}
 	return "", nil
