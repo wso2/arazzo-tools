@@ -21,9 +21,9 @@ func ParseOpenAPIFile(fileURI string) (*OpenAPIFile, error) {
 		utils.LogError("Failed to convert URI to path - URI: '%s', Error: %v", fileURI, err)
 		return nil, fmt.Errorf("invalid URI %s: %w", fileURI, err)
 	}
-	
+
 	utils.LogDebug("Converted URI to path: '%s' -> '%s'", fileURI, filePath)
-	
+
 	content, err := os.ReadFile(filePath)
 	if err != nil {
 		utils.LogError("Failed to read file - URI: '%s', Path: '%s', Error: %v", fileURI, filePath, err)
@@ -46,11 +46,16 @@ func ParseOpenAPIFile(fileURI string) (*OpenAPIFile, error) {
 		}
 	}
 
-	// Extract OpenAPI file metadata
+	// Extract OpenAPI file metadata. SpecType records what the file ACTUALLY is (from its own
+	// `openapi:`/`asyncapi:` key), which lets callers compare it against the `type` an Arazzo
+	// document declared for this source.
 	openAPIFile := &OpenAPIFile{
 		URI:        fileURI,
 		Version:    getString(spec, "openapi"),
 		Operations: make([]*OperationInfo, 0),
+	}
+	if openAPIFile.Version != "" {
+		openAPIFile.SpecType = "openapi"
 	}
 
 	// Extract info if present
@@ -72,6 +77,7 @@ func ParseOpenAPIFile(fileURI string) (*OpenAPIFile, error) {
 	// `operationId` and `channelPath` references can navigate into it.
 	if asyncVersion := getString(spec, "asyncapi"); asyncVersion != "" {
 		openAPIFile.Version = asyncVersion
+		openAPIFile.SpecType = "asyncapi"
 		openAPIFile.Operations = append(openAPIFile.Operations, extractAsyncOperations(spec, fileURI, string(content))...)
 		openAPIFile.Channels = extractChannels(spec, fileURI, string(content))
 	}
@@ -208,7 +214,7 @@ func extractOperations(spec map[string]interface{}, fileURI, content string) ([]
 			if filePath, err := utils.URIToPath(fileURI); err == nil {
 				fileName = filepath.Base(filePath)
 			}
-			
+
 			opInfo := &OperationInfo{
 				OperationID: operationID,
 				Method:      methodUpper,

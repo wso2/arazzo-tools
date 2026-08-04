@@ -2,6 +2,7 @@ package navigation
 
 import (
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,12 +29,12 @@ type ChannelInfo struct {
 // OperationInfo contains information about an OpenAPI operation
 type OperationInfo struct {
 	OperationID string
-	Method      string   // GET, POST, PUT, DELETE, etc.
-	Path        string   // /pets/{petId}
+	Method      string // GET, POST, PUT, DELETE, etc.
+	Path        string // /pets/{petId}
 	Summary     string
 	Description string
 	FileURI     string
-	FileName    string   // Base filename for display
+	FileName    string // Base filename for display
 	LineNumber  int
 	Column      int
 	Tags        []string
@@ -41,13 +42,14 @@ type OperationInfo struct {
 
 // OpenAPIFile represents a parsed OpenAPI or AsyncAPI specification file
 type OpenAPIFile struct {
-	URI        string
-	Version    string
-	Title      string
+	URI         string
+	SpecType    string // detected from the file itself: "openapi" | "asyncapi" | "" (unknown)
+	Version     string
+	Title       string
 	Description string
-	Operations []*OperationInfo
-	Channels   []*ChannelInfo // AsyncAPI channels (empty for OpenAPI files)
-	ParsedAt   time.Time
+	Operations  []*OperationInfo
+	Channels    []*ChannelInfo // AsyncAPI channels (empty for OpenAPI files)
+	ParsedAt    time.Time
 }
 
 // NewOperationIndex creates a new operation index
@@ -117,6 +119,18 @@ func (idx *OperationIndex) Lookup(operationID string) (*OperationInfo, bool) {
 	return op, found
 }
 
+// FileSpecType returns the spec type detected for an indexed file ("openapi" or "asyncapi"), so a
+// caller can compare what a file actually is against the `type` an Arazzo document declared for it.
+func (idx *OperationIndex) FileSpecType(fileURI string) (string, bool) {
+	idx.mutex.RLock()
+	defer idx.mutex.RUnlock()
+	file, ok := idx.Files[fileURI]
+	if !ok || file.SpecType == "" {
+		return "", false
+	}
+	return file.SpecType, true
+}
+
 // HasFile reports whether a file URI has been indexed (thread-safe).
 func (idx *OperationIndex) HasFile(fileURI string) bool {
 	idx.mutex.RLock()
@@ -139,6 +153,44 @@ func (idx *OperationIndex) LookupOperationInFile(fileURI, operationID string) (*
 	for _, op := range file.Operations {
 		if op.OperationID == operationID {
 			return op, true
+		}
+	}
+	return nil, false
+}
+
+// LookupOperationByPointerInFile resolves an `operationPath` JSON Pointer to an operation within one
+// indexed file. tokens are the pointer's already-decoded reference tokens (see utils.SplitJSONPointer):
+//
+//	OpenAPI:  /paths/~1products/get   -> ["paths", "/products", "get"]
+//	AsyncAPI: /operations/placeOrder  -> ["operations", "placeOrder"]
+//
+// Anything else (a pointer into components, a channel, a malformed pointer) yields no match.
+func (idx *OperationIndex) LookupOperationByPointerInFile(fileURI string, tokens []string) (*OperationInfo, bool) {
+	idx.mutex.RLock()
+	defer idx.mutex.RUnlock()
+	file, ok := idx.Files[fileURI]
+	if !ok || len(tokens) == 0 {
+		return nil, false
+	}
+	switch tokens[0] {
+	case "paths":
+		if len(tokens) < 3 {
+			return nil, false
+		}
+		path, method := tokens[1], strings.ToUpper(tokens[2])
+		for _, op := range file.Operations {
+			if op.Path == path && strings.ToUpper(op.Method) == method {
+				return op, true
+			}
+		}
+	case "operations":
+		if len(tokens) < 2 {
+			return nil, false
+		}
+		for _, op := range file.Operations {
+			if op.OperationID == tokens[1] {
+				return op, true
+			}
 		}
 	}
 	return nil, false
@@ -224,10 +276,10 @@ type FileCache struct {
 
 // CacheEntry represents a cached file with metadata
 type CacheEntry struct {
-	File      *OpenAPIFile
-	ModTime   time.Time
-	CachedAt  time.Time
-	HitCount  int
+	File     *OpenAPIFile
+	ModTime  time.Time
+	CachedAt time.Time
+	HitCount int
 }
 
 // NewFileCache creates a new file cache with the given TTL
