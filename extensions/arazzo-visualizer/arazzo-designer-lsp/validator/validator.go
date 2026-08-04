@@ -329,7 +329,9 @@ func (v *Validator) validateSteps(workflow *parser.Workflow, doc *parser.ArazzoD
 					Message:  fmt.Sprintf("Step '%s': 'channelPath' references unknown source description '%s'", step.StepID, sdName),
 					Severity: "warning",
 				})
-			} else if sd.Type != "asyncapi" {
+			} else if sd.Type != "" && sd.Type != "asyncapi" {
+				// `type` is optional on a Source Description Object, so only a type that is present
+				// AND contradicts the reference is an error (matching the operationPath check below).
 				errors = append(errors, ValidationError{
 					Line:     step.LineNumber,
 					Column:   0,

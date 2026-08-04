@@ -163,6 +163,16 @@ func TestActionEnumAndChannel(t *testing.T) {
 	}
 }
 
+// `type` is optional on a Source Description Object, so a channelPath into a source that omits it
+// must not be reported as a type violation.
+func TestChannelPathAllowsUntypedSource(t *testing.T) {
+	untyped := "  - name: bus\n    url: ./bus.yaml\n"
+	errs := diagnose(t, docWith(untyped, "      - stepId: s1\n        channelPath: bus#/channels/orders\n        action: send\n"))
+	if has(errs, "error", "must be 'asyncapi'") {
+		t.Errorf("a source without a declared type should not trigger the type error, got:%s", dump(errs))
+	}
+}
+
 func TestChannelPathRequiresAction(t *testing.T) {
 	bus := "  - name: bus\n    url: ./bus.yaml\n    type: asyncapi\n"
 	// channelPath present but no action -> error (direction undefined)
