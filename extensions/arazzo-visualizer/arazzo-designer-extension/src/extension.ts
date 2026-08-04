@@ -862,14 +862,18 @@ function checkDocumentForOpenAPI(document?: vscode.TextDocument) {
 	// from a stray `arazzo:`/`openapi:` appearing deeper in the file (in a description, a comment, or
 	// a source-description name). `---` YAML document markers are skipped. An optional quote around
 	// the version is allowed so `arazzo: "1.1.0"` matches as well as `arazzo: 1.1.0`.
+	//
+	// JSON documents open with a bare `{`, so that line is skipped too and the key itself may be
+	// quoted — otherwise `{ "arazzo": "1.1.0" }` would never be recognised and the arazzo-json
+	// language (and with it the language server) would not attach.
 	const firstMeaningfulLine = document.getText()
 		.split(/\r?\n/)
 		.find(l => {
 			const t = l.trim();
-			return t !== '' && t !== '---' && !t.startsWith('#');
+			return t !== '' && t !== '---' && t !== '{' && !t.startsWith('#');
 		}) || '';
-	const hasOpenAPI = /^\s*openapi\s*:/i.test(firstMeaningfulLine);
-	const hasArazzo = /^\s*arazzo\s*:\s*["']?\d+\.\d+\.\d+/i.test(firstMeaningfulLine);
+	const hasOpenAPI = /^\s*"?openapi"?\s*:/i.test(firstMeaningfulLine);
+	const hasArazzo = /^\s*"?arazzo"?\s*:\s*["']?\d+\.\d+\.\d+/i.test(firstMeaningfulLine);
 
 	// Set context variables — detect Arazzo purely by content, not file name
 	const isOpenAPI = hasOpenAPI && !hasArazzo;
