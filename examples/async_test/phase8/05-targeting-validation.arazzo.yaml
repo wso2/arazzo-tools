@@ -1,0 +1,68 @@
+# Phase 8 — Scenario 5: LSP VALIDATION of the three targeting fields. Every step below is wrong on
+# purpose; opening this file should put a squiggle on each. Companion to 03 (which covers the async
+# field rules) — this one covers how a step NAMES its target.
+#
+# Expected diagnostics (step -> severity: message):
+#   unknownChannelSource   -> WARNING: 'channelPath' references unknown source description 'ghostBus'
+#   unknownOpPathSource    -> WARNING: 'operationPath' references unknown source description 'ghostApi'
+#   unknownScopedOpSource  -> WARNING: 'operationId' references unknown source description 'ghostApi'
+#   badOperationPathFormat -> ERROR:   'operationPath' must be in the format '<sourceDescription>#<jsonPointer>'
+#   malformedOpIdExpr      -> ERROR:   'operationId' expression must be '$sourceDescriptions.<name>.<operationId>'
+#   operationPathToArazzo  -> ERROR:   use 'workflowId' to target an Arazzo workflow
+#
+# IMPORTANT — what must NOT be flagged: the last two steps use the two legal source-reference
+# spellings (bare name and the '{$sourceDescriptions.<name>.url}' runtime expression). Both must
+# validate CLEANLY. If either produces an "unknown source description" warning, that's the bug this
+# scenario guards against.
+#
+# (Static/editor diagnostics only; nothing here is meant to run.)
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 8 - targeting validation (errors on purpose)"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: orderEvents
+    url: ./order-events.asyncapi.yaml
+    type: asyncapi
+  - name: catalog
+    url: ./catalog.openapi.yaml
+    type: openapi
+  - name: otherFlows
+    url: ./01-async-properties.arazzo.yaml
+    type: arazzo
+
+workflows:
+  - workflowId: badTargets
+    steps:
+      - stepId: unknownChannelSource                 # source 'ghostBus' was never declared -> WARNING
+        channelPath: ghostBus#/channels/orders
+        action: send
+
+      - stepId: unknownOpPathSource                  # source 'ghostApi' was never declared -> WARNING
+        operationPath: ghostApi#/paths/~1products/get
+
+      - stepId: unknownScopedOpSource                # scoped operationId, unknown source -> WARNING
+        operationId: $sourceDescriptions.ghostApi.getProducts
+
+      - stepId: badOperationPathFormat               # operationPath with no '#' pointer -> ERROR
+        operationPath: catalog/paths/~1products/get
+
+      - stepId: malformedOpIdExpr                    # '$' expression that isn't the scoped form -> ERROR
+        operationId: $sourceDescriptions.catalog
+
+      - stepId: operationPathToArazzo                # an arazzo source has workflows, not operations -> ERROR
+        operationPath: otherFlows#/workflows/orderFlow
+
+  # Both legal source-reference spellings — these must produce NO diagnostics.
+  - workflowId: goodTargets
+    steps:
+      - stepId: bareSourceRef                        # bare source name
+        channelPath: orderEvents#/channels/orders
+        action: send
+
+      - stepId: expressionSourceRef                  # spec runtime-expression form
+        channelPath: '{$sourceDescriptions.orderEvents.url}#/channels/orders'
+        action: send
