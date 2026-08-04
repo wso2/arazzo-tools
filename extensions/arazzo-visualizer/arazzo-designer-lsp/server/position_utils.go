@@ -90,6 +90,13 @@ func extractFieldValueAtPosition(content string, position protocol.Position, fie
 		parts[1] = afterColon[1]
 	}
 
+	// The match must be the WHOLE property key, not a substring of a longer one and not text inside
+	// a comment: `x-channelPath:` and `# channelPath: …` both contain the field name but are not it.
+	// Only YAML indentation and an optional sequence dash may precede the key.
+	if !isKeyPrefix(parts[0]) {
+		return ""
+	}
+
 	value := strings.TrimSpace(parts[1])
 	if value == "" {
 		return ""
@@ -114,6 +121,17 @@ func extractFieldValueAtPosition(content string, position protocol.Position, fie
 // the source-name part needed to scope the lookup). Kept because it is still covered by a test and
 // documents the key-only form; safe to remove together with that test.
 //
+// isKeyPrefix reports whether everything before a matched property key on its line is only what may
+// legally precede one: indentation, an optional YAML sequence dash, and an optional opening quote
+// (for the `"key": value` form). Anything else — a longer key like `x-channelPath`, or a `#` comment
+// marker — means the match was not the property key itself.
+func isKeyPrefix(prefix string) bool {
+	p := strings.TrimSpace(prefix)
+	p = strings.TrimPrefix(p, "-")
+	p = strings.TrimSpace(p)
+	return p == "" || p == `"` || p == "'"
+}
+
 // extractChannelKeyAtPosition returns the channel KEY from a `channelPath:` value at the cursor,
 // e.g. "orderBus#/channels/orders" -> "orders". Returns "" if the line isn't a channelPath value.
 func extractChannelKeyAtPosition(content string, position protocol.Position) string {

@@ -26,3 +26,21 @@ func TestExtractChannelKeyAtPosition(t *testing.T) {
 		t.Errorf("quoted channelPath: got %q, want %q", got, "confirmations")
 	}
 }
+
+// The field name must be matched as a whole property key — not as a substring of a longer key, and
+// not inside a comment.
+func TestExtractFieldValueRequiresWholeKey(t *testing.T) {
+	cases := []struct{ line, want string }{
+		{"    channelPath: bus#/channels/orders", "bus#/channels/orders"},   // the key itself
+		{"    - channelPath: bus#/channels/orders", "bus#/channels/orders"}, // sequence item
+		{`    "channelPath": "bus#/channels/orders"`, "bus#/channels/orders"},
+		{"    x-channelPath: bus#/channels/orders", ""}, // extension key, not this field
+		{"    # channelPath: bus#/channels/orders", ""}, // commented out
+		{"    myChannelPath: bus#/channels/orders", ""}, // longer key ending in the field name
+	}
+	for _, c := range cases {
+		if got := extractFieldValueAtPosition(c.line+"\n", protocol.Position{Line: 0}, "channelPath"); got != c.want {
+			t.Errorf("%q -> got %q, want %q", c.line, got, c.want)
+		}
+	}
+}
