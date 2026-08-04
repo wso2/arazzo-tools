@@ -155,6 +155,13 @@ func (s *Server) lookupOperationInSources(sources []resolvedSource, operationID 
 // repeatedly — IndexFile is cache-backed and keyed by file URI. After each file is indexed the type
 // it actually turned out to be is recorded on the document's source registry entry.
 func (s *Server) indexDeclaredSources(arazzoURI protocol.DocumentURI, content string) {
+	// One indexing pass per document at a time: DidOpen/DidChange/DidSave all index in the
+	// background, and interleaving two passes could pair one pass's source list with another's
+	// resolved types.
+	lock := s.sourceRegistry.lockForIndexing(arazzoURI)
+	lock.Lock()
+	defer lock.Unlock()
+
 	for _, src := range s.resolveDocSources(arazzoURI, content) {
 		if err := s.indexer.IndexFile(src.fileURI); err != nil {
 			utils.LogDebug("Could not index declared source %s (%s): %v", src.name, src.fileURI, err)

@@ -56,10 +56,32 @@ func (d DocumentSource) TypeMismatch() bool {
 type sourceRegistry struct {
 	mu    sync.RWMutex
 	byDoc map[protocol.DocumentURI][]DocumentSource
+
+	// indexMu serializes the multi-step indexing of one document (resolve sources -> parse each
+	// file -> record its resolved type). DidOpen/DidChange/DidSave each index in the background, so
+	// without this two runs for the same document could interleave and leave the registry holding a
+	// source list from one run with resolved types from another.
+	indexMu   sync.Mutex
+	indexLock map[protocol.DocumentURI]*sync.Mutex
 }
 
 func newSourceRegistry() *sourceRegistry {
-	return &sourceRegistry{byDoc: make(map[protocol.DocumentURI][]DocumentSource)}
+	return &sourceRegistry{
+		byDoc:     make(map[protocol.DocumentURI][]DocumentSource),
+		indexLock: make(map[protocol.DocumentURI]*sync.Mutex),
+	}
+}
+
+// lockForIndexing returns the per-document mutex guarding an indexing pass.
+func (r *sourceRegistry) lockForIndexing(doc protocol.DocumentURI) *sync.Mutex {
+	r.indexMu.Lock()
+	defer r.indexMu.Unlock()
+	if m, ok := r.indexLock[doc]; ok {
+		return m
+	}
+	m := &sync.Mutex{}
+	r.indexLock[doc] = m
+	return m
 }
 
 // set replaces everything known about one document's sources.
@@ -107,8 +129,12 @@ func (r *sourceRegistry) setResolvedType(doc protocol.DocumentURI, fileURI, spec
 // remove drops a document's entry (on close).
 func (r *sourceRegistry) remove(doc protocol.DocumentURI) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	delete(r.byDoc, doc)
+	r.mu.Unlock()
+
+	r.indexMu.Lock()
+	delete(r.indexLock, doc)
+	r.indexMu.Unlock()
 }
 
 // --- server-level accessors ---
