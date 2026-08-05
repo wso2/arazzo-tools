@@ -91,7 +91,8 @@ func resolveAsyncAction(step map[string]interface{}, info *AsyncInfo) (string, e
 }
 
 // executeSend builds the outgoing message from the step's requestBody + header parameters, serializes
-// it (basic JSON in Phase 9), and publishes it on the channel.
+// it (basic JSON in Phase 9), publishes it on the channel, then — exactly like the receive path —
+// evaluates any `successCriteria` and extracts any `outputs` through the shared checker/extractor.
 func (se *StepExecutor) executeSend(step map[string]interface{}, channel string, state *models.ExecutionState, stepID string) *models.StepResult {
 	var payload interface{}
 	if reqBody := toMap(step["requestBody"]); reqBody != nil {
@@ -114,17 +115,56 @@ func (se *StepExecutor) executeSend(step map[string]interface{}, channel string,
 		return se.createFailureResult(stepID, step, state, fmt.Sprintf("send on channel %q failed: %v", channel, err))
 	}
 
-	state.StepsData[stepID] = map[string]interface{}{
-		"async": map[string]interface{}{"action": "send", "channel": channel, "payload": payload},
+	// A send step is NOT special: like every other step it may declare `successCriteria` and
+	// `outputs`, and both run through the SAME checker/extractor the HTTP and receive paths use —
+	// declaring either must never be silently ignored. The message this step SENT is exposed as
+	// $message (shaped {header, payload}), the natural counterpart of the received message on the
+	// receive path, so a step can record what it published for a later step to correlate on.
+	message := map[string]interface{}{
+		"header":  headers,
+		"payload": payload,
 	}
-	state.StepsStatus[stepID] = models.StepStatusSuccess
-	log.Printf("Step %s: sent a message on channel %q via %s adapter", stepID, channel, se.AsyncAdapter.Name())
+	responseForCheck := map[string]interface{}{"message": message}
+
+	state.StepsData[stepID] = map[string]interface{}{
+		"async":   map[string]interface{}{"action": "send", "channel": channel, "payload": payload},
+		"message": message,
+	}
+
+	// No successCriteria means a successful publish is a successful step; otherwise the declared
+	// criteria decide.
+	success := true
+	if len(toSlice(step["successCriteria"])) > 0 {
+		success = se.SuccessChecker.CheckSuccessCriteria(step, responseForCheck, state)
+	}
+	if success {
+		state.StepsStatus[stepID] = models.StepStatusSuccess
+		log.Printf("Step %s: sent a message on channel %q via %s adapter", stepID, channel, se.AsyncAdapter.Name())
+	} else {
+		state.StepsStatus[stepID] = models.StepStatusFailure
+		log.Printf("Step %s: sent a message on channel %q but successCriteria failed", stepID, channel)
+	}
+
+	// Extract outputs (same extractor as the HTTP/receive paths; $message resolves via the context).
+	outputs := se.OutputExtractor.ExtractOutputs(step, responseForCheck, state)
+	if outputs != nil {
+		if stData, ok := state.StepsData[stepID].(map[string]interface{}); ok {
+			stData["outputs"] = outputs
+		}
+	}
+
+	failureReason := ""
+	if !success {
+		failureReason = "sent message did not satisfy successCriteria"
+	}
 
 	return &models.StepResult{
-		StepID:     stepID,
-		Success:    true,
-		Outputs:    nil,
-		NextAction: se.ActionHandler.DetermineNextAction(step, true, state),
+		StepID:       stepID,
+		Success:      success,
+		ResponseBody: payload,
+		Outputs:      outputs,
+		Error:        failureReason,
+		NextAction:   se.ActionHandler.DetermineNextAction(step, success, state),
 	}
 }
 

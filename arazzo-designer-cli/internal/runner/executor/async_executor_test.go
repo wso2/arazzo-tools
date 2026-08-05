@@ -179,3 +179,108 @@ func TestAsyncReceiveTimeoutFails(t *testing.T) {
 		t.Error("receive on an empty channel should time out and fail")
 	}
 }
+
+// ---- a send step is not special: outputs and successCriteria must work there too ----
+
+// A send step's `outputs` must be recorded so later steps can reference them — the natural pattern
+// being "remember what I published, then correlate the reply on it".
+func TestAsyncSendExtractsOutputs(t *testing.T) {
+	se := newAsyncExecutor()
+	state := models.NewExecutionState("wf", map[string]interface{}{"id": "ORD-7"}, nil, nil)
+
+	r := se.ExecuteStep(map[string]interface{}{
+		"stepId": "emit", "channelPath": "orderBus#/channels/orders", "action": "send",
+		"requestBody": map[string]interface{}{"payload": map[string]interface{}{"orderId": "$inputs.id"}},
+		"outputs": map[string]interface{}{
+			"fromInput":   "$inputs.id",
+			"fromMessage": "$message.payload.orderId", // the message this step SENT
+		},
+	}, nil, state)
+
+	if !r.Success {
+		t.Fatalf("send failed: %s", r.Error)
+	}
+	if r.Outputs["fromInput"] != "ORD-7" {
+		t.Errorf("output from $inputs: got %v, want ORD-7", r.Outputs["fromInput"])
+	}
+	if r.Outputs["fromMessage"] != "ORD-7" {
+		t.Errorf("output from the sent $message: got %v, want ORD-7", r.Outputs["fromMessage"])
+	}
+	// and they must be readable by a later step via $steps.emit.outputs.*
+	stData, ok := state.StepsData["emit"].(map[string]interface{})
+	if !ok || stData["outputs"] == nil {
+		t.Fatalf("send outputs must be stored on the step's state, got %v", state.StepsData["emit"])
+	}
+}
+
+// A send step's declared successCriteria must be evaluated, not ignored.
+func TestAsyncSendHonoursSuccessCriteria(t *testing.T) {
+	se := newAsyncExecutor()
+
+	// A criterion that cannot hold must fail the step.
+	state := models.NewExecutionState("wf", map[string]interface{}{"id": "ORD-7"}, nil, nil)
+	r := se.ExecuteStep(map[string]interface{}{
+		"stepId": "emit", "channelPath": "orderBus#/channels/orders", "action": "send",
+		"requestBody":     map[string]interface{}{"payload": map[string]interface{}{"orderId": "$inputs.id"}},
+		"successCriteria": []interface{}{map[string]interface{}{"condition": `$message.payload.orderId == "NOPE"`}},
+	}, nil, state)
+	if r.Success {
+		t.Error("a send step whose successCriteria cannot hold must fail")
+	}
+	if state.StepsStatus["emit"] != models.StepStatusFailure {
+		t.Errorf("failed send should be recorded as failure, got %v", state.StepsStatus["emit"])
+	}
+
+	// A criterion that holds must pass.
+	state2 := models.NewExecutionState("wf", map[string]interface{}{"id": "ORD-7"}, nil, nil)
+	r2 := se.ExecuteStep(map[string]interface{}{
+		"stepId": "emit", "channelPath": "orderBus#/channels/orders", "action": "send",
+		"requestBody":     map[string]interface{}{"payload": map[string]interface{}{"orderId": "$inputs.id"}},
+		"successCriteria": []interface{}{map[string]interface{}{"condition": `$message.payload.orderId == "ORD-7"`}},
+	}, nil, state2)
+	if !r2.Success {
+		t.Errorf("a send step whose successCriteria hold must pass, got: %s", r2.Error)
+	}
+
+	// No criteria at all: a successful publish is still a successful step (unchanged behaviour).
+	state3 := models.NewExecutionState("wf", nil, nil, nil)
+	r3 := se.ExecuteStep(map[string]interface{}{
+		"stepId": "emit", "channelPath": "orderBus#/channels/orders", "action": "send",
+		"requestBody": map[string]interface{}{"payload": map[string]interface{}{"orderId": "X"}},
+	}, nil, state3)
+	if !r3.Success {
+		t.Errorf("a send with no criteria must still succeed, got: %s", r3.Error)
+	}
+}
+
+// The end-to-end pattern this fix enables: publish, remember what was published, correlate on it.
+func TestAsyncSendOutputsDriveCorrelation(t *testing.T) {
+	se := newAsyncExecutor()
+	state := models.NewExecutionState("wf", map[string]interface{}{"id": "ORD-B"}, nil, nil)
+
+	// two messages on the same channel; only the second matches our id
+	se.ExecuteStep(map[string]interface{}{
+		"stepId": "other", "channelPath": "orderBus#/channels/orders", "action": "send",
+		"requestBody": map[string]interface{}{"payload": map[string]interface{}{"orderId": "ORD-A"}},
+	}, nil, state)
+	se.ExecuteStep(map[string]interface{}{
+		"stepId": "emit", "channelPath": "orderBus#/channels/orders", "action": "send",
+		"requestBody": map[string]interface{}{"payload": map[string]interface{}{"orderId": "$inputs.id"}},
+		"outputs":     map[string]interface{}{"sentId": "$inputs.id"},
+	}, nil, state)
+
+	// correlate the receive on what the send recorded
+	r := se.ExecuteStep(map[string]interface{}{
+		"stepId": "await", "channelPath": "orderBus#/channels/orders", "action": "receive",
+		"correlationId": "$steps.emit.outputs.sentId",
+		"timeout":       500,
+		"outputs":       map[string]interface{}{"got": "$message.payload.orderId"},
+	}, nil, state)
+
+	if !r.Success {
+		t.Fatalf("correlated receive failed: %s", r.Error)
+	}
+	if r.Outputs["got"] != "ORD-B" {
+		t.Errorf("correlation via the send step's outputs picked the wrong message: got %v, want ORD-B", r.Outputs["got"])
+	}
+}
