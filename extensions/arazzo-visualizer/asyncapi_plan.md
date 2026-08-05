@@ -486,7 +486,7 @@ Goal: separate message **shape** (headers/payload the runtime reasons about) fro
 (the bytes a channel carries) so adapters don't each reinvent serialization.
 
 **Implemented (CLI runner):**
-- **`Serializer` interface + `SerializerRegistry`** — [serializer.go](arazzo-designer-cli/internal/runner/executor/serializer.go).
+- **`Serializer` interface + `SerializerRegistry`** — [serializer.go](../../arazzo-designer-cli/internal/runner/executor/serializer.go).
   `Serializer` = `Serialize`/`Deserialize` + `Name`/`ContentType`. The registry maps a content type
   to a serializer: empty → default JSON; `; charset=…` parameters stripped; case-insensitive; a
   `<x>+json` structured suffix → JSON; an **unknown content type is a hard error** (never guesses a
@@ -496,7 +496,7 @@ Goal: separate message **shape** (headers/payload the runtime reasons about) fro
   **Protobuf** (`application/x-protobuf`, `application/protobuf`) and **Avro** (`application/avro`,
   `avro/binary`) are registered as **stubs** — they select cleanly and fail with a plain "not
   supported yet" rather than looking like a typo (real codecs land with the brokers in Phase 11).
-- **Wired into the runtime** — [async_executor.go](arazzo-designer-cli/internal/runner/executor/async_executor.go):
+- **Wired into the runtime** — [async_executor.go](../../arazzo-designer-cli/internal/runner/executor/async_executor.go):
   `executeSend` picks the serializer from the resolved content type and encodes the payload to
   `Message.Raw` (replacing the inline `json.Marshal`); `executeReceive` **deserializes `Raw` back
   into `$message.payload`** when the adapter delivers bytes-only. The in-memory adapter still carries
@@ -559,7 +559,7 @@ staying on the HTTP path). LSP: `navigation` covers declared/`$ref`'d/absent con
 operation→channel link; `validator` covers both diagnostics incl. severity and normalization; and
 `server/contenttype_test.go` drives the **real server resolvers end-to-end**, which is what exposed the
 indexing race below. Examples cover **every scenario**:
-[examples/async_test/phase10_serialization/](examples/async_test/phase10_serialization) — 01
+[examples/async_test/phase10_serialization/](../../examples/async_test/phase10_serialization) — 01
 text/plain, 02 JSON default, 03 unsupported-content-type (fails), 04 protobuf-stub (fails), 05
 avro-stub (fails), 06 content-type normalization (`+json` suffix + `; charset` params → JSON), **07 the
 AsyncAPI document deciding the format for a step that declares none** (two channels, two formats, one
@@ -657,21 +657,21 @@ Goal: real network transports behind the Phase-9 `Adapter` interface, selected f
 document (Arazzo has no broker field — `servers.protocol`/`host` is the source of truth).
 
 **Implemented (CLI runner):**
-- **Shared `messageBuffer`** — [adapter_buffer.go](arazzo-designer-cli/internal/runner/executor/adapter_buffer.go).
+- **Shared `messageBuffer`** — [adapter_buffer.go](../../arazzo-designer-cli/internal/runner/executor/adapter_buffer.go).
   The per-channel FIFO + correlation matching + wait-until-deadline logic extracted from the
   in-memory adapter so ALL adapters reuse it (brokers deliver asynchronously; the runner consumes
   synchronously — this is the queue between). Correlation gained a **raw-bytes fallback**
   (`bytes.Contains` on `Raw`) for messages that arrive as bytes with no decoded payload.
-- **`WSAdapter`** — [adapter_ws.go](arazzo-designer-cli/internal/runner/executor/adapter_ws.go)
+- **`WSAdapter`** — [adapter_ws.go](../../arazzo-designer-cli/internal/runner/executor/adapter_ws.go)
   (gorilla/websocket). One connection per channel (`ws(s)://host/<channel address>`), a reader
   goroutine drains incoming frames into the buffer, Send writes text frames (write-mutex, deadlines),
   TLS via `wss`, dead connections dropped + redialed on next use.
-- **`MQTTAdapter`** — [adapter_mqtt.go](arazzo-designer-cli/internal/runner/executor/adapter_mqtt.go)
+- **`MQTTAdapter`** — [adapter_mqtt.go](../../arazzo-designer-cli/internal/runner/executor/adapter_mqtt.go)
   (eclipse/paho.mqtt.golang). Channel address = topic; QoS 1; `mqtt`→`tcp://…:1883`,
   `mqtts`→`ssl://…:8883`; **subscribes to a topic BEFORE publishing** so a same-workflow
   send→receive round trip works against a real broker (the broker echoes our own publication back to
   our subscription). The paho client sits behind a tiny `mqttClient` interface so unit tests use a fake.
-- **Adapter selection** — [adapter_select.go](arazzo-designer-cli/internal/runner/executor/adapter_select.go).
+- **Adapter selection** — [adapter_select.go](../../arazzo-designer-cli/internal/runner/executor/adapter_select.go).
   `adapterFor` reads the source's `servers` (first by sorted name): ws/wss → WSAdapter,
   mqtt/mqtts → MQTTAdapter, **kafka → clear "not yet supported" error**, unknown → clear error,
   **no servers → the default in-memory adapter** (all Phase 9/10 docs + tests unchanged). Adapters
@@ -679,12 +679,12 @@ document (Arazzo has no broker field — `servers.protocol`/`host` is the source
   decoded using the **channel's declared message `contentType`** (`channelMessageContentType`) when
   the transport carries none — the Phase-10 deserialize path now exercised for real.
 
-**Tests** ([adapter_phase11_test.go](arazzo-designer-cli/internal/runner/executor/adapter_phase11_test.go)):
+**Tests** ([adapter_phase11_test.go](../../arazzo-designer-cli/internal/runner/executor/adapter_phase11_test.go)):
 buffer raw-byte correlation; WS round trip + connect-failure + **full ExecuteStep e2e against a real
 local WebSocket echo server** (httptest); MQTT subscribe-before-publish + round trip + timeout + URL
 mapping via a fake client; **opt-in real-broker integration test** (`ARAZZO_TEST_MQTT_BROKER`) —
 verified green against broker.hivemq.com; adapter selection incl. kafka/unknown errors, in-memory
-fallback, per-broker caching; contentType fallback. Examples — [examples/async_test/phase11/](examples/async_test/phase11) cover
+fallback, per-broker caching; contentType fallback. Examples — [examples/async_test/phase11/](../../examples/async_test/phase11) cover
 **every MQTT/WS/selection case** (all verified e2e; network ones over the **real public internet**):
 01 MQTT round trip (channelPath, HiveMQ), 02 WebSocket echo (`wss`, echo.websocket.org), 03
 kafka-unsupported (fails), 04 MQTT via operationId, 05 MQTT receive timeout (fails), 06 text/plain
@@ -729,7 +729,7 @@ Changes:
 Tests: CLI still lists/runs old workflows; CLI reports async adapter errors clearly; MCP output
 stable for old workflows; new examples parse and validate.
 
-### Phase 13 (FINAL): Visualizer UI Enhancements — ❌ NOT STARTED (⚠️ needs TEAM CONFIRMATION first)
+### Phase 13: Visualizer UI Enhancements — ❌ NOT STARTED (⚠️ needs TEAM CONFIRMATION first)
 
 Goal: the graph-appearance changes deliberately pulled OUT of Phase 8. Do these LAST, and only after
 the UI direction is confirmed with the team — until then, async steps render as normal steps.
@@ -744,6 +744,97 @@ Changes (all visual):
 
 Tests: dependency edges render without breaking success/failure/goto edges; old workflows render
 unchanged; badges/styling match the confirmed design.
+
+### Phase 14 (FINAL): Non-Blocking Async Steps — ❌ NOT STARTED
+
+Goal: run an async step **concurrently** with the rest of the workflow, and make `dependsOn` the
+point where the workflow actually waits for it. This replaces the Phase-9 blocking model (choice (a))
+with the deferred model (b).
+
+**Why this matters.** Phase 9 waits inline, so a workflow halts on an async step even when the steps
+that follow have nothing to do with it:
+
+```
+step1  async receive        blocking (today): everything stops here, up to `timeout`
+step2  REST                 non-blocking (Phase 14): runs immediately, in parallel
+step3  REST
+step4  REST
+step5  REST, dependsOn: [step1]   <- the ONLY place the workflow should wait
+```
+
+Worse, blocking makes step-level `dependsOn` almost meaningless for its stated purpose: by the time
+step 5 is reached the dependency has already settled, so the "gate" never gates anything. The spec is
+explicit that this field exists for the concurrent case:
+
+> "The `dependsOn` field at the step level is primarily intended to coordinate asynchronous
+> operations." … "When a step must wait for an asynchronous operation to complete before proceeding,
+> `dependsOn` establishes a join point for **in-flight** async work."
+
+*(Verify this second quote against the rendered spec before implementing — it was read via a summarizing
+fetch, unlike the first.)*
+
+**Design decisions (agreed):**
+1. **No new step status is needed.** `models.go` already defines `StepStatusPending`, `StepStatusRunning`,
+   `StepStatusSuccess`, `StepStatusFailure`, `StepStatusSkipped`. An in-flight async step is
+   `StepStatusRunning`; it becomes success/failure when its goroutine settles.
+2. **The step function returns immediately; the goroutine does not.** `ExecuteStep` spawns a goroutine
+   that performs the `Receive` (up to the step's `timeout`) and returns a "started" result right away.
+   The goroutine is the long-lived part — it lives for the whole receive, not briefly.
+3. **`checkStepDependencies` becomes a join.** Today it reads a status; it must instead: if the
+   dependency is `Running`, block until that goroutine settles (bounded by the async step's own
+   `timeout`), then apply the existing Phase-7 rule — success ⇒ proceed, failure/timeout ⇒ hard error,
+   which fails the dependent step and the workflow.
+4. **Nothing is left dangling.** If no step ever joins an in-flight step, the workflow waits for it at
+   the end: every spawned goroutine must settle (success or timeout) before the workflow completes.
+5. **Telemetry stays correct, ordering gets interleaved.** Step spans will overlap in wall-clock time,
+   which is expected for concurrent work. Parent/child links are unaffected because `ParentID` is set
+   explicitly (`state.WorkflowSpanID`), not derived from emission order; per-step attributes/outputs are
+   emitted exactly as today, just when the goroutine settles rather than inline.
+6. **No new graph work.** `BaseNodeWidget` already renders `traceState: 'running' | 'passed' | 'failed'`
+   (running = `ThemeColors.PRIMARY`), so an in-flight async step reuses the existing running animation
+   and turns green/red on settle. This is the one part of Phase 14 that needs **no** change.
+
+7. **Only `receive` goes async; `send` stays inline.** A publish has no waiting semantics, so making it
+   concurrent buys nothing and only adds ordering surprises.
+8. **An output reference without `dependsOn` is a USER ERROR, not an implicit join.** If a step reads
+   `$steps.<asyncStep>.outputs.x` while that step is still `Running`, the runtime does **not** silently
+   wait — it emits a **warning** naming both steps and telling the author to declare `dependsOn`. The
+   value resolves as it does today (nil), so behavior is unchanged; the author is simply told why.
+   *(Optional extra: the LSP could flag this statically — a step referencing an async step's outputs
+   without listing it in `dependsOn` — but the runtime warning is the agreed requirement.)*
+9. **Async step outputs are stored like any other step's.** An async step is not special: its result
+   lands in `state.StepsData`/`StepsStatus` when the goroutine settles and stays readable, so two
+   steps joining the same async step both observe the same settled outcome. Nothing is consumed once.
+10. **Cancellation is one-directional.** If the **workflow** fails at some step, all in-flight
+    goroutines are cancelled — there is nothing left to wait for. But a **goroutine failing does NOT
+    fail the workflow**: an async step that times out only causes a failure where something actually
+    `dependsOn` it. An unjoined failure is still recorded (status + telemetry) but does not abort the run.
+11. **Goroutine lifetime = until the receive settles.** It ends as soon as a matching message arrives
+    **or** the timeout elapses, whichever comes first — it never lingers past that. This already falls
+    out of `Adapter.Receive`, which returns on the first match or `ErrReceiveTimeout`.
+
+**Unresolved — decide before implementing:**
+- **`goto`/retry jumping backwards past an in-flight async step**: does that re-run the async step, or
+  join the one already running? Deliberately left open.
+
+**Implementation note (important).** Today the runner is effectively single-threaded, so
+`ExecutionState` (`StepsData`, `StepsStatus`, outputs) is written without synchronization. Once async
+steps settle from goroutines, that state becomes **shared mutable state across goroutines** and must be
+guarded (a mutex on `ExecutionState`, or funnelling results through a channel the main loop drains).
+A concurrent map read/write in Go is a fatal runtime error, not a recoverable one — so this is a
+correctness requirement, not an optimization.
+
+**Sequencing.** Do this LAST, after Phase 11. It is only *meaningful* against a real broker: on the
+in-memory adapter a receive can only ever return a message the workflow itself sent, so there is
+nothing genuinely in-flight to overlap with. It also pairs naturally with Phase 13's status rendering.
+
+Tests: an async step followed by unrelated REST steps does not delay them; a later `dependsOn` step
+waits for the in-flight step and then runs; a timed-out async step fails its dependents; a timed-out
+async step that nothing depends on does NOT fail the workflow; a workflow failure cancels in-flight
+goroutines; a workflow with a never-joined async step still waits for it before completing; two steps
+depending on one async step both see the same result; referencing a running step's outputs without
+`dependsOn` warns; telemetry keeps correct parent/child links with overlapping spans; the whole suite
+runs clean under `go test -race` (the shared-state requirement above).
 
 ---
 
@@ -776,7 +867,8 @@ proceed 3 → 12. Phases 4 and 5 share the selector/expression service and are b
 Phase 6 depends on Phase 4; Phase 7 is independent and can be parallelized with 4–6; Phases
 8–11 form the AsyncAPI runtime track and depend on 3 (resolution) + 4–5 (evaluation) + 9
 (adapter) before 10–11. Phase 12 closes out docs/samples; Phase 13 (visualizer UI, needs team
-confirmation) is the very last.
+confirmation) and Phase 14 (non-blocking async steps) are the last two — Phase 14 last of all, since
+it only becomes meaningful once Phase 11 provides a real broker to wait on.
 
 ## Known Issues / Bugs (separate from the v1.1.0 phases — fix independently)
 
