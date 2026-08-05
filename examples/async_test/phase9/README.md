@@ -14,6 +14,8 @@ Phase 9 makes AsyncAPI steps **actually execute**: `action: send` publishes a me
 | `05-channelpath-no-action.arazzo.yaml` | `channelPath` with **no `action`** → hard error | `badFlow` | ❌ fails: *requires 'action'* |
 | `06-criteria-failure.arazzo.yaml` | received message fails **successCriteria** | `mismatchFlow` | ❌ fails: *did not satisfy successCriteria* |
 | `07-action-mismatch.arazzo.yaml` | step `action` contradicts operation → **operation wins** (warns) | `mismatchWins` | ✅ completes (runs as send), `orderId="ORD-M"` |
+| `08-send-outputs-correlation.arazzo.yaml` | a **send** step's `outputs` + `successCriteria` work; the reply correlates on what the send recorded | `sendOutputs` | ✅ completes, `echoed="ORD-B"`, `sent="ORD-B"` |
+| `09-send-criteria-failure.arazzo.yaml` | a **send** step's `successCriteria` can **fail** it | `badSend` | ❌ fails: *sent message did not satisfy successCriteria* |
 
 ## How to run / verify
 
@@ -27,11 +29,18 @@ test_runner examples/async_test/phase9/04-receive-timeout.arazzo.yaml timeoutFlo
 test_runner examples/async_test/phase9/05-channelpath-no-action.arazzo.yaml badFlow        # fails on purpose
 test_runner examples/async_test/phase9/06-criteria-failure.arazzo.yaml mismatchFlow        # fails on purpose
 test_runner examples/async_test/phase9/07-action-mismatch.arazzo.yaml mismatchWins
+test_runner examples/async_test/phase9/08-send-outputs-correlation.arazzo.yaml sendOutputs '{"orderId":"ORD-B"}'
+test_runner examples/async_test/phase9/09-send-criteria-failure.arazzo.yaml badSend         # fails on purpose
 ```
 
-The three ❌ workflows are meant to end in error — that error **is** the expected outcome (timeout /
+The four ❌ workflows are meant to end in error — that error **is** the expected outcome (timeout /
 missing-action / criteria enforcement doing their job). Scenario 07 logs a
 `contradicts the AsyncAPI operation's action` warning and then runs as the operation's action.
+
+Scenario 08 is the one to look at for **why a send step's outputs matter**: two orders sit on the same
+channel and the receive correlates on `$steps.emitMine.outputs.sentId`. It returns `ORD-B` — our order.
+If the send step's outputs were dropped, that expression would resolve to empty, the receive would fall
+back to plain FIFO, and it would silently return `ORD-A` instead.
 
 ## What Phase 9 delivers
 - A broker-agnostic **`Adapter`** interface (`Send` / `Receive`) and a built-in **`InMemoryAdapter`**.
@@ -48,5 +57,8 @@ missing-action / criteria enforcement doing their job). Scenario 07 logs a
   headers/payload; empty ⇒ FIFO). A self-referential `correlationId: $message.*` resolves to nil at
   receive time (the message doesn't exist yet), so it falls back to FIFO — which is why the round-trip
   example needs no explicit correlation. Real brokers correlate on explicit message headers.
-- **successCriteria / outputs** for receive steps reuse the exact same checker/extractor as HTTP
-  steps — they just read `$message` instead of `$response`.
+- **successCriteria / outputs** work on **both** async directions and reuse the exact same
+  checker/extractor as HTTP steps — they just read `$message` instead of `$response`. Inside a
+  **receive** step `$message` is the message that arrived; inside a **send** step it is the message
+  that step published (same `{header, payload}` shape). A send step is not special: declaring either
+  field on it behaves exactly as it does on any other step.
