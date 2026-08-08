@@ -82,6 +82,19 @@ type ValidationError struct {
 // Validator validates Arazzo documents
 type Validator struct {
 	parser *parser.Parser
+
+	// resolveStepAction, when set, returns the action ("send"/"receive") declared by the AsyncAPI
+	// operation a step targets, resolved from the indexed source documents.
+	//
+	// The validator itself only ever sees the Arazzo text, so on its own it can classify a step as a
+	// send or a receive ONLY when the step writes `action:` explicitly. With `operationId`/
+	// `operationPath` the direction lives in the AsyncAPI document — which is exactly the form the
+	// spec prefers. This hook lets a caller that already has the operation index (the LSP server)
+	// supply that missing fact, without the validator gaining file access.
+	//
+	// nil in content-only contexts (unit tests, any caller without an index); the checks that need it
+	// simply stay quiet rather than guessing.
+	resolveStepAction func(step *parser.Step) (action string, ok bool)
 }
 
 // NewValidator creates a new Validator
@@ -89,6 +102,27 @@ func NewValidator() *Validator {
 	return &Validator{
 		parser: parser.NewParser(),
 	}
+}
+
+// WithStepActionResolver returns the validator configured to resolve a step's AsyncAPI action
+// through fn. Passing nil restores content-only behaviour.
+func (v *Validator) WithStepActionResolver(fn func(step *parser.Step) (string, bool)) *Validator {
+	v.resolveStepAction = fn
+	return v
+}
+
+// stepAction returns the direction of an async step: the `action` written on the step when present,
+// otherwise the action declared by the operation it targets (resolved through the injected hook).
+// ok is false when the direction cannot be established, in which case direction-dependent checks
+// must not fire.
+func (v *Validator) stepAction(step *parser.Step) (string, bool) {
+	if step.Action != "" {
+		return step.Action, true
+	}
+	if v.resolveStepAction == nil {
+		return "", false
+	}
+	return v.resolveStepAction(step)
 }
 
 // Validate validates an Arazzo document and returns validation errors
@@ -459,14 +493,27 @@ func (v *Validator) validateSteps(workflow *parser.Workflow, doc *parser.ArazzoD
 		// Validate dependsOn references (spec §5.8.5)
 		errors = append(errors, v.validateDependsOn(&step, workflow, doc)...)
 
+		// The AsyncAPI operation a step targets declares its own direction. When the step ALSO writes
+		// `action`, the two must agree — at runtime the operation wins and the step's action is
+		// ignored, so a contradiction means the workflow does the opposite of what it says.
+		if step.Action != "" && v.resolveStepAction != nil {
+			if opAction, ok := v.resolveStepAction(&step); ok && opAction != "" && opAction != step.Action {
+				errors = append(errors, ValidationError{
+					Line:     step.LineNumber,
+					Column:   0,
+					Message:  fmt.Sprintf("Step '%s': 'action' is '%s' but the referenced AsyncAPI operation declares '%s' — at runtime the operation wins, so this step will %s", step.StepID, step.Action, opAction, opAction),
+					Severity: "warning",
+				})
+			}
+		}
+
 		// A receive with no 'correlationId' consumes whatever message is next on the channel. That is
 		// legal and often intended, but on a shared channel it can pick up a message this workflow
 		// never sent — so it is worth surfacing while authoring, not only in the run log.
 		//
-		// Only a step that DECLARES 'action: receive' is flagged: when the direction comes from the
-		// AsyncAPI operation instead, the validator cannot know it is a receive without reading the
-		// source document, and guessing would produce false warnings on send steps.
-		if step.Action == "receive" && step.CorrelationID == "" {
+		// The direction comes from the step's `action` when written, otherwise from the AsyncAPI
+		// operation it targets; if neither is available the check stays quiet rather than guessing.
+		if action, known := v.stepAction(&step); known && action == "receive" && step.CorrelationID == "" {
 			errors = append(errors, ValidationError{
 				Line:     step.LineNumber,
 				Column:   0,

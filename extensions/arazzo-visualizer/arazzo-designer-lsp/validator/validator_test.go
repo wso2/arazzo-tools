@@ -272,6 +272,80 @@ func TestReceiveWithoutCorrelationIdWarns(t *testing.T) {
 	}
 }
 
+// diagnoseWithActions validates content with a step-action resolver wired in, standing in for the
+// LSP server's operation index. actions maps an operationId/operationPath to the action its AsyncAPI
+// operation declares.
+func diagnoseWithActions(t *testing.T, content string, actions map[string]string) []ValidationError {
+	t.Helper()
+	doc, err := parser.NewParser().Parse(content)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	v := NewValidator().WithStepActionResolver(func(step *parser.Step) (string, bool) {
+		key := step.OperationID
+		if key == "" {
+			key = step.OperationPath
+		}
+		a, ok := actions[key]
+		return a, ok
+	})
+	return v.Validate(doc)
+}
+
+// With the operation index wired in, the direction of an operationId/operationPath step becomes
+// known, which enables the two checks that previously could not fire on that (spec-preferred) form.
+func TestResolvedAsyncActionEnablesChecks(t *testing.T) {
+	bus := "  - name: bus\n    url: ./bus.yaml\n    type: asyncapi\n"
+
+	// A receive identified only by its operation, with no correlationId -> now warns.
+	errs := diagnoseWithActions(t,
+		docWith(bus, "      - stepId: await\n        operationId: consumeOrder\n"),
+		map[string]string{"consumeOrder": "receive"})
+	if !has(errs, "warning", "no 'correlationId'") {
+		t.Errorf("a resolved receive without correlationId should warn, got:%s", dump(errs))
+	}
+
+	// Same step WITH a correlationId -> clean.
+	errs = diagnoseWithActions(t,
+		docWith(bus, "      - stepId: await\n        operationId: consumeOrder\n        correlationId: $inputs.token\n"),
+		map[string]string{"consumeOrder": "receive"})
+	if has(errs, "warning", "no 'correlationId'") {
+		t.Errorf("a resolved receive WITH correlationId must not warn, got:%s", dump(errs))
+	}
+
+	// A send identified only by its operation must never be asked for a correlationId.
+	errs = diagnoseWithActions(t,
+		docWith(bus, "      - stepId: emit\n        operationId: placeOrder\n"),
+		map[string]string{"placeOrder": "send"})
+	if has(errs, "warning", "no 'correlationId'") {
+		t.Errorf("a resolved send must not be asked for a correlationId, got:%s", dump(errs))
+	}
+
+	// The step contradicts the operation -> the runtime silently prefers the operation, so warn.
+	errs = diagnoseWithActions(t,
+		docWith(bus, "      - stepId: emit\n        operationId: placeOrder\n        action: receive\n"),
+		map[string]string{"placeOrder": "send"})
+	if !has(errs, "warning", "but the referenced AsyncAPI operation declares 'send'") {
+		t.Errorf("an action/operation mismatch should warn, got:%s", dump(errs))
+	}
+
+	// Agreeing action -> no mismatch warning.
+	errs = diagnoseWithActions(t,
+		docWith(bus, "      - stepId: emit\n        operationId: placeOrder\n        action: send\n"),
+		map[string]string{"placeOrder": "send"})
+	if has(errs, "warning", "the referenced AsyncAPI operation declares") {
+		t.Errorf("a matching action must not warn, got:%s", dump(errs))
+	}
+
+	// Unresolvable operation -> both checks stay quiet rather than guessing.
+	errs = diagnoseWithActions(t,
+		docWith(bus, "      - stepId: x\n        operationId: unknownOp\n        action: send\n"),
+		map[string]string{})
+	if has(errs, "warning", "the referenced AsyncAPI operation declares") || has(errs, "warning", "no 'correlationId'") {
+		t.Errorf("an unresolvable operation must not trigger direction checks, got:%s", dump(errs))
+	}
+}
+
 func TestChannelPathRequiresAction(t *testing.T) {
 	bus := "  - name: bus\n    url: ./bus.yaml\n    type: asyncapi\n"
 	// channelPath present but no action -> error (direction undefined)

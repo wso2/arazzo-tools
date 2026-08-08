@@ -21,6 +21,14 @@ func NewDiagnosticsProvider() *DiagnosticsProvider {
 	}
 }
 
+// SetStepActionResolver supplies the hook that tells the validator which direction (send/receive) an
+// `operationId`/`operationPath` step targets, resolved from the indexed AsyncAPI sources. The server
+// sets this once it can resolve a document's sources; without it the direction-dependent async checks
+// only apply to steps that write `action:` themselves.
+func (d *DiagnosticsProvider) SetStepActionResolver(fn func(step *parser.Step) (string, bool)) {
+	d.validator.WithStepActionResolver(fn)
+}
+
 // ProvideDiagnostics generates diagnostics for the given content
 func (d *DiagnosticsProvider) ProvideDiagnostics(content string) []protocol.Diagnostic {
 	diagnostics := []protocol.Diagnostic{}
