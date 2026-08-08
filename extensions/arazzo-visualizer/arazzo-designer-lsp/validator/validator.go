@@ -533,10 +533,10 @@ func (v *Validator) validateSteps(workflow *parser.Workflow, doc *parser.ArazzoD
 					Message:  fmt.Sprintf("Step '%s': 'correlationId' is only meaningful on AsyncAPI steps (set 'channelPath', or an 'operationId'/'operationPath' that targets an AsyncAPI source)", step.StepID),
 					Severity: "warning",
 				})
-			} else if step.ChannelPath != "" && step.Action != "receive" {
-				// Only a channelPath step declares its own direction. When the step targets an
-				// operation, the direction lives in the AsyncAPI document, so it cannot be checked
-				// here without resolving the operation.
+			} else if action, known := v.stepAction(&step); known && action != "receive" {
+				// The direction is the step's own `action` when written, otherwise the one resolved
+				// from the AsyncAPI operation — so a send carrying a correlationId is caught in both
+				// forms. When neither is available the check stays quiet.
 				errors = append(errors, ValidationError{
 					Line:     step.LineNumber,
 					Column:   0,
