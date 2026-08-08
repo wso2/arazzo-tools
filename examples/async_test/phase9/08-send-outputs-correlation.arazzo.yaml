@@ -4,8 +4,10 @@
 # actually evaluated. Inside a send step, `$message` is the message THAT STEP PUBLISHED, shaped
 # {header, payload} — the exact counterpart of the received message on a receive step.
 #
-# This unlocks the natural request/reply pattern: publish, REMEMBER what was published, then
-# correlate the reply on it — instead of repeating the same expression in two places.
+# This unlocks same-channel correlation: publish, REMEMBER what was published, then pick that exact
+# message back off the channel — instead of repeating the same expression in two places. (There is no
+# responder here: awaitMine consumes emitMine's own message. A true request/reply, where a service
+# answers on another channel, needs a real broker — Phase 11.)
 #
 #   emitOther  sends ORD-A          (noise on the shared channel)
 #   emitMine   sends $inputs.orderId AND records it as `sentId`
