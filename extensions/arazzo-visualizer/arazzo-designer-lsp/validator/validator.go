@@ -459,6 +459,22 @@ func (v *Validator) validateSteps(workflow *parser.Workflow, doc *parser.ArazzoD
 		// Validate dependsOn references (spec §5.8.5)
 		errors = append(errors, v.validateDependsOn(&step, workflow, doc)...)
 
+		// A receive with no 'correlationId' consumes whatever message is next on the channel. That is
+		// legal and often intended, but on a shared channel it can pick up a message this workflow
+		// never sent — so it is worth surfacing while authoring, not only in the run log.
+		//
+		// Only a step that DECLARES 'action: receive' is flagged: when the direction comes from the
+		// AsyncAPI operation instead, the validator cannot know it is a receive without reading the
+		// source document, and guessing would produce false warnings on send steps.
+		if step.Action == "receive" && step.CorrelationID == "" {
+			errors = append(errors, ValidationError{
+				Line:     step.LineNumber,
+				Column:   0,
+				Message:  fmt.Sprintf("Step '%s': no 'correlationId' — this receive will consume the next message on the channel without filtering, which may be a message this workflow did not send", step.StepID),
+				Severity: "warning",
+			})
+		}
+
 		// 'correlationId' is only applicable to AsyncAPI steps with action 'receive' (spec §5.8.5).
 		// As with 'action', whether a step is AsyncAPI depends on the source it targets, not on
 		// which targeting field it used.

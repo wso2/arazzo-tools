@@ -242,6 +242,36 @@ func TestStepsReferenceOrdering(t *testing.T) {
 	}
 }
 
+// A receive with no correlationId is legal but takes whatever is next on the channel, so it is
+// surfaced while authoring. Only an explicitly declared 'action: receive' is flagged — a step whose
+// direction lives in the AsyncAPI operation cannot be classified without reading that document.
+func TestReceiveWithoutCorrelationIdWarns(t *testing.T) {
+	bus := "  - name: bus\n    url: ./bus.yaml\n    type: asyncapi\n"
+
+	errs := diagnose(t, docWith(bus, "      - stepId: r\n        channelPath: bus#/channels/orders\n        action: receive\n"))
+	if !has(errs, "warning", "no 'correlationId'") {
+		t.Errorf("a receive without correlationId should warn, got:%s", dump(errs))
+	}
+
+	// With a correlationId: no warning.
+	errs = diagnose(t, docWith(bus, "      - stepId: r\n        channelPath: bus#/channels/orders\n        action: receive\n        correlationId: $inputs.token\n"))
+	if has(errs, "warning", "no 'correlationId'") {
+		t.Errorf("a receive WITH correlationId must not warn, got:%s", dump(errs))
+	}
+
+	// A send never needs one.
+	errs = diagnose(t, docWith(bus, "      - stepId: s\n        channelPath: bus#/channels/orders\n        action: send\n"))
+	if has(errs, "warning", "no 'correlationId'") {
+		t.Errorf("a send step must not be asked for a correlationId, got:%s", dump(errs))
+	}
+
+	// Direction from the AsyncAPI operation (no 'action' declared) is not classifiable here.
+	errs = diagnose(t, docWith(bus, "      - stepId: r\n        operationId: consumeOrder\n"))
+	if has(errs, "warning", "no 'correlationId'") {
+		t.Errorf("a step with no declared action must not be guessed at, got:%s", dump(errs))
+	}
+}
+
 func TestChannelPathRequiresAction(t *testing.T) {
 	bus := "  - name: bus\n    url: ./bus.yaml\n    type: asyncapi\n"
 	// channelPath present but no action -> error (direction undefined)
