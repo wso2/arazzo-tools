@@ -31,6 +31,7 @@ workflows:
       - stepId: await
         operationId: consumeOrder         # AsyncAPI operation, action: receive (from the doc)
         timeout: 2000
+        correlationId: "OP-1"
         successCriteria:
           - condition: '$message.payload.status == "new"'
         outputs:
