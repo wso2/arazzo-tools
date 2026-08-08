@@ -181,6 +181,77 @@ func TestAsyncReceiveTimeoutFails(t *testing.T) {
 	}
 }
 
+// ---- correlationId: a declared id must always be honoured ----
+
+// sendThen publishes one order and returns the executor/state ready for a receive step.
+func sendThen(t *testing.T, orderID string) (*StepExecutor, *models.ExecutionState) {
+	t.Helper()
+	se := newAsyncExecutor()
+	state := models.NewExecutionState("wf", nil, nil, nil)
+	se.ExecuteStep(map[string]interface{}{
+		"stepId": "emit", "channelPath": "orderBus#/channels/orders", "action": "send",
+		"requestBody": map[string]interface{}{"payload": map[string]interface{}{"orderId": orderID}},
+	}, nil, state)
+	return se, state
+}
+
+// A literal correlationId is a value, not a discarded expression. Previously it evaluated to nil and
+// the receive silently went unfiltered — returning an unrelated message and reporting SUCCESS.
+func TestAsyncLiteralCorrelationIdIsHonoured(t *testing.T) {
+	// A literal that does not match must time out, not return the queued message.
+	se, state := sendThen(t, "OP-1")
+	r := se.ExecuteStep(map[string]interface{}{
+		"stepId": "await", "channelPath": "orderBus#/channels/orders", "action": "receive",
+		"correlationId": "OP-2", "timeout": 200,
+		"outputs": map[string]interface{}{"got": "$message.payload.orderId"},
+	}, nil, state)
+	if r.Success {
+		t.Errorf("a non-matching literal correlationId must not resolve to an unfiltered receive, got %v", r.Outputs["got"])
+	}
+	if !strings.Contains(r.Error, "OP-2") {
+		t.Errorf("the timeout should name the correlation id, got %q", r.Error)
+	}
+
+	// A literal that does match must be received.
+	se2, state2 := sendThen(t, "OP-1")
+	r2 := se2.ExecuteStep(map[string]interface{}{
+		"stepId": "await", "channelPath": "orderBus#/channels/orders", "action": "receive",
+		"correlationId": "OP-1", "timeout": 500,
+		"outputs": map[string]interface{}{"got": "$message.payload.orderId"},
+	}, nil, state2)
+	if !r2.Success || r2.Outputs["got"] != "OP-1" {
+		t.Errorf("a matching literal correlationId should receive the message, got success=%v %v (%s)", r2.Success, r2.Outputs["got"], r2.Error)
+	}
+}
+
+// An expression that resolves to nothing leaves no id to wait for; the step must fail rather than
+// degrade into an unfiltered receive.
+func TestAsyncUnresolvableCorrelationIdFails(t *testing.T) {
+	se, state := sendThen(t, "OP-1")
+	r := se.ExecuteStep(map[string]interface{}{
+		"stepId": "await", "channelPath": "orderBus#/channels/orders", "action": "receive",
+		"correlationId": "$inputs.missing", "timeout": 200,
+	}, nil, state)
+	if r.Success {
+		t.Fatal("an unresolvable correlationId must not fall back to an unfiltered receive")
+	}
+	if !strings.Contains(r.Error, "resolved to no value") {
+		t.Errorf("the failure should explain the unresolved correlationId, got %q", r.Error)
+	}
+}
+
+// Omitting correlationId is legal and stays unfiltered (the runner warns) — unchanged behaviour.
+func TestAsyncNoCorrelationIdStaysUnfiltered(t *testing.T) {
+	se, state := sendThen(t, "OP-1")
+	r := se.ExecuteStep(map[string]interface{}{
+		"stepId": "await", "channelPath": "orderBus#/channels/orders", "action": "receive",
+		"timeout": 500, "outputs": map[string]interface{}{"got": "$message.payload.orderId"},
+	}, nil, state)
+	if !r.Success || r.Outputs["got"] != "OP-1" {
+		t.Errorf("a receive with no correlationId should take the next message, got success=%v %v", r.Success, r.Outputs["got"])
+	}
+}
+
 // ---- telemetry: an async step must be as inspectable in the run logs as a REST step ----
 
 // capturingSink records emitted spans so a test can assert what the run logs will show.

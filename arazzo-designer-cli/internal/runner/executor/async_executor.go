@@ -183,13 +183,12 @@ func (se *StepExecutor) executeSend(step map[string]interface{}, channel string,
 // then evaluates successCriteria and extracts outputs through the SAME checker/extractor used by HTTP
 // steps. A received message with no successCriteria counts as success.
 func (se *StepExecutor) executeReceive(step map[string]interface{}, channel string, state *models.ExecutionState, stepID, parentSpanID string) *models.StepResult {
-	// Correlation id is evaluated against the current context (the incoming message does not exist
-	// yet, so a self-referential "$message.*" correlation resolves to nil -> unfiltered/FIFO receive).
-	correlationID := ""
-	if corrExpr, _ := step["correlationId"].(string); strings.TrimSpace(corrExpr) != "" {
-		if v := evaluator.EvaluateExpression(corrExpr, state, se.SourceDescriptions, nil); v != nil {
-			correlationID = fmt.Sprintf("%v", v)
-		}
+	// Resolve the correlation id. A DECLARED correlationId must always be honoured: silently falling
+	// back to an unfiltered receive would return an unrelated message and report success, which is
+	// worse than failing. Only the ABSENCE of a correlationId means "take the next message".
+	correlationID, corrErr := se.resolveCorrelationID(step, state, stepID, channel)
+	if corrErr != "" {
+		return se.createFailureResult(stepID, step, state, corrErr)
 	}
 
 	timeout := receiveTimeout(step)
@@ -267,6 +266,42 @@ func (se *StepExecutor) executeReceive(step map[string]interface{}, channel stri
 		Error:        failureReason,
 		NextAction:   se.ActionHandler.DetermineNextAction(step, success, state),
 	}
+}
+
+// resolveCorrelationID works out which correlation id a receive step should match on. It returns the
+// id (empty means "unfiltered"), or a non-empty failure reason.
+//
+// Three cases, and the distinction matters:
+//   - NOT DECLARED  -> unfiltered receive (the next message on the channel), with a warning, because
+//     that is easy to do by accident and quietly returns whatever happens to be queued.
+//   - A RUNTIME EXPRESSION ("$inputs.token", "{$steps.x.outputs.id}") -> its resolved value. If it
+//     resolves to nothing there is no id to wait for, so the step FAILS rather than degrading to an
+//     unfiltered receive that would happily return an unrelated message and report success.
+//   - ANYTHING ELSE -> a literal id, used as written. `correlationId` is typed `string` in the spec;
+//     the spec's example uses an expression, but a literal is a perfectly ordinary value and must not
+//     be silently discarded.
+func (se *StepExecutor) resolveCorrelationID(step map[string]interface{}, state *models.ExecutionState, stepID, channel string) (correlationID, failure string) {
+	raw, present := step["correlationId"]
+	corrExpr := ""
+	if present && raw != nil {
+		corrExpr = strings.TrimSpace(fmt.Sprintf("%v", raw))
+	}
+
+	if corrExpr == "" {
+		log.Printf("Warning: step %s: receive on channel %q declares no correlationId — it will consume the next message on the channel without filtering, which may be a message this workflow did not expect", stepID, channel)
+		return "", ""
+	}
+
+	// Same runtime-expression test the parameter processor uses.
+	if strings.HasPrefix(corrExpr, "$") || strings.Contains(corrExpr, "{$") {
+		v := evaluator.EvaluateExpression(corrExpr, state, se.SourceDescriptions, nil)
+		if v == nil {
+			return "", fmt.Sprintf("receive on channel %q: correlationId %q resolved to no value, so there is no id to match — refusing to fall back to an unfiltered receive", channel, corrExpr)
+		}
+		return fmt.Sprintf("%v", v), ""
+	}
+
+	return corrExpr, ""
 }
 
 // headerParams pulls the "header" bucket out of the prepared parameters map for use as message headers.
