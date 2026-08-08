@@ -13,7 +13,6 @@ package executor
 
 import (
 	"encoding/json"
-	"fmt"
 	"time"
 
 	"github.com/wso2/arazzo-designer-cli/internal/telemetry"
@@ -131,6 +130,6 @@ func upperOperation(operation string) string {
 	case "receive":
 		return "RECEIVE"
 	default:
-		return fmt.Sprintf("%s", operation)
+		return operation
 	}
 }
