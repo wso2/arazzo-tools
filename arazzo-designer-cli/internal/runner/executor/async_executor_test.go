@@ -42,7 +42,10 @@ func TestInMemoryAdapter_FIFO(t *testing.T) {
 	if err != nil || m1.Payload.(map[string]interface{})["n"] != 1 {
 		t.Fatalf("first receive: %v / %v", m1, err)
 	}
-	m2, _ := a.Receive("ch", "", time.Second)
+	m2, err := a.Receive("ch", "", time.Second)
+	if err != nil {
+		t.Fatalf("second receive: %v", err) // stop here: m2 is nil on error
+	}
 	if m2.Payload.(map[string]interface{})["n"] != 2 {
 		t.Errorf("second receive should be the 2nd message, got %v", m2.Payload)
 	}
