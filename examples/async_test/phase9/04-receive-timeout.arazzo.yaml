@@ -1,7 +1,7 @@
 # Phase 9 — Scenario 4: RECEIVE TIMEOUT (fails on purpose). Nothing is sent, so the receive waits
 # up to its `timeout` and then fails — the step (and workflow) end in error instead of hanging forever.
 #
-# EXPECTED: run **timeoutFlow** → `await` waits ~300ms then fails:
+# EXPECTED: run **timeoutFlow** → `await` waits ~3000ms then fails:
 #   receive on channel "orders/new" timed out after 300ms: no message arrived
 # (a receive WITH a correlationId that times out instead says: no message matching correlationId "…" arrived)
 
@@ -22,6 +22,6 @@ workflows:
       - stepId: await
         channelPath: orderBus#/channels/orders
         action: receive
-        timeout: 300                       # nothing is ever sent -> times out -> fails
+        timeout: 3000                       # nothing is ever sent -> times out -> fails
         successCriteria:
           - condition: '$message.payload.status == "new"'
