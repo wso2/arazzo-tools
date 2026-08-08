@@ -105,7 +105,12 @@ func (se *StepExecutor) executeSend(step map[string]interface{}, channel string,
 	}
 	headers := headerParams(se.ParamProcessor.PrepareParameters(step, state))
 
-	raw, _ := json.Marshal(payload) // basic Phase-9 serialization; Phase 10 formalizes the layer
+	// Basic Phase-9 serialization; Phase 10 formalizes the layer. A payload that cannot be encoded
+	// must not be published as an empty message and reported as a successful send.
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return se.createFailureResult(stepID, step, state, fmt.Sprintf("send on channel %q: could not serialize payload: %v", channel, err))
+	}
 	msg := &Message{
 		Payload:     payload,
 		Headers:     headers,
