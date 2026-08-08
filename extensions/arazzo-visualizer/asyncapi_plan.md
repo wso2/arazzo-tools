@@ -562,7 +562,7 @@ confirmation) is the very last.
 ## Known Issues / Bugs (separate from the v1.1.0 phases — fix independently)
 
 > **End-of-project cleanup batch.** None of these are v1.1.0 phase work. Best tackled together at the
-> very end, after Phases 1–12, in one final pass: (1) the final XPath push (XPath selectors + `targetSelectorType: xpath`, see Phases 4/6), (2) the server-stop UI bug below, and (3) executable `type: arazzo` source descriptions below.
+> very end, after Phases 1–12, in one final pass: (1) the final XPath push (XPath selectors + `targetSelectorType: xpath`, see Phases 4/6), (2) the server-stop UI bug below, (3) executable `type: arazzo` source descriptions below, and (4) the two LSP validation blind spots below.
 
 ### BUG: stopping the Arazzo server doesn't reset the "server running" UI state
 **Not related to v1.1.0** — a pre-existing extension lifecycle bug; tracked here so it isn't lost.
@@ -606,6 +606,24 @@ reset on stop: status-bar play/stop toggle, CodeLenses, and the webview prompt.
 `initializeMCPServerRunner`/task-end listener), `arazzo-designer-extension/src/extension.ts`
 (`arazzoServerRunning` context callback, status-bar items), `mcp/runWorkflowCodeLens.ts`,
 `mcp/mcpPlaygroundWebview.ts` (webview running state).
+
+### GAP: two LSP validation blind spots (missed detections, not false alarms)
+**Found while auditing the validator for misfires during Phase 9.** Both are cases the validator
+stays silent on when it arguably shouldn't — the opposite of a false positive, so nothing currently
+reports incorrectly. Additive new rules; fold into the end-of-project batch.
+
+1. **A `goto` to a non-existent `stepId` is never validated.** `onSuccess: [{type: goto, stepId:
+   doesNotExist}]` produces no diagnostic at all, so a typo there only surfaces at runtime. Both the
+   step list and the workflow list are already available to the validator, so this is a small check —
+   the same shape as the existing `dependsOn` reference validation.
+2. **`$steps.<id>` references are only checked inside `parameters`.** The identical reference in
+   `outputs` or `successCriteria` is not validated, so a typo'd step id there is silently unresolved.
+   Coverage should be consistent across the three positions.
+
+Related and already fixed (recorded so the distinction is clear): the `$steps.<id>` check used to be
+a hard **error** whenever the referenced step was declared later, which false-positived on a legal
+backward-`goto` loop — declaration order is not execution order. It now errors only when the step does
+not exist, and warns when it exists but is declared later.
 
 ### GAP: `type: arazzo` source descriptions (external Arazzo documents) are not executable
 **Pre-existing since v1.0.1 — NOT a v1.1.0 item.** Recorded here so it isn't lost; tackle at the very
