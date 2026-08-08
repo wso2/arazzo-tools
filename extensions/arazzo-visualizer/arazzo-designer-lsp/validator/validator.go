@@ -559,13 +559,23 @@ func (v *Validator) validateRuntimeExpressions(step *parser.Step, workflow *pars
 						parts := strings.SplitN(reference, ".", 2)
 						if len(parts) > 0 {
 							refStepID := parts[0]
-							// Check if referenced step exists and comes before this step
-							if !v.stepExistsBeforeCurrent(workflow, refStepID, step.StepID) {
+							// A reference to a step that does not exist is always wrong. A reference to
+							// a step declared LATER is normally wrong too — but not always: a `goto`
+							// can send execution backwards, so a later step may well have already run.
+							// Declaration order is not execution order, so that case is a warning.
+							if !v.stepExistsInWorkflow(workflow, refStepID) {
 								errors = append(errors, ValidationError{
 									Line:     step.LineNumber,
 									Column:   0,
-									Message:  fmt.Sprintf("Step '%s': Referenced step '%s' does not exist or comes after current step", step.StepID, refStepID),
+									Message:  fmt.Sprintf("Step '%s': Referenced step '%s' does not exist in this workflow", step.StepID, refStepID),
 									Severity: "error",
+								})
+							} else if !v.stepExistsBeforeCurrent(workflow, refStepID, step.StepID) {
+								errors = append(errors, ValidationError{
+									Line:     step.LineNumber,
+									Column:   0,
+									Message:  fmt.Sprintf("Step '%s': Referenced step '%s' is declared after this step, so its outputs are unavailable unless a 'goto' runs it first", step.StepID, refStepID),
+									Severity: "warning",
 								})
 							}
 						}
@@ -594,6 +604,16 @@ func (v *Validator) validateRuntimeExpressions(step *parser.Step, workflow *pars
 }
 
 // stepExistsBeforeCurrent checks if a step exists before the current step
+// stepExistsInWorkflow reports whether a workflow declares a step with this id, regardless of order.
+func (v *Validator) stepExistsInWorkflow(workflow *parser.Workflow, targetStepID string) bool {
+	for _, step := range workflow.Steps {
+		if step.StepID == targetStepID {
+			return true
+		}
+	}
+	return false
+}
+
 func (v *Validator) stepExistsBeforeCurrent(workflow *parser.Workflow, targetStepID, currentStepID string) bool {
 	for _, step := range workflow.Steps {
 		if step.StepID == currentStepID {

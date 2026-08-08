@@ -209,6 +209,39 @@ func TestAsyncFieldsAllowedOnOperationTargets(t *testing.T) {
 	}
 }
 
+// A `$steps.<id>` reference in a parameter distinguishes two cases: a step that does not exist is
+// always an error, while a step declared LATER is only usually wrong — a `goto` can run it first,
+// so declaration order is not execution order. The latter must not be a hard error.
+func TestStepsReferenceOrdering(t *testing.T) {
+	api := "  - name: api\n    url: ./api.yaml\n    type: openapi\n"
+
+	// Earlier step: always fine.
+	errs := diagnose(t, docWith(api,
+		"      - stepId: a\n        operationId: opA\n"+
+			"      - stepId: b\n        operationId: opB\n        parameters:\n          - name: p\n            in: query\n            value: $steps.a.outputs.id\n"))
+	if has(errs, "error", "Referenced step") || has(errs, "warning", "Referenced step") {
+		t.Errorf("a reference to an earlier step must be clean, got:%s", dump(errs))
+	}
+
+	// Non-existent step: error.
+	errs = diagnose(t, docWith(api,
+		"      - stepId: a\n        operationId: opA\n        parameters:\n          - name: p\n            in: query\n            value: $steps.ghost.outputs.id\n"))
+	if !has(errs, "error", "does not exist in this workflow") {
+		t.Errorf("a reference to a non-existent step should be an error, got:%s", dump(errs))
+	}
+
+	// Later step: warning, not error — reachable via a backward goto.
+	errs = diagnose(t, docWith(api,
+		"      - stepId: a\n        operationId: opA\n        parameters:\n          - name: p\n            in: query\n            value: $steps.b.outputs.id\n"+
+			"      - stepId: b\n        operationId: opB\n"))
+	if !has(errs, "warning", "is declared after this step") {
+		t.Errorf("a reference to a later step should warn, got:%s", dump(errs))
+	}
+	if has(errs, "error", "Referenced step") {
+		t.Errorf("a reference to a later step must not be a hard error, got:%s", dump(errs))
+	}
+}
+
 func TestChannelPathRequiresAction(t *testing.T) {
 	bus := "  - name: bus\n    url: ./bus.yaml\n    type: asyncapi\n"
 	// channelPath present but no action -> error (direction undefined)
