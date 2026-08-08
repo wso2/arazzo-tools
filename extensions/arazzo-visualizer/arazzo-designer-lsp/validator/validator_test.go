@@ -173,6 +173,42 @@ func TestChannelPathAllowsUntypedSource(t *testing.T) {
 	}
 }
 
+// Whether a step is AsyncAPI depends on the SOURCE it targets, not on which targeting field it
+// used: a REST step uses operationId/operationPath, and an AsyncAPI step may use any of
+// operationId/operationPath/channelPath. So `action` and `correlationId` must not be reported as
+// misplaced merely because the step has no `channelPath`.
+func TestAsyncFieldsAllowedOnOperationTargets(t *testing.T) {
+	bus := "  - name: orderBus\n    url: ./order-events.asyncapi.yaml\n    type: asyncapi\n"
+	api := "  - name: api\n    url: ./api.yaml\n    type: openapi\n"
+
+	asyncSteps := []struct{ label, sources, step string }{
+		{"bare operationId + correlationId", bus,
+			"      - stepId: await\n        operationId: consumeOrder\n        correlationId: \"OP-1\"\n"},
+		{"scoped operationId + action", bus + api,
+			"      - stepId: emit\n        operationId: $sourceDescriptions.orderBus.placeOrder\n        action: send\n"},
+		{"operationPath + action", bus + api,
+			"      - stepId: emit\n        operationPath: orderBus#/operations/placeOrder\n        action: send\n"},
+		{"operationPath + correlationId", bus + api,
+			"      - stepId: await\n        operationPath: orderBus#/operations/consumeOrder\n        correlationId: \"OP-1\"\n"},
+	}
+	for _, c := range asyncSteps {
+		errs := diagnose(t, docWith(c.sources, c.step))
+		if has(errs, "warning", "only applicable to AsyncAPI") || has(errs, "warning", "only meaningful on AsyncAPI") {
+			t.Errorf("%s: a step targeting an AsyncAPI source must not be flagged, got:%s", c.label, dump(errs))
+		}
+	}
+
+	// A step targeting an OpenAPI source is still flagged — the check must not become a no-op.
+	errs := diagnose(t, docWith(api, "      - stepId: rest\n        operationId: $sourceDescriptions.api.getThing\n        correlationId: \"X\"\n"))
+	if !has(errs, "warning", "only meaningful on AsyncAPI") {
+		t.Errorf("correlationId on an OpenAPI-targeting step should still warn, got:%s", dump(errs))
+	}
+	errs = diagnose(t, docWith(api, "      - stepId: rest\n        operationId: getThing\n        action: send\n"))
+	if !has(errs, "warning", "only applicable to AsyncAPI") {
+		t.Errorf("action in a document with no AsyncAPI source should still warn, got:%s", dump(errs))
+	}
+}
+
 func TestChannelPathRequiresAction(t *testing.T) {
 	bus := "  - name: bus\n    url: ./bus.yaml\n    type: asyncapi\n"
 	// channelPath present but no action -> error (direction undefined)

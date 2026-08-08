@@ -9,6 +9,55 @@ import (
 	"github.com/arazzo/lsp/utils"
 )
 
+// stepSourceName returns the source description a step targets, when the step names one. All three
+// targeting fields carry the source in a form the shared helpers already parse, so this asks the
+// same question navigation does — "which declared source is this reference pointing at?".
+func stepSourceName(step *parser.Step) (string, bool) {
+	if step.ChannelPath != "" {
+		if name, _, ok := utils.SplitSourceRefAndPointer(step.ChannelPath); ok {
+			return name, true
+		}
+	}
+	if step.OperationPath != "" {
+		if name, _, ok := utils.SplitSourceRefAndPointer(step.OperationPath); ok {
+			return name, true
+		}
+	}
+	if step.OperationID != "" {
+		if name, _, ok := utils.ParseScopedOperationID(step.OperationID); ok {
+			return name, true
+		}
+	}
+	return "", false
+}
+
+// stepMayTargetAsyncAPI reports whether a step could be an AsyncAPI step.
+//
+// The targeting FIELD does not decide this: a REST step uses `operationId`/`operationPath`, and an
+// AsyncAPI step may use any of `operationId`/`operationPath`/`channelPath`. What decides it is the
+// SOURCE DESCRIPTION the step points at — its declared `type` is the step's type. So the check is
+// "resolve the step's source, then read its type", the same rule the properties panel applies.
+//
+// A step that names no source (a bare `operationId`) cannot be resolved without loading the source
+// files, which the validator does not do. It is then only ruled out when the document declares no
+// source that could be AsyncAPI. `type` is optional on a Source Description Object, so an untyped
+// source can never be ruled out.
+func stepMayTargetAsyncAPI(step *parser.Step, doc *parser.ArazzoDocument) bool {
+	if name, named := stepSourceName(step); named {
+		sd, found := findSourceDescription(doc, name)
+		if !found {
+			return true // an unknown source is reported elsewhere; don't pile on a misleading warning
+		}
+		return sd.Type == "" || sd.Type == "asyncapi"
+	}
+	for _, sd := range doc.SourceDescriptions {
+		if sd.Type == "" || sd.Type == "asyncapi" {
+			return true
+		}
+	}
+	return false
+}
+
 // findSourceDescription looks up a declared source description by its (already normalized) name.
 func findSourceDescription(doc *parser.ArazzoDocument, name string) (parser.SourceDescription, bool) {
 	for _, sd := range doc.SourceDescriptions {
@@ -281,11 +330,13 @@ func (v *Validator) validateSteps(workflow *parser.Workflow, doc *parser.ArazzoD
 		}
 
 		// 'action' is only applicable to AsyncAPI steps (spec §5.8.5: "Only applicable for asyncapi steps").
-		if step.Action != "" && step.ChannelPath == "" {
+		// An AsyncAPI step is a `channelPath` step OR an `operationId` step that targets an AsyncAPI
+		// operation, so this must not be tied to `channelPath` alone.
+		if step.Action != "" && !stepMayTargetAsyncAPI(&step, doc) {
 			errors = append(errors, ValidationError{
 				Line:     step.LineNumber,
 				Column:   0,
-				Message:  fmt.Sprintf("Step '%s': 'action' is only applicable to AsyncAPI steps ('channelPath' must also be set)", step.StepID),
+				Message:  fmt.Sprintf("Step '%s': 'action' is only applicable to AsyncAPI steps (set 'channelPath', or an 'operationId'/'operationPath' that targets an AsyncAPI source)", step.StepID),
 				Severity: "warning",
 			})
 		}
@@ -409,15 +460,20 @@ func (v *Validator) validateSteps(workflow *parser.Workflow, doc *parser.ArazzoD
 		errors = append(errors, v.validateDependsOn(&step, workflow, doc)...)
 
 		// 'correlationId' is only applicable to AsyncAPI steps with action 'receive' (spec §5.8.5).
+		// As with 'action', whether a step is AsyncAPI depends on the source it targets, not on
+		// which targeting field it used.
 		if step.CorrelationID != "" {
-			if step.ChannelPath == "" {
+			if !stepMayTargetAsyncAPI(&step, doc) {
 				errors = append(errors, ValidationError{
 					Line:     step.LineNumber,
 					Column:   0,
-					Message:  fmt.Sprintf("Step '%s': 'correlationId' is only meaningful on AsyncAPI steps (channelPath must also be set)", step.StepID),
+					Message:  fmt.Sprintf("Step '%s': 'correlationId' is only meaningful on AsyncAPI steps (set 'channelPath', or an 'operationId'/'operationPath' that targets an AsyncAPI source)", step.StepID),
 					Severity: "warning",
 				})
-			} else if step.Action != "receive" {
+			} else if step.ChannelPath != "" && step.Action != "receive" {
+				// Only a channelPath step declares its own direction. When the step targets an
+				// operation, the direction lives in the AsyncAPI document, so it cannot be checked
+				// here without resolving the operation.
 				errors = append(errors, ValidationError{
 					Line:     step.LineNumber,
 					Column:   0,
