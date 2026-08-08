@@ -142,9 +142,10 @@ func (se *StepExecutor) ExecuteStep(step map[string]interface{}, workflow map[st
 	}
 
 	// AsyncAPI step? (a channelPath, or an operationId that resolves to an AsyncAPI operation.)
-	// These execute via the message adapter instead of the HTTP path.
+	// These execute via the message adapter instead of the HTTP path. stepSpanID is passed through
+	// as the parent for the messaging span, exactly as it is for the HTTP span below.
 	if info, isAsync := se.resolveAsyncTarget(step); isAsync {
-		return endStep(se.executeAsyncStep(step, info, state, stepID))
+		return endStep(se.executeAsyncStep(step, info, state, stepID, stepSpanID))
 	}
 
 	// Find the operation
