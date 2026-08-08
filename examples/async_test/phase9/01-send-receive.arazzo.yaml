@@ -4,7 +4,8 @@
 # (via the in-memory adapter — no real broker needed), checks `$message.payload.status`, and
 # extracts an output from `$message.payload.orderId`.
 #
-# EXPECTED: run **roundTrip** → emit sends, await receives the correlated message, successCriteria
+# EXPECTED: run **roundTrip** → emit sends, await receives the next message on the channel (no
+# `correlationId` is set, so the receive is unfiltered — see 02 for correlation), successCriteria
 # passes, output `receivedId` = "ORD-1", workflow completes.
 #
 # This is the Phase 9 deliverable: async steps actually execute (Send/Receive) against a pluggable
