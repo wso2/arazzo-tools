@@ -15,6 +15,7 @@ import (
 
 	"github.com/wso2/arazzo-designer-cli/internal/evaluator"
 	"github.com/wso2/arazzo-designer-cli/internal/models"
+	"github.com/wso2/arazzo-designer-cli/internal/telemetry"
 )
 
 // resolveAsyncTarget reports whether a step is an AsyncAPI step and, if so, its resolved target.
@@ -36,7 +37,9 @@ func (se *StepExecutor) resolveAsyncTarget(step map[string]interface{}) (*AsyncI
 }
 
 // executeAsyncStep runs a resolved AsyncAPI step (send or receive) against the configured adapter.
-func (se *StepExecutor) executeAsyncStep(step map[string]interface{}, info *AsyncInfo, state *models.ExecutionState, stepID string) *models.StepResult {
+// parentSpanID is the step's span, under which the messaging span is nested — the same relationship
+// the HTTP span has to its step.
+func (se *StepExecutor) executeAsyncStep(step map[string]interface{}, info *AsyncInfo, state *models.ExecutionState, stepID, parentSpanID string) *models.StepResult {
 	if info == nil {
 		return se.createFailureResult(stepID, step, state, "AsyncAPI target could not be resolved (channel or operation not found)")
 	}
@@ -58,9 +61,9 @@ func (se *StepExecutor) executeAsyncStep(step map[string]interface{}, info *Asyn
 
 	switch action {
 	case "send":
-		return se.executeSend(step, channel, state, stepID)
+		return se.executeSend(step, channel, state, stepID, parentSpanID)
 	case "receive":
-		return se.executeReceive(step, channel, state, stepID)
+		return se.executeReceive(step, channel, state, stepID, parentSpanID)
 	default:
 		return se.createFailureResult(stepID, step, state, fmt.Sprintf("invalid AsyncAPI action %q", action))
 	}
@@ -93,7 +96,7 @@ func resolveAsyncAction(step map[string]interface{}, info *AsyncInfo) (string, e
 // executeSend builds the outgoing message from the step's requestBody + header parameters, serializes
 // it (basic JSON in Phase 9), publishes it on the channel, then — exactly like the receive path —
 // evaluates any `successCriteria` and extracts any `outputs` through the shared checker/extractor.
-func (se *StepExecutor) executeSend(step map[string]interface{}, channel string, state *models.ExecutionState, stepID string) *models.StepResult {
+func (se *StepExecutor) executeSend(step map[string]interface{}, channel string, state *models.ExecutionState, stepID, parentSpanID string) *models.StepResult {
 	var payload interface{}
 	if reqBody := toMap(step["requestBody"]); reqBody != nil {
 		if prepared := se.ParamProcessor.PrepareRequestBody(reqBody, state); prepared != nil {
@@ -111,7 +114,13 @@ func (se *StepExecutor) executeSend(step map[string]interface{}, channel string,
 		Metadata:    map[string]interface{}{},
 	}
 
+	// The message being published is the request-side detail of this span, mirroring how the HTTP
+	// span carries the request body.
+	span := se.startMessagingSpan(state.TraceID, parentSpanID, "send", channel, se.AsyncAdapter.Name(),
+		messageAttrs("messaging.message", payload, headers))
+
 	if err := se.AsyncAdapter.Send(channel, msg); err != nil {
+		span.end(telemetry.SpanStatusError, err.Error(), nil)
 		return se.createFailureResult(stepID, step, state, fmt.Sprintf("send on channel %q failed: %v", channel, err))
 	}
 
@@ -139,9 +148,11 @@ func (se *StepExecutor) executeSend(step map[string]interface{}, channel string,
 	}
 	if success {
 		state.StepsStatus[stepID] = models.StepStatusSuccess
+		span.end(telemetry.SpanStatusOK, "", nil)
 		log.Printf("Step %s: sent a message on channel %q via %s adapter", stepID, channel, se.AsyncAdapter.Name())
 	} else {
 		state.StepsStatus[stepID] = models.StepStatusFailure
+		span.end(telemetry.SpanStatusError, "sent message did not satisfy successCriteria", nil)
 		log.Printf("Step %s: sent a message on channel %q but successCriteria failed", stepID, channel)
 	}
 
@@ -171,7 +182,7 @@ func (se *StepExecutor) executeSend(step map[string]interface{}, channel string,
 // executeReceive waits for a (optionally correlated) message on the channel, exposes it as $message,
 // then evaluates successCriteria and extracts outputs through the SAME checker/extractor used by HTTP
 // steps. A received message with no successCriteria counts as success.
-func (se *StepExecutor) executeReceive(step map[string]interface{}, channel string, state *models.ExecutionState, stepID string) *models.StepResult {
+func (se *StepExecutor) executeReceive(step map[string]interface{}, channel string, state *models.ExecutionState, stepID, parentSpanID string) *models.StepResult {
 	// Correlation id is evaluated against the current context (the incoming message does not exist
 	// yet, so a self-referential "$message.*" correlation resolves to nil -> unfiltered/FIFO receive).
 	correlationID := ""
@@ -182,6 +193,15 @@ func (se *StepExecutor) executeReceive(step map[string]interface{}, channel stri
 	}
 
 	timeout := receiveTimeout(step)
+
+	// What we are waiting FOR is the request-side detail of this span (the analogue of the HTTP
+	// request); the message that actually arrives is added on the end event below.
+	waitAttrs := map[string]string{"messaging.timeout_ms": fmt.Sprintf("%d", timeout.Milliseconds())}
+	if correlationID != "" {
+		waitAttrs["messaging.correlation_id"] = correlationID
+	}
+	span := se.startMessagingSpan(state.TraceID, parentSpanID, "receive", channel, se.AsyncAdapter.Name(), waitAttrs)
+
 	msg, err := se.AsyncAdapter.Receive(channel, correlationID, timeout)
 	if err != nil {
 		reason := fmt.Sprintf("receive on channel %q failed: %v", channel, err)
@@ -192,6 +212,7 @@ func (se *StepExecutor) executeReceive(step map[string]interface{}, channel stri
 				reason = fmt.Sprintf("receive on channel %q timed out after %s: no message arrived", channel, timeout)
 			}
 		}
+		span.end(telemetry.SpanStatusError, reason, nil)
 		return se.createFailureResult(stepID, step, state, reason)
 	}
 
@@ -213,11 +234,15 @@ func (se *StepExecutor) executeReceive(step map[string]interface{}, channel stri
 	if len(toSlice(step["successCriteria"])) > 0 {
 		success = se.SuccessChecker.CheckSuccessCriteria(step, responseForCheck, state)
 	}
+	// The message that arrived is the result-side detail, mirroring the HTTP response body.
+	receivedAttrs := messageAttrs("messaging.message", msg.Payload, msg.Headers)
 	if success {
 		state.StepsStatus[stepID] = models.StepStatusSuccess
+		span.end(telemetry.SpanStatusOK, "", receivedAttrs)
 		log.Printf("Step %s: received a message on channel %q via %s adapter", stepID, channel, se.AsyncAdapter.Name())
 	} else {
 		state.StepsStatus[stepID] = models.StepStatusFailure
+		span.end(telemetry.SpanStatusError, "received message did not satisfy successCriteria", receivedAttrs)
 		log.Printf("Step %s: received a message on channel %q but successCriteria failed", stepID, channel)
 	}
 

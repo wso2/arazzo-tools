@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -177,6 +178,96 @@ func TestAsyncReceiveTimeoutFails(t *testing.T) {
 	}, nil, state)
 	if r.Success {
 		t.Error("receive on an empty channel should time out and fail")
+	}
+}
+
+// ---- telemetry: an async step must be as inspectable in the run logs as a REST step ----
+
+// capturingSink records emitted spans so a test can assert what the run logs will show.
+type capturingSink struct{ events []telemetry.TraceEvent }
+
+func (s *capturingSink) Send(e telemetry.TraceEvent) { s.events = append(s.events, e) }
+func (s *capturingSink) Shutdown()                   {}
+
+// messageSpans returns only the AsyncAPI messaging spans, in emission order.
+func (s *capturingSink) messageSpans() []telemetry.TraceEvent {
+	out := []telemetry.TraceEvent{}
+	for _, e := range s.events {
+		if e.ArazzoKind == telemetry.SpanKindMessage {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// A send and a receive must each emit a start/end messaging span nested under the step span, the
+// same relationship an HTTP span has to its step — carrying the channel, adapter and message.
+func TestAsyncEmitsMessagingSpans(t *testing.T) {
+	sink := &capturingSink{}
+	se := NewStepExecutor(map[string]interface{}{}, asyncSourceDescs(), &models.RuntimeParams{}, sink)
+	state := models.NewExecutionState("wf", nil, nil, nil)
+
+	se.ExecuteStep(map[string]interface{}{
+		"stepId": "emit", "channelPath": "orderBus#/channels/orders", "action": "send",
+		"requestBody": map[string]interface{}{"payload": map[string]interface{}{"orderId": "A1"}},
+	}, nil, state)
+	se.ExecuteStep(map[string]interface{}{
+		"stepId": "recv", "channelPath": "orderBus#/channels/orders", "action": "receive", "timeout": 500,
+	}, nil, state)
+
+	spans := sink.messageSpans()
+	if len(spans) != 4 {
+		t.Fatalf("expected start+end spans for both send and receive, got %d", len(spans))
+	}
+	for _, e := range spans {
+		if e.ParentID == "" {
+			t.Errorf("%s span must be nested under its step span", e.Name)
+		}
+		if e.Attributes["messaging.channel"] != "orders/new" {
+			t.Errorf("%s: channel = %q, want orders/new", e.Name, e.Attributes["messaging.channel"])
+		}
+		if e.Attributes["messaging.adapter"] != "in-memory" {
+			t.Errorf("%s: adapter = %q, want in-memory", e.Name, e.Attributes["messaging.adapter"])
+		}
+	}
+
+	// The send carries the published message up front (its "request" side).
+	if got := spans[0].Attributes["messaging.message.body"]; got != `{"orderId":"A1"}` {
+		t.Errorf("send start should carry the published payload, got %q", got)
+	}
+	if spans[1].StatusCode != telemetry.SpanStatusOK {
+		t.Errorf("successful send should end OK, got %s", spans[1].StatusCode)
+	}
+	// The receive declares what it is waiting for, then reports what arrived (its "response" side).
+	if got := spans[2].Attributes["messaging.timeout_ms"]; got != "500" {
+		t.Errorf("receive start should record the timeout, got %q", got)
+	}
+	if got := spans[3].Attributes["messaging.message.body"]; got != `{"orderId":"A1"}` {
+		t.Errorf("receive end should carry the received payload, got %q", got)
+	}
+}
+
+// A timed-out receive must close its span as an error carrying the reason, so the run logs explain
+// the failure rather than just showing a red step.
+func TestAsyncTimeoutRecordedOnMessagingSpan(t *testing.T) {
+	sink := &capturingSink{}
+	se := NewStepExecutor(map[string]interface{}{}, asyncSourceDescs(), &models.RuntimeParams{}, sink)
+	state := models.NewExecutionState("wf", nil, nil, nil)
+
+	se.ExecuteStep(map[string]interface{}{
+		"stepId": "recv", "channelPath": "orderBus#/channels/orders", "action": "receive", "timeout": 50,
+	}, nil, state)
+
+	spans := sink.messageSpans()
+	if len(spans) != 2 {
+		t.Fatalf("expected a start+end span, got %d", len(spans))
+	}
+	end := spans[1]
+	if end.StatusCode != telemetry.SpanStatusError {
+		t.Errorf("a timed-out receive should end as an error, got %s", end.StatusCode)
+	}
+	if !strings.Contains(end.StatusMessage, "timed out") {
+		t.Errorf("the span should explain the timeout, got %q", end.StatusMessage)
 	}
 }
 
