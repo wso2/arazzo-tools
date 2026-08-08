@@ -21,7 +21,7 @@ Phase 9 makes AsyncAPI steps **actually execute**: `action: send` publishes a me
 
 Via the CLI test runner (`test_runner <file> <workflowId> [input-json]`):
 
-```
+```sh
 test_runner examples/async_test/phase9/01-send-receive.arazzo.yaml roundTrip
 test_runner examples/async_test/phase9/02-correlation.arazzo.yaml correlate '{"wantOrder":"ORD-B"}'
 test_runner examples/async_test/phase9/03-operationid-async.arazzo.yaml byOperationId
