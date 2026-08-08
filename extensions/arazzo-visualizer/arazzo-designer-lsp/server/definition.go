@@ -83,6 +83,13 @@ func (s *Server) Definition(ctx context.Context, params *protocol.DefinitionPara
 // ensureSourcesIndexed resolves the document's declared sources and indexes any that aren't yet, so
 // a lookup immediately after can find their operations/channels.
 func (s *Server) ensureSourcesIndexed(uri protocol.DocumentURI, content string) []resolvedSource {
+	// Same per-document lock indexDeclaredSources takes: resolving, indexing and recording the
+	// resolved types is a multi-step update of shared state, and a Definition/Hover request must not
+	// interleave with a background indexing pass for the same document.
+	lock := s.sourceRegistry.lockForIndexing(uri)
+	lock.Lock()
+	defer lock.Unlock()
+
 	sources := s.resolveDocSources(uri, content)
 	for _, src := range sources {
 		if !s.operationIndex.HasFile(src.fileURI) {
