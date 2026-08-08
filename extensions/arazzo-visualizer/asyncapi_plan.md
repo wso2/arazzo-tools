@@ -625,9 +625,10 @@ reset on stop: status-bar play/stop toggle, CodeLenses, and the webview prompt.
 `mcp/mcpPlaygroundWebview.ts` (webview running state).
 
 ### GAP: two remaining LSP validation blind spots (missed detections, not false alarms)
-**Found while auditing the validator for misfires during Phase 9.** All are cases the validator stays
-silent on when it arguably shouldn't — the opposite of a false positive, so nothing currently reports
-incorrectly. Additive new rules; fold into the end-of-project batch.
+**Found while auditing the validator for misfires during Phase 9.** Items 1–2 are still open: cases the
+validator stays silent on when it arguably shouldn't — the opposite of a false positive, so nothing
+reports incorrectly today. Additive new rules; fold into the end-of-project batch. Item 3 is kept,
+struck through, because it was the root cause the other deferred async checks shared.
 
 1. **A `goto` to a non-existent `stepId` is never validated.** `onSuccess: [{type: goto, stepId:
    doesNotExist}]` produces no diagnostic at all, so a typo there only surfaces at runtime. Both the
