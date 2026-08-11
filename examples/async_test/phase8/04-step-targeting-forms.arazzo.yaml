@@ -36,7 +36,9 @@ workflows:
   - workflowId: targetingForms
     steps:
       # --- operationId: by name -------------------------------------------------------------------
-      # Bare form. Resolvable because the name is unique across this document's sources.
+      # Bare form. THIS TOOLING accepts it as shorthand because the name is unique across the
+      # document's sources — but the spec REQUIRES the scoped form once 2+ non-arazzo sources are
+      # declared (as they are here), so prefer the scoped spelling below in real documents.
       - stepId: bareOperationId
         operationId: getProducts                                   # -> catalog.openapi.yaml, getProducts
 

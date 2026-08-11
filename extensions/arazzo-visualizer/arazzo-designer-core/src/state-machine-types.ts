@@ -138,7 +138,8 @@ export interface WebviewTraceEvent {
     // Custom streaming extension
     lifecycle: 'start' | 'end';
     // Custom Arazzo span classification
-    arazzo_span_kind: 'workflow' | 'step' | 'http' | 'retry';
+    // 'message' is the AsyncAPI counterpart of 'http': one send/receive on a channel.
+    arazzo_span_kind: 'workflow' | 'step' | 'http' | 'message' | 'retry';
     duration_ms?: number;
 }
 

@@ -1,0 +1,42 @@
+# Phase 9 — Scenario 9: A SEND STEP'S successCriteria CAN FAIL IT (fails on purpose).
+#
+# Criteria declared on a send step are evaluated, not ignored. Here the step publishes an order whose
+# status is "draft" while asserting it is "new" — so the publish itself succeeds, but the step FAILS
+# because its own criteria do not hold. A dependent step therefore never runs.
+#
+# Before this was wired, a send step returned success unconditionally: the criterion below would have
+# been silently skipped and the workflow would have "passed" while asserting something untrue.
+#
+# EXPECTED: run **badSend** → `emit` fails with:
+#   sent message did not satisfy successCriteria
+# and `never` does not execute.
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 9 - send criteria failure (on purpose)"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: orderBus
+    url: ./order-events.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: badSend
+    steps:
+      - stepId: emit
+        channelPath: orderBus#/channels/orders
+        action: send
+        requestBody:
+          payload:
+            orderId: "ORD-X"
+            status: "draft"            # published as draft ...
+        successCriteria:
+          - condition: '$message.payload.status == "new"'   # ... but asserted to be new -> step fails
+
+      # Never reached: the workflow stops when `emit` fails.
+      - stepId: never
+        channelPath: orderBus#/channels/orders
+        action: receive
+        timeout: 500

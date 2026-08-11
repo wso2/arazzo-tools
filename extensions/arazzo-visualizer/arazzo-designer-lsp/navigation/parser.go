@@ -64,22 +64,21 @@ func ParseOpenAPIFile(fileURI string) (*OpenAPIFile, error) {
 		openAPIFile.Description = getString(info, "description")
 	}
 
-	// Extract operations from paths
-	operations, err := extractOperations(spec, fileURI, string(content))
-	if err != nil {
-		utils.LogWarning("Error extracting operations: %v", err)
-		// Continue even if some operations fail to parse
-	}
-
-	openAPIFile.Operations = operations
-
-	// If this is an AsyncAPI document, also extract its operations (keyed by id) and channels so
-	// `operationId` and `channelPath` references can navigate into it.
+	// An AsyncAPI document has no `paths`, so running the OpenAPI extractor over it only produces a
+	// misleading "no paths found in OpenAPI spec" warning. Decide the spec type first and run only
+	// the extractor that applies.
 	if asyncVersion := getString(spec, "asyncapi"); asyncVersion != "" {
 		openAPIFile.Version = asyncVersion
 		openAPIFile.SpecType = "asyncapi"
-		openAPIFile.Operations = append(openAPIFile.Operations, extractAsyncOperations(spec, fileURI, string(content))...)
+		openAPIFile.Operations = extractAsyncOperations(spec, fileURI, string(content))
 		openAPIFile.Channels = extractChannels(spec, fileURI, string(content))
+	} else {
+		operations, err := extractOperations(spec, fileURI, string(content))
+		if err != nil {
+			utils.LogWarning("Error extracting operations: %v", err)
+			// Continue even if some operations fail to parse
+		}
+		openAPIFile.Operations = operations
 	}
 
 	utils.LogInfo("Parsed %d operations, %d channels from %s", len(openAPIFile.Operations), len(openAPIFile.Channels), filepath.Base(filePath))

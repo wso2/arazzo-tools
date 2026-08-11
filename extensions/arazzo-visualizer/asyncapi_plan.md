@@ -404,14 +404,43 @@ exactly as they are (UI changes need team confirmation; they are parked in the f
     - **Indexing runs on open, change AND save**, always file-scoped: saving an Arazzo file re-resolves and re-indexes its declared sources (so a newly added `sourceDescription` works without reopening); saving a source spec re-indexes that file (AsyncAPI files included, not just `openapi:`).
     - **Per-document typed source registry** ([server/source_registry.go](arazzo-designer-lsp/server/source_registry.go)) — for each Arazzo document it records every declared source's name, declared `type`, the type the file **actually** is (`OpenAPIFile.SpecType`), resolved file URI, and a remote flag; exposes `AsyncSources`/`RESTSources` so **event-driven sources are tracked separately from REST ones**, plus `TypeMismatch()` when a file contradicts its declared type. Entries are document-scoped (a source name means nothing outside the document that declared it) and dropped on close. Surfaced to clients — e.g. the graph, to tell which kind of API a step targets — via the additive **`arazzo/getSourceInfo`** LSP method (`{sources, async, rest}`); `arazzo/getModel`'s shape is unchanged.
   - Validation now also covers **`operationPath`** (format, unknown source, `arazzo`-typed source → use `workflowId`) and the **scoped `operationId`** (unknown source, malformed `$` expression), symmetric with the existing `channelPath` rules.
-  - Validation: [validator.go](arazzo-designer-lsp/validator/validator.go) — **`channelPath` present but `action` absent → ERROR** (direction undefined), plus channelPath format + source-type (`asyncapi`) checks. The **`operationId`/`action` mismatch** LSP diagnostic is deferred (needs cross-source resolution in the validator; enforcement rides with Phase 9 — prefer the AsyncAPI document's action and warn).
+  - Validation: [validator.go](arazzo-designer-lsp/validator/validator.go) — **`channelPath` present but `action` absent → ERROR** (direction undefined), plus channelPath format + source-type (`asyncapi`) checks. The **`operationId`/`action` mismatch** LSP diagnostic was originally deferred here (it needs cross-source resolution the validator could not do) — **now implemented**, see the step-action resolver below.
 - **Part 3 — Visualizer properties panel ✅ DONE.** [NodePropertiesPanel.tsx](arazzo-designer-visualizer/src/views/WorkflowView/NodePropertiesPanel.tsx) now shows, on a clicked step: a **Step Type** field (AsyncAPI via `channelPath`/`action`; a scoped `operationId` resolves to its source's declared type; a bare `operationId` resolves when the doc declares exactly one typed source, else OpenAPI; `workflowId` → Workflow), an **AsyncAPI** section (`channelPath`/`action`/`correlationId`/`timeout`), and a **Depends On** section. The async fields already reach the panel via `...stepData` (no plumbing needed). **Properties panel ONLY** — no node/graph/badge/edge changes (those stay in Phase 13).
 
 Tests: AsyncAPI source loads ✅; op/channel indexed ✅; **all three targeting forms** (`operationId` bare+scoped, `channelPath`, `operationPath`) navigate to the right file+line in **both source-reference spellings** ✅; hover matches the click target for every form ✅; navigation stays scoped to declared sources (an undeclared same-named op is never reached) ✅; `$self`-aware resolution matches the runner ✅; per-document registry records declared/resolved types, splits async vs REST, flags type mismatches, and is dropped on close ✅; save re-indexes declared sources ✅; channelPath-without-action errors ✅; targeting validation (unknown source / bad format / malformed expression / arazzo-source operationPath) ✅; async metadata + Step Type shown in the properties panel ✅; graph rendering otherwise unchanged ✅. Examples: [examples/async_test/phase8/](../../examples/async_test/phase8) (01 panel/nav, 02 operationId, 03 async validation, **04 every targeting form × both spellings, 05 targeting validation**) — 04 and 05 are also test fixtures, so the shipped examples are verified to behave exactly as their headers claim.
 
 **Deferred out of Phase 8 (tracked):** the single-clickable-link for a whole `channelPath` value (needs a DocumentLink provider — Ctrl+click/hover already navigate correctly, the link is just segmented); removal of the dead directory-scan code.
 
-### Phase 9: AsyncAPI Adapter Interface — ❌ NOT STARTED
+### Phase 9: AsyncAPI Adapter Runtime — ✅ DONE (blocking model; in-memory adapter)
+
+Goal: make AsyncAPI steps actually EXECUTE. Mostly CLI runner work, but the last three bullets also
+touch the LSP (a validator hook) and the visualizer (rendering the new message spans) — an async step
+should behave, be diagnosed, and be inspected exactly like a REST step.
+
+**Implemented:**
+- **Adapter interface + in-memory adapter** — [adapter.go](../../arazzo-designer-cli/internal/runner/executor/adapter.go) (`Adapter` = `Send`/`Receive`/`Name`, normalized `Message`) and [adapter_inmemory.go](../../arazzo-designer-cli/internal/runner/executor/adapter_inmemory.go) (broker-less FIFO queues + timeout + a simple correlation heuristic). Default adapter is in-memory; a nil adapter yields the clear "requires a configured adapter" error. Real brokers = Phase 11.
+- **Send/receive wiring** — [async_executor.go](../../arazzo-designer-cli/internal/runner/executor/async_executor.go): `resolveAsyncTarget` routes a step to the async path when it has a `channelPath` or an `operationId` that resolves to an AsyncAPI operation (OpenAPI ops stay on the HTTP path). `send` builds payload/headers (reusing `ParameterProcessor`), serializes (basic JSON) and `Send`s; `receive` evaluates `correlationId`, `Receive`s with `timeout`. Both then run the **SAME `SuccessCriteriaChecker` and `OutputExtractor` as the HTTP path** (fed `$message` instead of `$response` via one added `"message"` context key) — no criteria/output logic is duplicated, and `$message` was already supported by the evaluator.
+- **A send step is not special.** `successCriteria` and `outputs` work on **both** directions. Inside a `receive`, `$message` is the message that arrived; inside a `send`, it is the message that step published (same `{header, payload}` shape). That makes the request/reply pattern work without repeating an expression: a send records what it published (`outputs: {sentId: $message.payload.orderId}`) and a later receive correlates on `$steps.<send>.outputs.sentId`.
+- **Enforcement:** `channelPath` without `action` → runtime hard error; step `action` vs operation `action` mismatch → operation wins + warning; declared `successCriteria` are never silently skipped on either direction.
+- **`correlationId` is always honoured.** A declared `correlationId` was only used when it was a `$`
+  runtime expression; a literal (`correlationId: "OP-2"`) evaluated to nil and the receive silently
+  fell back to **unfiltered**, returning an unrelated message and reporting SUCCESS. Now: absent →
+  unfiltered (with a warning); a literal → used as the id; an expression → its resolved value; an
+  expression resolving to nothing → the step **fails** rather than degrading to unfiltered.
+- **Async direction resolution for the LSP** — the validator only sees the Arazzo text, so it could
+  classify a step as send/receive only when the step wrote `action:` itself. It now takes an optional
+  resolver (`WithStepActionResolver`), which the server wires to the existing operation index
+  ([definition.go](arazzo-designer-lsp/server/definition.go) `resolveStepAsyncAction`) using the same
+  lookups navigation uses. That makes the direction of an `operationId`/`operationPath` step known and
+  enables two editor diagnostics that previously could not fire on the spec-preferred form: **a
+  receive with no `correlationId`**, and the **`action` vs operation-action mismatch** deferred from
+  Phase 8. Both are warnings; when the operation cannot be resolved the checks stay quiet.
+- **Run-log parity with REST steps** — [async_telemetry.go](../../arazzo-designer-cli/internal/runner/executor/async_telemetry.go). A REST step emits a child `http` span (request on start, response on end) which the Logs tab renders under the step; an async step now emits the equivalent **`message` span** (new `telemetry.SpanKindMessage`), nested under the step span exactly as the HTTP span is. Attributes mirror the HTTP ones: `messaging.operation` (send/receive), `messaging.channel`, `messaging.adapter`, plus `messaging.correlation_id`/`messaging.timeout_ms` on a receive, and `messaging.message.body`/`.headers` for the message — published up front on a send, reported on arrival for a receive (the analogue of request vs response). Timeouts and criteria failures close the span as errors carrying the reason. Telemetry lives in the **executor**, not the adapters, so adapters stay pure transport and every future broker is instrumented for free. The visualizer's Logs tab collects `message` spans alongside `http` ones and renders them with the same card layout ([LogsTab.tsx](arazzo-designer-visualizer/src/views/WorkflowView/LogsTab.tsx) `MessagePairCard`).
+- **Blocking model (choice (a)):** receive waits inline up to `timeout`; `dependsOn` stays the Phase-7 gate. Existing run telemetry drives the node red/green (received → success, timed out → failure). Examples [examples/async_test/phase9/](../../examples/async_test/phase9) 01–09 all behave as documented (5 pass, 4 fail on purpose).
+
+**Deferred:** the **non-blocking** receive model (b) + the `dependsOn` "started-but-not-completed → wait-with-timeout" branch (a later refinement); the real serialization layer (Phase 10); real brokers (Phase 11).
+
+<details><summary>Original design — kept for reference</summary>
 
 Goal: a runtime boundary to send/receive messages without hard-coding any broker.
 
@@ -448,6 +477,8 @@ but unconfigured: `AsyncAPI execution requires a configured adapter for this pro
 
 Tests: in-memory send; in-memory receive matches; receive ignores non-matching correlation ids;
 receive times out; `$message.payload` criteria & outputs work.
+
+</details>
 
 ### Phase 10: Message Serialization Layer — ❌ NOT STARTED
 
@@ -548,7 +579,7 @@ confirmation) is the very last.
 ## Known Issues / Bugs (separate from the v1.1.0 phases — fix independently)
 
 > **End-of-project cleanup batch.** None of these are v1.1.0 phase work. Best tackled together at the
-> very end, after Phases 1–12, in one final pass: (1) the final XPath push (XPath selectors + `targetSelectorType: xpath`, see Phases 4/6), (2) the server-stop UI bug below, and (3) executable `type: arazzo` source descriptions below.
+> very end, after Phases 1–12, in one final pass: (1) the final XPath push (XPath selectors + `targetSelectorType: xpath`, see Phases 4/6), (2) the server-stop UI bug below, (3) executable `type: arazzo` source descriptions below, and (4) the two remaining LSP validation blind spots below (goto target existence; $steps refs outside parameters).
 
 ### BUG: stopping the Arazzo server doesn't reset the "server running" UI state
 **Not related to v1.1.0** — a pre-existing extension lifecycle bug; tracked here so it isn't lost.
@@ -592,6 +623,30 @@ reset on stop: status-bar play/stop toggle, CodeLenses, and the webview prompt.
 `initializeMCPServerRunner`/task-end listener), `arazzo-designer-extension/src/extension.ts`
 (`arazzoServerRunning` context callback, status-bar items), `mcp/runWorkflowCodeLens.ts`,
 `mcp/mcpPlaygroundWebview.ts` (webview running state).
+
+### GAP: two remaining LSP validation blind spots (missed detections, not false alarms)
+**Found while auditing the validator for misfires during Phase 9.** Items 1–2 are still open: cases the
+validator stays silent on when it arguably shouldn't — the opposite of a false positive, so nothing
+reports incorrectly today. Additive new rules; fold into the end-of-project batch. Item 3 is kept,
+struck through, because it was the root cause the other deferred async checks shared.
+
+1. **A `goto` to a non-existent `stepId` is never validated.** `onSuccess: [{type: goto, stepId:
+   doesNotExist}]` produces no diagnostic at all, so a typo there only surfaces at runtime. Both the
+   step list and the workflow list are already available to the validator, so this is a small check —
+   the same shape as the existing `dependsOn` reference validation.
+2. **`$steps.<id>` references are only checked inside `parameters`.** The identical reference in
+   `outputs` or `successCriteria` is not validated, so a typo'd step id there is silently unresolved.
+   Coverage should be consistent across the three positions.
+3. ~~**Async step checks can't see the source document.**~~ **FIXED** (see "Async direction resolution"
+   in Phase 9 above). The validator now receives an optional step-action resolver, so an
+   `operationId`/`operationPath` step's direction is resolved from the indexed AsyncAPI operation.
+   This closed both the "receive with no `correlationId`" gap on that form **and** the
+   `operationId`/`action` mismatch diagnostic deferred from Phase 8.
+
+Related and already fixed (recorded so the distinction is clear): the `$steps.<id>` check used to be
+a hard **error** whenever the referenced step was declared later, which false-positived on a legal
+backward-`goto` loop — declaration order is not execution order. It now errors only when the step does
+not exist, and warns when it exists but is declared later.
 
 ### GAP: `type: arazzo` source descriptions (external Arazzo documents) are not executable
 **Pre-existing since v1.0.1 — NOT a v1.1.0 item.** Recorded here so it isn't lost; tackle at the very

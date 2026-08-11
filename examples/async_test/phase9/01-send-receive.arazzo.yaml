@@ -1,0 +1,45 @@
+# Phase 9 — Scenario 1: a self-contained AsyncAPI send → receive round trip that RUNS.
+#
+# `emit` sends a message on the `orders` channel; `await` receives it back on the same channel
+# (via the in-memory adapter — no real broker needed), checks `$message.payload.status`, and
+# extracts an output from `$message.payload.orderId`.
+#
+# EXPECTED: run **roundTrip** → emit sends, await receives the next message on the channel (no
+# `correlationId` is set, so the receive is unfiltered — see 02 for correlation), successCriteria
+# passes, output `receivedId` = "ORD-1", workflow completes.
+#
+# This is the Phase 9 deliverable: async steps actually execute (Send/Receive) against a pluggable
+# adapter. Real brokers (Kafka/MQTT/…) are Phase 11; here the built-in in-memory adapter is used.
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 9 - async send/receive round trip"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: orderBus
+    url: ./order-events.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: roundTrip
+    steps:
+      - stepId: emit
+        channelPath: orderBus#/channels/orders
+        action: send
+        requestBody:
+          payload:
+            orderId: "ORD-1"
+            status: "new"
+
+      - stepId: await
+        channelPath: orderBus#/channels/orders
+        action: receive
+        timeout: 2000
+        successCriteria:
+          - condition: '$message.payload.status == "new"'
+        outputs:
+          receivedId: $message.payload.orderId
+    outputs:
+      orderId: $steps.await.outputs.receivedId

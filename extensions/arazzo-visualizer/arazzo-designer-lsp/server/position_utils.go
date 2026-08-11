@@ -123,10 +123,6 @@ func extractFieldValueAtPosition(content string, position protocol.Position, fie
 	return strings.TrimSpace(value)
 }
 
-// NOT USED — no production caller (Definition/Hover use extractChannelPathAtPosition, which keeps
-// the source-name part needed to scope the lookup). Kept because it is still covered by a test and
-// documents the key-only form; safe to remove together with that test.
-//
 // isKeyPrefix reports whether a matched field name is the WHOLE property key rather than the tail of
 // a longer one or text inside a comment, judged from what precedes it on the line.
 //
@@ -151,6 +147,10 @@ func isKeyPrefix(prefix string) bool {
 	}
 }
 
+// NOT USED — no production caller (Definition/Hover use extractChannelPathAtPosition, which keeps
+// the source-name part needed to scope the lookup). Kept because it is still covered by a test and
+// documents the key-only form; safe to remove together with that test.
+//
 // extractChannelKeyAtPosition returns the channel KEY from a `channelPath:` value at the cursor,
 // e.g. "orderBus#/channels/orders" -> "orders". Returns "" if the line isn't a channelPath value.
 func extractChannelKeyAtPosition(content string, position protocol.Position) string {

@@ -36,11 +36,15 @@ interface HttpPair {
     end?: WebviewTraceEvent;
 }
 
+/** An AsyncAPI send/receive span pair — the messaging counterpart of HttpPair. */
+type MessagePair = HttpPair;
+
 interface StepExecution {
     spanId: string;
     stepStart?: WebviewTraceEvent;
     stepEnd?: WebviewTraceEvent;
     httpPairs: HttpPair[];
+    messagePairs: MessagePair[];
 }
 
 type ExecStatus = 'running' | 'ok' | 'error';
@@ -61,24 +65,31 @@ function groupSpansIntoExecutions(spans: WebviewTraceEvent[]): StepExecution[] {
     for (const span of spans) {
         if (span.arazzo_span_kind !== 'step' && span.arazzo_span_kind !== 'workflow') continue;
         const id = span.context.span_id;
-        if (!execMap.has(id)) execMap.set(id, { spanId: id, httpPairs: [] });
+        if (!execMap.has(id)) execMap.set(id, { spanId: id, httpPairs: [], messagePairs: [] });
         const exec = execMap.get(id)!;
         if (span.lifecycle === 'start') exec.stepStart = span;
         else exec.stepEnd = span;
     }
 
-    // Second pass: attach HTTP spans to their parent execution
-    for (const span of spans) {
-        if (span.arazzo_span_kind !== 'http' || !span.parent_id) continue;
-        const exec = execMap.get(span.parent_id);
-        if (!exec) continue;
-        const httpId = span.context.span_id;
-        let pair = exec.httpPairs.find(
-            p => p.start?.context.span_id === httpId || p.end?.context.span_id === httpId
+    // Second pass: attach the transport spans to their parent execution. A REST step emits 'http'
+    // spans and an AsyncAPI step emits 'message' spans; both are start/end pairs nested under the
+    // step, so they are collected the same way.
+    const attachPair = (span: WebviewTraceEvent, pairs: HttpPair[]) => {
+        const spanId = span.context.span_id;
+        let pair = pairs.find(
+            p => p.start?.context.span_id === spanId || p.end?.context.span_id === spanId
         );
-        if (!pair) { pair = {}; exec.httpPairs.push(pair); }
+        if (!pair) { pair = {}; pairs.push(pair); }
         if (span.lifecycle === 'start') pair.start = span;
         else pair.end = span;
+    };
+
+    for (const span of spans) {
+        if (!span.parent_id) continue;
+        const exec = execMap.get(span.parent_id);
+        if (!exec) continue;
+        if (span.arazzo_span_kind === 'http') attachPair(span, exec.httpPairs);
+        else if (span.arazzo_span_kind === 'message') attachPair(span, exec.messagePairs);
     }
 
     return Array.from(execMap.values());
@@ -513,6 +524,114 @@ function HttpPairCard({ pair, stepOutputs }: { pair: HttpPair; stepOutputs: any 
     );
 }
 
+/**
+ * Renders one AsyncAPI send/receive span pair inside a step execution card — the messaging
+ * counterpart of HttpPairCard. There is no status code, so the operation (SEND/RECEIVE) and the
+ * channel take the place of the method and URL, and the message takes the place of the body.
+ */
+function MessagePairCard({ pair, stepOutputs }: { pair: MessagePair; stepOutputs: any }) {
+    // Prefer the 'end' event: it carries the outcome and, for a receive, the message that arrived.
+    const info = pair.end ?? pair.start;
+    if (!info) return null;
+
+    const operation = (info.attributes?.['messaging.operation'] ?? '').toUpperCase();
+    const channel = info.attributes?.['messaging.channel'] ?? info.name;
+    const adapter = info.attributes?.['messaging.adapter'];
+    const correlationId = info.attributes?.['messaging.correlation_id'];
+    const timeoutMs = info.attributes?.['messaging.timeout_ms'];
+
+    const status = pair.end
+        ? (info.status_code === 'STATUS_CODE_ERROR' ? 'error' : 'ok')
+        : 'running';
+    const color = status === 'error'
+        ? 'var(--vscode-errorForeground)'
+        : status === 'running'
+            ? 'var(--vscode-descriptionForeground)'
+            : 'var(--vscode-charts-green)';
+
+    const duration = pair.end?.duration_ms;
+    const errorMsg = pair.end?.status_message;
+
+    // For a send the message is known up front (start); for a receive it only exists once one
+    // arrives (end). Reading start-then-end covers both without branching on the operation.
+    const body = tryParseJson(
+        pair.start?.attributes?.['messaging.message.body'] ?? pair.end?.attributes?.['messaging.message.body']
+    );
+    const headers = tryParseJson(
+        pair.start?.attributes?.['messaging.message.headers'] ?? pair.end?.attributes?.['messaging.message.headers']
+    );
+
+    const hasDetails = correlationId != null || timeoutMs != null || adapter != null;
+    const hasMessage = body != null || headers != null;
+
+    const title = (
+        <HttpHeaderRow>
+            {operation && <HttpMethod>{operation}</HttpMethod>}
+            <HttpUrl title={channel}>{channel}</HttpUrl>
+            <HttpStatusBadge statusColor={color}>
+                {status === 'error' ? 'failed' : status === 'running' ? 'waiting' : 'ok'}
+            </HttpStatusBadge>
+            {duration != null && (
+                <DurationText style={{ marginLeft: '4px' }}>{formatDuration(duration)}</DurationText>
+            )}
+        </HttpHeaderRow>
+    );
+
+    return (
+        <Collapsible title={title} defaultOpen={false}>
+            {errorMsg && <ErrorBlock style={{ marginBottom: 6 }}>{errorMsg}</ErrorBlock>}
+            {hasDetails && (
+                <SubSection>
+                    <SubLabel>Channel</SubLabel>
+                    <InfoGrid>
+                        {adapter != null && (
+                            <>
+                                <InfoLabel>Adapter</InfoLabel>
+                                <InfoValue>{adapter}</InfoValue>
+                            </>
+                        )}
+                        {correlationId != null && (
+                            <>
+                                <InfoLabel>Correlation ID</InfoLabel>
+                                <InfoValue>{correlationId}</InfoValue>
+                            </>
+                        )}
+                        {timeoutMs != null && (
+                            <>
+                                <InfoLabel>Timeout</InfoLabel>
+                                <InfoValue>{timeoutMs} ms</InfoValue>
+                            </>
+                        )}
+                    </InfoGrid>
+                </SubSection>
+            )}
+            {hasMessage && (
+                <SubSection>
+                    <SubLabel>Message</SubLabel>
+                    {headers != null && (
+                        <>
+                            <InfoLabel style={{ fontSize: '10px', marginTop: 2 }}>Headers</InfoLabel>
+                            <JsonPre>{renderValue(headers)}</JsonPre>
+                        </>
+                    )}
+                    {body != null && (
+                        <>
+                            <InfoLabel style={{ fontSize: '10px', marginTop: 2 }}>Payload</InfoLabel>
+                            <JsonPre>{renderValue(body)}</JsonPre>
+                        </>
+                    )}
+                </SubSection>
+            )}
+            {stepOutputs != null && (
+                <SubSection>
+                    <SubLabel>Step Outputs</SubLabel>
+                    <JsonPre>{renderValue(stepOutputs)}</JsonPre>
+                </SubSection>
+            )}
+        </Collapsible>
+    );
+}
+
 /** Renders the body content for one step execution (General info + HTTP spans). */
 function ExecutionBody({ exec }: { exec: StepExecution }) {
     const traceId = exec.stepStart?.context.trace_id ?? exec.stepEnd?.context.trace_id;
@@ -549,6 +668,10 @@ function ExecutionBody({ exec }: { exec: StepExecution }) {
 
             {exec.httpPairs.map((pair, i) => (
                 <HttpPairCard key={i} pair={pair} stepOutputs={stepOutputs} />
+            ))}
+
+            {exec.messagePairs.map((pair, i) => (
+                <MessagePairCard key={`msg-${i}`} pair={pair} stepOutputs={stepOutputs} />
             ))}
 
             {workflowInputs != null && (

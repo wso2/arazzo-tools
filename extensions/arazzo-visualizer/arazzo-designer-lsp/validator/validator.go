@@ -9,6 +9,55 @@ import (
 	"github.com/arazzo/lsp/utils"
 )
 
+// stepSourceName returns the source description a step targets, when the step names one. All three
+// targeting fields carry the source in a form the shared helpers already parse, so this asks the
+// same question navigation does — "which declared source is this reference pointing at?".
+func stepSourceName(step *parser.Step) (string, bool) {
+	if step.ChannelPath != "" {
+		if name, _, ok := utils.SplitSourceRefAndPointer(step.ChannelPath); ok {
+			return name, true
+		}
+	}
+	if step.OperationPath != "" {
+		if name, _, ok := utils.SplitSourceRefAndPointer(step.OperationPath); ok {
+			return name, true
+		}
+	}
+	if step.OperationID != "" {
+		if name, _, ok := utils.ParseScopedOperationID(step.OperationID); ok {
+			return name, true
+		}
+	}
+	return "", false
+}
+
+// stepMayTargetAsyncAPI reports whether a step could be an AsyncAPI step.
+//
+// The targeting FIELD does not decide this: a REST step uses `operationId`/`operationPath`, and an
+// AsyncAPI step may use any of `operationId`/`operationPath`/`channelPath`. What decides it is the
+// SOURCE DESCRIPTION the step points at — its declared `type` is the step's type. So the check is
+// "resolve the step's source, then read its type", the same rule the properties panel applies.
+//
+// A step that names no source (a bare `operationId`) cannot be resolved without loading the source
+// files, which the validator does not do. It is then only ruled out when the document declares no
+// source that could be AsyncAPI. `type` is optional on a Source Description Object, so an untyped
+// source can never be ruled out.
+func stepMayTargetAsyncAPI(step *parser.Step, doc *parser.ArazzoDocument) bool {
+	if name, named := stepSourceName(step); named {
+		sd, found := findSourceDescription(doc, name)
+		if !found {
+			return true // an unknown source is reported elsewhere; don't pile on a misleading warning
+		}
+		return sd.Type == "" || sd.Type == "asyncapi"
+	}
+	for _, sd := range doc.SourceDescriptions {
+		if sd.Type == "" || sd.Type == "asyncapi" {
+			return true
+		}
+	}
+	return false
+}
+
 // findSourceDescription looks up a declared source description by its (already normalized) name.
 func findSourceDescription(doc *parser.ArazzoDocument, name string) (parser.SourceDescription, bool) {
 	for _, sd := range doc.SourceDescriptions {
@@ -33,6 +82,19 @@ type ValidationError struct {
 // Validator validates Arazzo documents
 type Validator struct {
 	parser *parser.Parser
+
+	// resolveStepAction, when set, returns the action ("send"/"receive") declared by the AsyncAPI
+	// operation a step targets, resolved from the indexed source documents.
+	//
+	// The validator itself only ever sees the Arazzo text, so on its own it can classify a step as a
+	// send or a receive ONLY when the step writes `action:` explicitly. With `operationId`/
+	// `operationPath` the direction lives in the AsyncAPI document — which is exactly the form the
+	// spec prefers. This hook lets a caller that already has the operation index (the LSP server)
+	// supply that missing fact, without the validator gaining file access.
+	//
+	// nil in content-only contexts (unit tests, any caller without an index); the checks that need it
+	// simply stay quiet rather than guessing.
+	resolveStepAction func(step *parser.Step) (action string, ok bool)
 }
 
 // NewValidator creates a new Validator
@@ -40,6 +102,27 @@ func NewValidator() *Validator {
 	return &Validator{
 		parser: parser.NewParser(),
 	}
+}
+
+// WithStepActionResolver returns the validator configured to resolve a step's AsyncAPI action
+// through fn. Passing nil restores content-only behaviour.
+func (v *Validator) WithStepActionResolver(fn func(step *parser.Step) (string, bool)) *Validator {
+	v.resolveStepAction = fn
+	return v
+}
+
+// stepAction returns the direction of an async step: the `action` written on the step when present,
+// otherwise the action declared by the operation it targets (resolved through the injected hook).
+// ok is false when the direction cannot be established, in which case direction-dependent checks
+// must not fire.
+func (v *Validator) stepAction(step *parser.Step) (string, bool) {
+	if step.Action != "" {
+		return step.Action, true
+	}
+	if v.resolveStepAction == nil {
+		return "", false
+	}
+	return v.resolveStepAction(step)
 }
 
 // Validate validates an Arazzo document and returns validation errors
@@ -281,11 +364,13 @@ func (v *Validator) validateSteps(workflow *parser.Workflow, doc *parser.ArazzoD
 		}
 
 		// 'action' is only applicable to AsyncAPI steps (spec §5.8.5: "Only applicable for asyncapi steps").
-		if step.Action != "" && step.ChannelPath == "" {
+		// An AsyncAPI step is a `channelPath` step OR an `operationId` step that targets an AsyncAPI
+		// operation, so this must not be tied to `channelPath` alone.
+		if step.Action != "" && !stepMayTargetAsyncAPI(&step, doc) {
 			errors = append(errors, ValidationError{
 				Line:     step.LineNumber,
 				Column:   0,
-				Message:  fmt.Sprintf("Step '%s': 'action' is only applicable to AsyncAPI steps ('channelPath' must also be set)", step.StepID),
+				Message:  fmt.Sprintf("Step '%s': 'action' is only applicable to AsyncAPI steps (set 'channelPath', or an 'operationId'/'operationPath' that targets an AsyncAPI source)", step.StepID),
 				Severity: "warning",
 			})
 		}
@@ -408,16 +493,50 @@ func (v *Validator) validateSteps(workflow *parser.Workflow, doc *parser.ArazzoD
 		// Validate dependsOn references (spec §5.8.5)
 		errors = append(errors, v.validateDependsOn(&step, workflow, doc)...)
 
-		// 'correlationId' is only applicable to AsyncAPI steps with action 'receive' (spec §5.8.5).
-		if step.CorrelationID != "" {
-			if step.ChannelPath == "" {
+		// The AsyncAPI operation a step targets declares its own direction. When the step ALSO writes
+		// `action`, the two must agree — at runtime the operation wins and the step's action is
+		// ignored, so a contradiction means the workflow does the opposite of what it says.
+		if step.Action != "" && v.resolveStepAction != nil {
+			if opAction, ok := v.resolveStepAction(&step); ok && opAction != "" && opAction != step.Action {
 				errors = append(errors, ValidationError{
 					Line:     step.LineNumber,
 					Column:   0,
-					Message:  fmt.Sprintf("Step '%s': 'correlationId' is only meaningful on AsyncAPI steps (channelPath must also be set)", step.StepID),
+					Message:  fmt.Sprintf("Step '%s': 'action' is '%s' but the referenced AsyncAPI operation declares '%s' — at runtime the operation wins, so this step will %s", step.StepID, step.Action, opAction, opAction),
 					Severity: "warning",
 				})
-			} else if step.Action != "receive" {
+			}
+		}
+
+		// A receive with no 'correlationId' consumes whatever message is next on the channel. That is
+		// legal and often intended, but on a shared channel it can pick up a message this workflow
+		// never sent — so it is worth surfacing while authoring, not only in the run log.
+		//
+		// The direction comes from the step's `action` when written, otherwise from the AsyncAPI
+		// operation it targets; if neither is available the check stays quiet rather than guessing.
+		if action, known := v.stepAction(&step); known && action == "receive" && step.CorrelationID == "" {
+			errors = append(errors, ValidationError{
+				Line:     step.LineNumber,
+				Column:   0,
+				Message:  fmt.Sprintf("Step '%s': no 'correlationId' — this receive will consume the next message on the channel without filtering, which may be a message this workflow did not send", step.StepID),
+				Severity: "warning",
+			})
+		}
+
+		// 'correlationId' is only applicable to AsyncAPI steps with action 'receive' (spec §5.8.5).
+		// As with 'action', whether a step is AsyncAPI depends on the source it targets, not on
+		// which targeting field it used.
+		if step.CorrelationID != "" {
+			if !stepMayTargetAsyncAPI(&step, doc) {
+				errors = append(errors, ValidationError{
+					Line:     step.LineNumber,
+					Column:   0,
+					Message:  fmt.Sprintf("Step '%s': 'correlationId' is only meaningful on AsyncAPI steps (set 'channelPath', or an 'operationId'/'operationPath' that targets an AsyncAPI source)", step.StepID),
+					Severity: "warning",
+				})
+			} else if action, known := v.stepAction(&step); known && action != "receive" {
+				// The direction is the step's own `action` when written, otherwise the one resolved
+				// from the AsyncAPI operation — so a send carrying a correlationId is caught in both
+				// forms. When neither is available the check stays quiet.
 				errors = append(errors, ValidationError{
 					Line:     step.LineNumber,
 					Column:   0,
@@ -503,13 +622,23 @@ func (v *Validator) validateRuntimeExpressions(step *parser.Step, workflow *pars
 						parts := strings.SplitN(reference, ".", 2)
 						if len(parts) > 0 {
 							refStepID := parts[0]
-							// Check if referenced step exists and comes before this step
-							if !v.stepExistsBeforeCurrent(workflow, refStepID, step.StepID) {
+							// A reference to a step that does not exist is always wrong. A reference to
+							// a step declared LATER is normally wrong too — but not always: a `goto`
+							// can send execution backwards, so a later step may well have already run.
+							// Declaration order is not execution order, so that case is a warning.
+							if !v.stepExistsInWorkflow(workflow, refStepID) {
 								errors = append(errors, ValidationError{
 									Line:     step.LineNumber,
 									Column:   0,
-									Message:  fmt.Sprintf("Step '%s': Referenced step '%s' does not exist or comes after current step", step.StepID, refStepID),
+									Message:  fmt.Sprintf("Step '%s': Referenced step '%s' does not exist in this workflow", step.StepID, refStepID),
 									Severity: "error",
+								})
+							} else if !v.stepExistsBeforeCurrent(workflow, refStepID, step.StepID) {
+								errors = append(errors, ValidationError{
+									Line:     step.LineNumber,
+									Column:   0,
+									Message:  fmt.Sprintf("Step '%s': Referenced step '%s' is declared after this step, so its outputs are unavailable unless a 'goto' runs it first", step.StepID, refStepID),
+									Severity: "warning",
 								})
 							}
 						}
@@ -538,6 +667,16 @@ func (v *Validator) validateRuntimeExpressions(step *parser.Step, workflow *pars
 }
 
 // stepExistsBeforeCurrent checks if a step exists before the current step
+// stepExistsInWorkflow reports whether a workflow declares a step with this id, regardless of order.
+func (v *Validator) stepExistsInWorkflow(workflow *parser.Workflow, targetStepID string) bool {
+	for _, step := range workflow.Steps {
+		if step.StepID == targetStepID {
+			return true
+		}
+	}
+	return false
+}
+
 func (v *Validator) stepExistsBeforeCurrent(workflow *parser.Workflow, targetStepID, currentStepID string) bool {
 	for _, step := range workflow.Steps {
 		if step.StepID == currentStepID {

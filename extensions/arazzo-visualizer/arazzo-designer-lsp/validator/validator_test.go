@@ -173,6 +173,179 @@ func TestChannelPathAllowsUntypedSource(t *testing.T) {
 	}
 }
 
+// Whether a step is AsyncAPI depends on the SOURCE it targets, not on which targeting field it
+// used: a REST step uses operationId/operationPath, and an AsyncAPI step may use any of
+// operationId/operationPath/channelPath. So `action` and `correlationId` must not be reported as
+// misplaced merely because the step has no `channelPath`.
+func TestAsyncFieldsAllowedOnOperationTargets(t *testing.T) {
+	bus := "  - name: orderBus\n    url: ./order-events.asyncapi.yaml\n    type: asyncapi\n"
+	api := "  - name: api\n    url: ./api.yaml\n    type: openapi\n"
+
+	asyncSteps := []struct{ label, sources, step string }{
+		{"bare operationId + correlationId", bus,
+			"      - stepId: await\n        operationId: consumeOrder\n        correlationId: \"OP-1\"\n"},
+		{"scoped operationId + action", bus + api,
+			"      - stepId: emit\n        operationId: $sourceDescriptions.orderBus.placeOrder\n        action: send\n"},
+		{"operationPath + action", bus + api,
+			"      - stepId: emit\n        operationPath: orderBus#/operations/placeOrder\n        action: send\n"},
+		{"operationPath + correlationId", bus + api,
+			"      - stepId: await\n        operationPath: orderBus#/operations/consumeOrder\n        correlationId: \"OP-1\"\n"},
+	}
+	for _, c := range asyncSteps {
+		errs := diagnose(t, docWith(c.sources, c.step))
+		if has(errs, "warning", "only applicable to AsyncAPI") || has(errs, "warning", "only meaningful on AsyncAPI") {
+			t.Errorf("%s: a step targeting an AsyncAPI source must not be flagged, got:%s", c.label, dump(errs))
+		}
+	}
+
+	// A step targeting an OpenAPI source is still flagged — the check must not become a no-op.
+	errs := diagnose(t, docWith(api, "      - stepId: rest\n        operationId: $sourceDescriptions.api.getThing\n        correlationId: \"X\"\n"))
+	if !has(errs, "warning", "only meaningful on AsyncAPI") {
+		t.Errorf("correlationId on an OpenAPI-targeting step should still warn, got:%s", dump(errs))
+	}
+	errs = diagnose(t, docWith(api, "      - stepId: rest\n        operationId: getThing\n        action: send\n"))
+	if !has(errs, "warning", "only applicable to AsyncAPI") {
+		t.Errorf("action in a document with no AsyncAPI source should still warn, got:%s", dump(errs))
+	}
+}
+
+// A `$steps.<id>` reference in a parameter distinguishes two cases: a step that does not exist is
+// always an error, while a step declared LATER is only usually wrong — a `goto` can run it first,
+// so declaration order is not execution order. The latter must not be a hard error.
+func TestStepsReferenceOrdering(t *testing.T) {
+	api := "  - name: api\n    url: ./api.yaml\n    type: openapi\n"
+
+	// Earlier step: always fine.
+	errs := diagnose(t, docWith(api,
+		"      - stepId: a\n        operationId: opA\n"+
+			"      - stepId: b\n        operationId: opB\n        parameters:\n          - name: p\n            in: query\n            value: $steps.a.outputs.id\n"))
+	if has(errs, "error", "Referenced step") || has(errs, "warning", "Referenced step") {
+		t.Errorf("a reference to an earlier step must be clean, got:%s", dump(errs))
+	}
+
+	// Non-existent step: error.
+	errs = diagnose(t, docWith(api,
+		"      - stepId: a\n        operationId: opA\n        parameters:\n          - name: p\n            in: query\n            value: $steps.ghost.outputs.id\n"))
+	if !has(errs, "error", "does not exist in this workflow") {
+		t.Errorf("a reference to a non-existent step should be an error, got:%s", dump(errs))
+	}
+
+	// Later step: warning, not error — reachable via a backward goto.
+	errs = diagnose(t, docWith(api,
+		"      - stepId: a\n        operationId: opA\n        parameters:\n          - name: p\n            in: query\n            value: $steps.b.outputs.id\n"+
+			"      - stepId: b\n        operationId: opB\n"))
+	if !has(errs, "warning", "is declared after this step") {
+		t.Errorf("a reference to a later step should warn, got:%s", dump(errs))
+	}
+	if has(errs, "error", "Referenced step") {
+		t.Errorf("a reference to a later step must not be a hard error, got:%s", dump(errs))
+	}
+}
+
+// A receive with no correlationId is legal but takes whatever is next on the channel, so it is
+// surfaced while authoring. Only an explicitly declared 'action: receive' is flagged — a step whose
+// direction lives in the AsyncAPI operation cannot be classified without reading that document.
+func TestReceiveWithoutCorrelationIdWarns(t *testing.T) {
+	bus := "  - name: bus\n    url: ./bus.yaml\n    type: asyncapi\n"
+
+	errs := diagnose(t, docWith(bus, "      - stepId: r\n        channelPath: bus#/channels/orders\n        action: receive\n"))
+	if !has(errs, "warning", "no 'correlationId'") {
+		t.Errorf("a receive without correlationId should warn, got:%s", dump(errs))
+	}
+
+	// With a correlationId: no warning.
+	errs = diagnose(t, docWith(bus, "      - stepId: r\n        channelPath: bus#/channels/orders\n        action: receive\n        correlationId: $inputs.token\n"))
+	if has(errs, "warning", "no 'correlationId'") {
+		t.Errorf("a receive WITH correlationId must not warn, got:%s", dump(errs))
+	}
+
+	// A send never needs one.
+	errs = diagnose(t, docWith(bus, "      - stepId: s\n        channelPath: bus#/channels/orders\n        action: send\n"))
+	if has(errs, "warning", "no 'correlationId'") {
+		t.Errorf("a send step must not be asked for a correlationId, got:%s", dump(errs))
+	}
+
+	// Direction from the AsyncAPI operation (no 'action' declared) is not classifiable here.
+	errs = diagnose(t, docWith(bus, "      - stepId: r\n        operationId: consumeOrder\n"))
+	if has(errs, "warning", "no 'correlationId'") {
+		t.Errorf("a step with no declared action must not be guessed at, got:%s", dump(errs))
+	}
+}
+
+// diagnoseWithActions validates content with a step-action resolver wired in, standing in for the
+// LSP server's operation index. actions maps an operationId/operationPath to the action its AsyncAPI
+// operation declares.
+func diagnoseWithActions(t *testing.T, content string, actions map[string]string) []ValidationError {
+	t.Helper()
+	doc, err := parser.NewParser().Parse(content)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	v := NewValidator().WithStepActionResolver(func(step *parser.Step) (string, bool) {
+		key := step.OperationID
+		if key == "" {
+			key = step.OperationPath
+		}
+		a, ok := actions[key]
+		return a, ok
+	})
+	return v.Validate(doc)
+}
+
+// With the operation index wired in, the direction of an operationId/operationPath step becomes
+// known, which enables the two checks that previously could not fire on that (spec-preferred) form.
+func TestResolvedAsyncActionEnablesChecks(t *testing.T) {
+	bus := "  - name: bus\n    url: ./bus.yaml\n    type: asyncapi\n"
+
+	// A receive identified only by its operation, with no correlationId -> now warns.
+	errs := diagnoseWithActions(t,
+		docWith(bus, "      - stepId: await\n        operationId: consumeOrder\n"),
+		map[string]string{"consumeOrder": "receive"})
+	if !has(errs, "warning", "no 'correlationId'") {
+		t.Errorf("a resolved receive without correlationId should warn, got:%s", dump(errs))
+	}
+
+	// Same step WITH a correlationId -> clean.
+	errs = diagnoseWithActions(t,
+		docWith(bus, "      - stepId: await\n        operationId: consumeOrder\n        correlationId: $inputs.token\n"),
+		map[string]string{"consumeOrder": "receive"})
+	if has(errs, "warning", "no 'correlationId'") {
+		t.Errorf("a resolved receive WITH correlationId must not warn, got:%s", dump(errs))
+	}
+
+	// A send identified only by its operation must never be asked for a correlationId.
+	errs = diagnoseWithActions(t,
+		docWith(bus, "      - stepId: emit\n        operationId: placeOrder\n"),
+		map[string]string{"placeOrder": "send"})
+	if has(errs, "warning", "no 'correlationId'") {
+		t.Errorf("a resolved send must not be asked for a correlationId, got:%s", dump(errs))
+	}
+
+	// The step contradicts the operation -> the runtime silently prefers the operation, so warn.
+	errs = diagnoseWithActions(t,
+		docWith(bus, "      - stepId: emit\n        operationId: placeOrder\n        action: receive\n"),
+		map[string]string{"placeOrder": "send"})
+	if !has(errs, "warning", "but the referenced AsyncAPI operation declares 'send'") {
+		t.Errorf("an action/operation mismatch should warn, got:%s", dump(errs))
+	}
+
+	// Agreeing action -> no mismatch warning.
+	errs = diagnoseWithActions(t,
+		docWith(bus, "      - stepId: emit\n        operationId: placeOrder\n        action: send\n"),
+		map[string]string{"placeOrder": "send"})
+	if has(errs, "warning", "the referenced AsyncAPI operation declares") {
+		t.Errorf("a matching action must not warn, got:%s", dump(errs))
+	}
+
+	// Unresolvable operation -> both checks stay quiet rather than guessing.
+	errs = diagnoseWithActions(t,
+		docWith(bus, "      - stepId: x\n        operationId: unknownOp\n        action: send\n"),
+		map[string]string{})
+	if has(errs, "warning", "the referenced AsyncAPI operation declares") || has(errs, "warning", "no 'correlationId'") {
+		t.Errorf("an unresolvable operation must not trigger direction checks, got:%s", dump(errs))
+	}
+}
+
 func TestChannelPathRequiresAction(t *testing.T) {
 	bus := "  - name: bus\n    url: ./bus.yaml\n    type: asyncapi\n"
 	// channelPath present but no action -> error (direction undefined)

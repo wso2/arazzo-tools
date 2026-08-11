@@ -1,0 +1,42 @@
+# Phase 9 — Scenario 7: action / operation MISMATCH. The step declares an `action` that contradicts
+# the AsyncAPI operation's action. Per the spec/Phase-8 decision the OPERATION wins (and a warning is
+# logged) — the runner does not hard-fail on the contradiction.
+#
+# Here `emit` targets `placeOrder` (operation action: send) but declares `action: receive`. The runner
+# logs a warning and runs it as a SEND (the operation's action). `await` then receives it.
+#
+# EXPECTED: run **mismatchWins** → a warning is logged for `emit`, it SENDS anyway, `await` receives,
+# output receivedId = "ORD-M", workflow completes. (Look for the "contradicts the AsyncAPI operation's
+# action" warning in the logs.)
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 9 - action/operation mismatch (operation wins)"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: orderBus
+    url: ./order-events.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: mismatchWins
+    steps:
+      - stepId: emit
+        operationId: placeOrder            # operation action: send
+        action: receive                    # contradicts the operation -> operation wins (warns), SENDS
+        requestBody:
+          payload:
+            orderId: "ORD-M"
+            status: "new"
+
+      - stepId: await
+        operationId: consumeOrder
+        timeout: 2000
+        successCriteria:
+          - condition: '$message.payload.orderId == "ORD-M"'
+        outputs:
+          receivedId: $message.payload.orderId
+    outputs:
+      orderId: $steps.await.outputs.receivedId

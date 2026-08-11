@@ -2,6 +2,12 @@
 // It orchestrates the execution of a single step: finds the operation, prepares
 // parameters/body, resolves the server URL, makes the HTTP request, checks
 // success criteria, extracts outputs, and determines the next action.
+//
+// FLOW: the runner calls ExecuteStep for EVERY step. ExecuteStep branches:
+//   - AsyncAPI step (channelPath, or an AsyncAPI operationId) -> executeAsyncStep (async_executor.go)
+//   - otherwise                                               -> the HTTP/OpenAPI path in this file
+// Both paths are methods on the SAME StepExecutor, so they share ParamProcessor / SuccessChecker /
+// OutputExtractor / ActionHandler (the async path just feeds them $message instead of $response).
 package executor
 
 import (
@@ -28,6 +34,7 @@ type StepExecutor struct {
 	ServerProcessor    *ServerProcessor
 	OperationFinder    *OperationFinder
 	HTTPExecutor       *httpexec.HTTPExecutor
+	AsyncAdapter       Adapter // transport for AsyncAPI send/receive steps (Phase 9)
 	Sink               telemetry.SpanEventSink
 }
 
@@ -49,6 +56,7 @@ func NewStepExecutor(
 		ServerProcessor:    NewServerProcessor(sourceDescs),
 		OperationFinder:    NewOperationFinder(sourceDescs),
 		HTTPExecutor:       httpexec.NewHTTPExecutor(sink, runtimeParams != nil && runtimeParams.DisableTLSVerification),
+		AsyncAdapter:       NewInMemoryAdapter(), // Phase 9: default in-memory transport (real brokers: Phase 11)
 		Sink:               sink,
 	}
 }
@@ -131,6 +139,13 @@ func (se *StepExecutor) ExecuteStep(step map[string]interface{}, workflow map[st
 			},
 			IsNestedWorkflow: true,
 		})
+	}
+
+	// AsyncAPI step? (a channelPath, or an operationId that resolves to an AsyncAPI operation.)
+	// These execute via the message adapter instead of the HTTP path. stepSpanID is passed through
+	// as the parent for the messaging span, exactly as it is for the HTTP span below.
+	if info, isAsync := se.resolveAsyncTarget(step); isAsync {
+		return endStep(se.executeAsyncStep(step, info, state, stepID, stepSpanID))
 	}
 
 	// Find the operation

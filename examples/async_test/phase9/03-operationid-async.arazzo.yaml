@@ -1,0 +1,40 @@
+# Phase 9 — Scenario 3: async by OPERATIONID (not channelPath). The direction comes from the operation.
+#
+# `emit` targets the AsyncAPI operation `placeOrder` (action: send) and `await` targets `consumeOrder`
+# (action: receive) — both resolve to the `orders` channel. Neither step declares `action`: the
+# operation carries it (Phase-8 resolver reads it). This is the operationId path into the async runtime.
+#
+# EXPECTED: run **byOperationId** → emit sends via placeOrder, await receives via consumeOrder,
+# output receivedId = "OP-1", workflow completes.
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 9 - async via operationId"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: orderBus
+    url: ./order-events.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: byOperationId
+    steps:
+      - stepId: emit
+        operationId: placeOrder          # AsyncAPI operation, action: send (from the doc)
+        requestBody:
+          payload:
+            orderId: "OP-1"
+            status: "new"
+
+      - stepId: await
+        operationId: consumeOrder         # AsyncAPI operation, action: receive (from the doc)
+        timeout: 2000
+        #correlationId: "OP-1"
+        successCriteria:
+          - condition: '$message.payload.status == "new"'
+        outputs:
+          receivedId: $message.payload.orderId
+    outputs:
+      orderId: $steps.await.outputs.receivedId

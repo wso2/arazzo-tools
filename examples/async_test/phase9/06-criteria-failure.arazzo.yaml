@@ -1,0 +1,35 @@
+# Phase 9 — Scenario 6: successCriteria FAILURE on a received message (fails on purpose). A message is
+# received fine, but it doesn't satisfy the criteria, so the step fails — proving $message criteria are
+# actually evaluated (not just "a message arrived = success").
+#
+# EXPECTED: run **mismatchFlow** → emit sends status="pending"; await receives it but the criterion
+# `$message.payload.status == "confirmed"` is false → the step (and workflow) fail.
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 9 - receive criteria failure"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: orderBus
+    url: ./order-events.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: mismatchFlow
+    steps:
+      - stepId: emit
+        channelPath: orderBus#/channels/orders
+        action: send
+        requestBody:
+          payload:
+            orderId: "ORD-9"
+            status: "pending"
+
+      - stepId: await
+        channelPath: orderBus#/channels/orders
+        action: receive
+        timeout: 2000
+        successCriteria:
+          - condition: '$message.payload.status == "confirmed"'   # message is "pending" -> fails

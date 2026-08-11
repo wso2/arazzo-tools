@@ -20,7 +20,11 @@ const (
 	SpanKindWorkflow SpanKind = "workflow"
 	SpanKindStep     SpanKind = "step"
 	SpanKindHTTP     SpanKind = "http"
-	SpanKindRetry    SpanKind = "retry"
+	// SpanKindMessage is the messaging counterpart of SpanKindHTTP: one AsyncAPI send or receive,
+	// carrying the channel, the message, and the outcome, so an async step is as inspectable in the
+	// run logs as a REST step.
+	SpanKindMessage SpanKind = "message"
+	SpanKindRetry   SpanKind = "retry"
 )
 
 // OTelSpanKind is the standard OpenTelemetry span kind value.

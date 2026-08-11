@@ -83,6 +83,13 @@ func (s *Server) Definition(ctx context.Context, params *protocol.DefinitionPara
 // ensureSourcesIndexed resolves the document's declared sources and indexes any that aren't yet, so
 // a lookup immediately after can find their operations/channels.
 func (s *Server) ensureSourcesIndexed(uri protocol.DocumentURI, content string) []resolvedSource {
+	// Same per-document lock indexDeclaredSources takes: resolving, indexing and recording the
+	// resolved types is a multi-step update of shared state, and a Definition/Hover request must not
+	// interleave with a background indexing pass for the same document.
+	lock := s.sourceRegistry.lockForIndexing(uri)
+	lock.Lock()
+	defer lock.Unlock()
+
 	sources := s.resolveDocSources(uri, content)
 	for _, src := range sources {
 		if !s.operationIndex.HasFile(src.fileURI) {
@@ -226,6 +233,48 @@ func (s *Server) refreshDocumentSources(arazzoURI protocol.DocumentURI, content 
 	}
 	s.sourceRegistry.set(arazzoURI, sources)
 	return sources
+}
+
+// resolveStepAsyncAction returns the direction ("send"/"receive") declared by the AsyncAPI operation
+// a step targets, for a step that does not write `action:` itself. It is the fact the validator
+// cannot obtain on its own — the validator only sees the Arazzo text, while the direction lives in
+// the AsyncAPI document.
+//
+// It reuses the same resolution navigation uses: the step's `operationId` (bare or scoped) or
+// `operationPath` is resolved against the document's declared sources, and the indexed operation
+// carries its action in Method ("SEND"/"RECEIVE" for AsyncAPI operations; OpenAPI operations carry an
+// HTTP verb there instead, which is how they are told apart).
+func (s *Server) resolveStepAsyncAction(uri protocol.DocumentURI, content string, step *parser.Step) (string, bool) {
+	if step == nil {
+		return "", false
+	}
+	sources := s.resolveDocSources(uri, content)
+	if len(sources) == 0 {
+		return "", false
+	}
+
+	var op *navigation.OperationInfo
+	var found bool
+	switch {
+	case step.OperationID != "":
+		op, found = s.lookupOperationInSources(sources, step.OperationID)
+	case step.OperationPath != "":
+		op, found = s.lookupOperationByPath(sources, step.OperationPath)
+	default:
+		return "", false
+	}
+	if !found || op == nil {
+		return "", false
+	}
+
+	switch strings.ToLower(op.Method) {
+	case "send":
+		return "send", true
+	case "receive":
+		return "receive", true
+	default:
+		return "", false // an OpenAPI operation: an HTTP verb, not an AsyncAPI direction
+	}
 }
 
 // sourceFileURI returns the resolved file URI for the source description with the given name (or "").

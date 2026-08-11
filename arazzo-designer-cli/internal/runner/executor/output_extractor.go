@@ -59,6 +59,7 @@ func (oe *OutputExtractor) ExtractOutputs(step map[string]interface{}, response 
 		"response":   response,
 		"headers":    headers,
 		"body":       body,
+		"message":    response["message"], // backs $message.* for AsyncAPI receive steps (nil for HTTP)
 	}
 
 	for outputName, outputExprRaw := range stepOutputs {

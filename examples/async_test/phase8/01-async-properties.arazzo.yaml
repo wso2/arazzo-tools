@@ -10,8 +10,9 @@
 # Navigation (Part 2): Ctrl/Cmd-click a `channelPath` value to jump to that channel in
 # order-events.asyncapi.yaml. This file is valid — the LSP shows NO diagnostics.
 #
-# NOTE: async steps do not EXECUTE yet (send/receive is Phase 9); this exercises the LSP +
-# visualizer only.
+# NOTE: this is a Phase 8 example — it exercises the LSP (navigation, validation) and the visualizer
+# properties panel only. Async send/receive EXECUTION is Phase 9; see examples/async_test/phase9/ for
+# workflows that actually run.
 
 arazzo: 1.1.0
 

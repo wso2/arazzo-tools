@@ -872,8 +872,10 @@ function checkDocumentForOpenAPI(document?: vscode.TextDocument) {
 			const t = l.trim();
 			return t !== '' && t !== '---' && t !== '{' && !t.startsWith('#');
 		}) || '';
-	const hasOpenAPI = /^\s*"?openapi"?\s*:/i.test(firstMeaningfulLine);
-	const hasArazzo = /^\s*"?arazzo"?\s*:\s*["']?\d+\.\d+\.\d+/i.test(firstMeaningfulLine);
+	// The optional leading `{` covers compact JSON, where the opening brace and the root key share a
+	// line (`{"arazzo":"1.1.0",…}`) and so the brace-only skip above does not apply.
+	const hasOpenAPI = /^\s*\{?\s*"?openapi"?\s*:/i.test(firstMeaningfulLine);
+	const hasArazzo = /^\s*\{?\s*"?arazzo"?\s*:\s*["']?\d+\.\d+\.\d+/i.test(firstMeaningfulLine);
 
 	// Set context variables — detect Arazzo purely by content, not file name
 	const isOpenAPI = hasOpenAPI && !hasArazzo;

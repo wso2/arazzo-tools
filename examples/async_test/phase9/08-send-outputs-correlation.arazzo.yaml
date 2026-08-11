@@ -1,0 +1,77 @@
+# Phase 9 — Scenario 8: A SEND STEP IS NOT SPECIAL — it has `outputs` and `successCriteria` too.
+#
+# A send step can record `outputs` (like any other step) and declare `successCriteria` that are
+# actually evaluated. Inside a send step, `$message` is the message THAT STEP PUBLISHED, shaped
+# {header, payload} — the exact counterpart of the received message on a receive step.
+#
+# This unlocks same-channel correlation: publish, REMEMBER what was published, then pick that exact
+# message back off the channel — instead of repeating the same expression in two places. (There is no
+# responder here: awaitMine consumes emitMine's own message. A true request/reply, where a service
+# answers on another channel, needs a real broker — Phase 11.)
+#
+#   emitOther  sends ORD-A          (noise on the shared channel)
+#   emitMine   sends $inputs.orderId AND records it as `sentId`
+#   awaitMine  correlates on $steps.emitMine.outputs.sentId -> picks OUR message, not the first one
+#
+# EXPECTED: run **sendOutputs** with input {"orderId":"ORD-B"} → completes with
+#   echoed = "ORD-B"   and   sent = "ORD-B"
+# (If the send step's outputs were dropped, correlationId would resolve to empty, the receive would
+#  fall back to plain FIFO, and `echoed` would come back "ORD-A" — the wrong message, silently.)
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 9 - send step outputs & criteria"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: orderBus
+    url: ./order-events.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: sendOutputs
+    inputs:
+      type: object
+      properties:
+        orderId:
+          type: string
+    steps:
+      # Noise: another order already sitting on the same channel.
+      - stepId: emitOther
+        channelPath: orderBus#/channels/orders
+        action: send
+        requestBody:
+          payload:
+            orderId: "ORD-A"
+            status: "new"
+
+      # Our order. It both CHECKS what it is about to publish and REMEMBERS it.
+      - stepId: emitMine
+        channelPath: orderBus#/channels/orders
+        action: send
+        requestBody:
+          payload:
+            orderId: $inputs.orderId
+            status: "new"
+        successCriteria:
+          # $message here is the message THIS step sent — these criteria are really evaluated.
+          - condition: '$message.payload.orderId == $inputs.orderId'
+          - condition: '$message.payload.status == "new"'
+        outputs:
+          sentId: $message.payload.orderId     # recorded from the sent message
+          sentFromInput: $inputs.orderId       # ordinary expressions work too
+
+      # Correlate on what the SEND step recorded — not on $inputs directly.
+      - stepId: awaitMine
+        channelPath: orderBus#/channels/orders
+        action: receive
+        correlationId: $steps.emitMine.outputs.sentId
+        timeout: 2000
+        successCriteria:
+          - condition: '$message.payload.orderId == $steps.emitMine.outputs.sentId'
+        outputs:
+          echoed: $message.payload.orderId
+    outputs:
+      echoed: $steps.awaitMine.outputs.echoed
+      sent: $steps.emitMine.outputs.sentId

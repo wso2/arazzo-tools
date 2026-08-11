@@ -23,11 +23,9 @@ type AsyncInfo struct {
 	Action         string                 // the operation's declared action ("send"/"receive"), if known
 }
 
-// TODO(phase9): wire AsyncFinder into step execution. `action: send` → resolve op/channel, build &
-// serialize the message, adapter.Send. `action: receive` → resolve, evaluate correlationId,
-// adapter.Receive with timeout, expose $message. Also enforce: channelPath requires action (hard
-// error); on ActionMismatch prefer the AsyncAPI document's action and warn. See asyncapi_plan.md
-// Phases 9–11. (Phase 8 only builds/tests this resolver — nothing calls it at runtime yet.)
+// Wired into execution as of Phase 9: async_executor.go resolves each async step through
+// FindChannelByPath / FindOperationByID, enforces that a `channelPath` step declares an `action`, and
+// prefers the AsyncAPI operation's action (warning) when a step contradicts it.
 
 // AsyncFinder resolves AsyncAPI channels/operations in the loaded source descriptions.
 type AsyncFinder struct {

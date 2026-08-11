@@ -112,5 +112,11 @@ no `run` for these. It is proven two ways:
   declared `type`, the type the file actually turned out to be, and where it resolved to — keeping
   **AsyncAPI (event) sources separate from OpenAPI/REST ones**. A client can request this via the
   `arazzo/getSourceInfo` LSP method (`{sources, async, rest}`) to tell which kind of API a step targets.
-- The LSP's `action`/`correlationId` warnings are tied to `channelPath` steps; that's why `02`'s
-  operationId steps omit `action` (the operation itself carries the direction, which the resolver reads).
+- **A step's kind comes from the source it targets, not from which field it used.** A REST step uses
+  `operationId`/`operationPath`; an AsyncAPI step may use `operationId`, `operationPath` **or**
+  `channelPath`. So the LSP's `action`/`correlationId` checks resolve the step's source description
+  and read its `type` — they are not tied to `channelPath`. A step targeting an `asyncapi` source may
+  carry `action`/`correlationId` regardless of the field used; one targeting an `openapi` source is
+  still flagged. A **bare** `operationId` names no source, so it can only be flagged when the document
+  declares no source that could be AsyncAPI (resolving it would mean loading the source files, which
+  the validator does not do).

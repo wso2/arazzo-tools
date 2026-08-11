@@ -929,8 +929,10 @@ export function NodePropertiesPanel({ node, workflow, definition, traceSpans, fo
             const name = opId.slice('$sourceDescriptions.'.length).split('.')[0];
             stepKind = sourceTypeByName(name) ?? 'OpenAPI';
         } else {
-            const typed = sourceDescriptions.filter(sd => sd.type);
-            stepKind = (typed.length === 1 ? mapSourceType(typed[0].type) : undefined) ?? 'OpenAPI';
+            // A bare operationId names no source, so it can only be attributed when the document
+            // declares exactly ONE source. Filtering to typed sources first would mis-attribute the
+            // step whenever a second, untyped source could equally own the operation.
+            stepKind = (sourceDescriptions.length === 1 ? mapSourceType(sourceDescriptions[0].type) : undefined) ?? 'OpenAPI';
         }
     } else if (stepData.operationPath) {
         stepKind = sourceTypeByName(sourceNameFromOperationPath(String(stepData.operationPath))) ?? 'OpenAPI';

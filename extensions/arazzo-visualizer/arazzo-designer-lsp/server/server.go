@@ -345,6 +345,14 @@ func (s *Server) provideDiagnostics(ctx context.Context, uri protocol.DocumentUR
 
 	utils.LogInfo("Generating diagnostics for: %s", uri)
 
+	// Give the validator the one fact it cannot read from the document text: the direction an
+	// `operationId`/`operationPath` step targets, which lives in the AsyncAPI source. Passed per call
+	// and closed over THIS document's uri/content, so concurrent diagnostics for different documents
+	// can never resolve against each other's sources.
+	resolveStepAction := func(step *parser.Step) (string, bool) {
+		return s.resolveStepAsyncAction(uri, content, step)
+	}
+
 	// First, explicitly clear old diagnostics by publishing an empty array
 	// This helps VS Code properly clear stale diagnostics
 	utils.LogDebug("Clearing old diagnostics for: %s", uri)
@@ -357,7 +365,7 @@ func (s *Server) provideDiagnostics(ctx context.Context, uri protocol.DocumentUR
 	}
 
 	// Generate diagnostics
-	diags := s.diagnosticsProvider.ProvideDiagnostics(content)
+	diags := s.diagnosticsProvider.ProvideDiagnostics(content, resolveStepAction)
 
 	utils.LogInfo("Generated %d diagnostics for %s", len(diags), uri)
 	for i, diag := range diags {

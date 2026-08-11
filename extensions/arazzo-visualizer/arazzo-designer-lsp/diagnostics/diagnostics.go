@@ -21,8 +21,15 @@ func NewDiagnosticsProvider() *DiagnosticsProvider {
 	}
 }
 
-// ProvideDiagnostics generates diagnostics for the given content
-func (d *DiagnosticsProvider) ProvideDiagnostics(content string) []protocol.Diagnostic {
+// ProvideDiagnostics generates diagnostics for the given content.
+//
+// resolveStepAction tells the validator which direction (send/receive) an `operationId`/
+// `operationPath` step targets, resolved from the indexed AsyncAPI sources; pass nil when no index is
+// available, in which case the direction-dependent async checks only apply to steps that write
+// `action:` themselves. It is a PER-CALL argument rather than provider state: diagnostics for
+// different documents must never share a resolver, or one document's validation could resolve
+// against another's sources.
+func (d *DiagnosticsProvider) ProvideDiagnostics(content string, resolveStepAction func(step *parser.Step) (string, bool)) []protocol.Diagnostic {
 	diagnostics := []protocol.Diagnostic{}
 
 	utils.LogDebug("DiagnosticsProvider: Parsing document (length: %d bytes)", len(content))
@@ -48,9 +55,12 @@ func (d *DiagnosticsProvider) ProvideDiagnostics(content string) []protocol.Diag
 	utils.LogDebug("  - Workflows count: %d", len(doc.Workflows))
 
 	// Validate the document
-	validationErrors := d.validator.Validate(doc)
+	// A validator scoped to THIS call, so the resolver above cannot leak into another document's
+	// validation (the shared provider is reused across documents and requests).
+	v := validator.NewValidator().WithStepActionResolver(resolveStepAction)
+	validationErrors := v.Validate(doc)
 	// Warn about unknown/misspelled fields the struct-based parser silently ignores
-	validationErrors = append(validationErrors, d.validator.ValidateUnknownFields(content)...)
+	validationErrors = append(validationErrors, v.ValidateUnknownFields(content)...)
 	utils.LogDebug("DiagnosticsProvider: Validation completed, found %d errors", len(validationErrors))
 
 	// Convert validation errors to LSP diagnostics
