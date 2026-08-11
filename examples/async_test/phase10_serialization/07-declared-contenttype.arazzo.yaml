@@ -8,7 +8,7 @@
 # the two steps still serialize differently — because the channels they target declare different
 # formats in notifications.asyncapi.yaml:
 #
-#   alerts  ->  contentType: text/plain        -> "all clear" goes out as bare text  (10 bytes)
+#   alerts  ->  contentType: text/plain        -> "all clear" goes out as bare text  (9 bytes)
 #   events  ->  contentType: application/json  -> the object goes out as JSON
 #
 # If the send path defaulted straight to JSON (ignoring the document), the alert would go on the wire

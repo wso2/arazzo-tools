@@ -21,9 +21,14 @@
 # EXPECTED: run **mismatchFlow** → COMPLETES with `heard = "beta"`, and a warning is logged.
 #
 # Why the payload still round-trips: the in-memory adapter carries the decoded payload alongside the
-# bytes, so the receive never has to decode. Against a REAL broker only the bytes travel — the receive
-# would decode `"beta"` (JSON, WITH quote characters) using the channel's declared text/plain and hand
-# back a string containing the quotes. The warning is the point of this example, not the output.
+# bytes, so the receive never has to decode. Against a real broker only the bytes travel, and what
+# happens then depends on whether the transport carries a content type — the receive consults that
+# FIRST, and only falls back to the channel's declaration when it carries none:
+#   MQTT 5 / anything carrying "application/json"  -> decodes as JSON -> `beta`, no quotes
+#   MQTT 3.1.1 / WebSocket (no content type)       -> falls back to the declared text/plain, so the
+#                                                     JSON quote characters survive into the string
+# Either way the message does not match what the document describes. The warning is the point of this
+# example, not the output.
 #
 # Compare 01 (step declares, and agrees) and 07 (step declares nothing, document decides).
 

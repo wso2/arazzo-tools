@@ -26,7 +26,7 @@ Supported serializers (see [serializer.go](../../../arazzo-designer-cli/internal
 | content type | serializer | notes |
 |---|---|---|
 | _(none)_ / `application/json` / `*+json` | JSON | default; object ⇄ JSON bytes |
-| `text/plain` | text | raw UTF-8 string (non-strings stringified) |
+| `text/plain` | text | raw UTF-8 string; scalars (numbers, booleans) stringified, objects/arrays **fail** |
 | `application/x-protobuf`, `application/protobuf` | protobuf **stub** | selects but fails "not supported yet" — Phase 11 |
 | `application/avro`, `avro/binary` | avro **stub** | selects but fails "not supported yet" — Phase 11 |
 | anything else | — | **hard error** naming what actually works, and separately what is only recognized (never guesses) |
@@ -104,7 +104,7 @@ identical whichever serializer ran. Only a real broker (Phase 11) transmits byte
 output). Every send logs the encoder it resolved and the exact bytes it put on the wire, and every
 receive logs the decoder that governed the message:
 
-```
+```text
 Step raiseAlert:  ... as text/plain (9 bytes): "all clear"
 Step publishEvent: ... as application/json (37 bytes): "{\"kind\":\"deploy\",\"note\":\"v3 shipped\"}"
 ```
@@ -112,7 +112,7 @@ Step publishEvent: ... as application/json (37 bytes): "{\"kind\":\"deploy\",\"n
 The bytes are quoted, so the difference is visible directly. A string sent as **text** carries no
 quotes; the same string sent as **JSON** carries them — that is what the escaped `\"` are:
 
-```
+```text
 09 (string as JSON):  as application/json (6 bytes): "\"beta\""
 01 (string as text): as text/plain (22 bytes): "system reboot at 02:00"
 ```
@@ -122,7 +122,7 @@ reading plain text would not expect.
 
 Receives report the other half:
 
-```
+```text
 Step takeReading: ... via in-memory adapter, decoded as text/plain
 Step takeEvent:   ... via in-memory adapter, decoded as application/json
 ```
