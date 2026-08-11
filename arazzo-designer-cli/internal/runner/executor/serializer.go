@@ -66,8 +66,13 @@ func (r *SerializerRegistry) For(contentType string) (Serializer, error) {
 	if s, ok := r.byType[ct]; ok {
 		return s, nil
 	}
+	// A `<x>+json` structured suffix is JSON — but only if this registry actually has a JSON
+	// serializer. Returning a missing entry would hand the caller a nil Serializer with a nil error,
+	// which panics at the first method call instead of reporting the real problem.
 	if strings.HasSuffix(ct, "+json") {
-		return r.byType["application/json"], nil
+		if s, ok := r.byType["application/json"]; ok {
+			return s, nil
+		}
 	}
 	return nil, fmt.Errorf("no serializer registered for content type %q (supported: %s)", ct, strings.Join(r.supported(), ", "))
 }
@@ -83,8 +88,16 @@ func (r *SerializerRegistry) supported() []string {
 }
 
 // mustGet fetches an already-registered serializer by canonical content type (used to wire aliases).
+// It panics if the target is missing: an alias registered before its target would otherwise wrap nil
+// and fail much later, at the first message that uses that content type, with a nil dereference far
+// from the cause. Callers are registry constructors in this package, so a panic here is a programming
+// error caught on the first run, never something a document can trigger.
 func (r *SerializerRegistry) mustGet(contentType string) Serializer {
-	return r.byType[normalizeContentType(contentType)]
+	s, ok := r.byType[normalizeContentType(contentType)]
+	if !ok {
+		panic(fmt.Sprintf("serializer registry: alias target %q is not registered yet", contentType))
+	}
+	return s
 }
 
 // normalizeContentType lowercases, trims, and drops any parameters (e.g. "; charset=utf-8") so
@@ -137,7 +150,15 @@ func (*TextSerializer) Serialize(payload interface{}) ([]byte, error) {
 		return []byte(p), nil
 	case []byte:
 		return p, nil
+	case map[string]interface{}, map[interface{}]interface{}, []interface{}:
+		// A structured payload has no meaningful plain-text form. Stringifying it would put Go's own
+		// map/slice rendering ("map[kind:deploy]") on the wire — unreadable to any consumer and
+		// silently wrong. Failing here matches how the registry treats an unknown content type: never
+		// guess a wire format. This is reachable without the author writing text/plain themselves,
+		// since an AsyncAPI channel's declared contentType selects the serializer for them.
+		return nil, fmt.Errorf("cannot serialize a structured payload (object/array) as text/plain: declare a structured contentType such as application/json on the step's requestBody, or send a scalar value")
 	default:
+		// Scalars (numbers, booleans) have an unambiguous text form.
 		return []byte(fmt.Sprintf("%v", p)), nil
 	}
 }

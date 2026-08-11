@@ -119,3 +119,42 @@ func TestSchemaRequiredSerializers_FailClearly(t *testing.T) {
 		}
 	}
 }
+
+// A structured payload has no plain-text form. Stringifying it would put Go's own map rendering on
+// the wire, which no consumer can read — and this is reachable without the author asking for
+// text/plain, because an AsyncAPI channel's declared contentType selects the serializer for them.
+func TestTextSerializer_RejectsStructuredPayloads(t *testing.T) {
+	s := &TextSerializer{}
+	for _, payload := range []interface{}{
+		map[string]interface{}{"kind": "deploy"},
+		[]interface{}{1, 2, 3},
+		map[interface{}]interface{}{"k": "v"},
+	} {
+		raw, err := s.Serialize(payload)
+		if err == nil {
+			t.Errorf("serializing %T as text/plain should fail, got %q", payload, raw)
+		}
+	}
+
+	// Scalars still work — they have an unambiguous text form.
+	for _, payload := range []interface{}{"hi", 42, true, nil} {
+		if _, err := s.Serialize(payload); err != nil {
+			t.Errorf("serializing scalar %v as text/plain should succeed, got %v", payload, err)
+		}
+	}
+}
+
+// A registry without a JSON serializer must report a `+json` content type as unsupported rather than
+// returning a nil Serializer with a nil error, which would panic at the first method call.
+func TestRegistryWithoutJSONReportsSuffixAsUnsupported(t *testing.T) {
+	r := &SerializerRegistry{byType: map[string]Serializer{}, fallback: &TextSerializer{}}
+	r.Register(&TextSerializer{})
+
+	s, err := r.For("application/vnd.order+json")
+	if err == nil {
+		t.Fatalf("expected an error, got serializer %v", s)
+	}
+	if s != nil {
+		t.Errorf("a failed lookup must return a nil serializer alongside the error, got %v", s)
+	}
+}
