@@ -43,9 +43,9 @@ func NewDefaultSerializerRegistry() *SerializerRegistry {
 	}
 	r.Register(jsonSer)
 	r.Register(&TextSerializer{})
-	r.Register(newSchemaRequiredSerializer("protobuf", "application/x-protobuf", "a .proto/descriptor"))
+	r.Register(newSchemaRequiredSerializer("protobuf", "application/x-protobuf"))
 	r.Register(&aliasSerializer{contentType: "application/protobuf", target: r.mustGet("application/x-protobuf")})
-	r.Register(newSchemaRequiredSerializer("avro", "application/avro", "an Avro schema/registry"))
+	r.Register(newSchemaRequiredSerializer("avro", "application/avro"))
 	r.Register(&aliasSerializer{contentType: "avro/binary", target: r.mustGet("application/avro")})
 	return r
 }
@@ -199,11 +199,10 @@ func (*TextSerializer) Deserialize(data []byte) (interface{}, error) {
 type schemaRequiredSerializer struct {
 	name        string
 	contentType string
-	needs       string
 }
 
-func newSchemaRequiredSerializer(name, contentType, needs string) *schemaRequiredSerializer {
-	return &schemaRequiredSerializer{name: name, contentType: contentType, needs: needs}
+func newSchemaRequiredSerializer(name, contentType string) *schemaRequiredSerializer {
+	return &schemaRequiredSerializer{name: name, contentType: contentType}
 }
 
 func (s *schemaRequiredSerializer) Name() string        { return s.name }
@@ -218,7 +217,7 @@ func (s *schemaRequiredSerializer) Deserialize([]byte) (interface{}, error) {
 }
 
 func (s *schemaRequiredSerializer) unsupported() error {
-	return fmt.Errorf("%s serialization (%s) is not yet implemented: it needs %s (schema config arrives with real brokers in Phase 11; Phase 10 supports application/json and text/plain)", s.name, s.contentType, s.needs)
+	return fmt.Errorf("%s serialization (%s) is not supported yet", s.name, s.contentType)
 }
 
 // aliasSerializer maps an additional content type onto an already-registered serializer (e.g.
