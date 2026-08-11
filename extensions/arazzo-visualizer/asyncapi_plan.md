@@ -496,26 +496,119 @@ Goal: separate message **shape** (headers/payload the runtime reasons about) fro
   `avro/binary`) are registered as clear **"needs schema config" stubs** — they select cleanly but
   fail with an explanatory error on use (schema wiring lands with real brokers in Phase 11).
 - **Wired into the runtime** — [async_executor.go](arazzo-designer-cli/internal/runner/executor/async_executor.go):
-  `executeSend` picks the serializer from `requestBody.contentType` and encodes the payload to
+  `executeSend` picks the serializer from the resolved content type and encodes the payload to
   `Message.Raw` (replacing the inline `json.Marshal`); `executeReceive` **deserializes `Raw` back
   into `$message.payload`** when the adapter delivers bytes-only. The in-memory adapter still carries
   the decoded `Payload`, so existing JSON workflows are byte-for-byte unchanged; the deserialize path
   is what a real broker (Phase 11) will exercise. Registry lives on `StepExecutor.Serializers`
   (default set from `NewDefaultSerializerRegistry`).
+- **Content-type resolution follows the spec, not a hardcoded JSON default.** Arazzo §5.8.14.1: *"The
+  Content-Type for the request content. If omitted then refer to Content-Type specified at the targeted
+  operation to understand serialization requirements."* Send originally went straight from an absent
+  step `contentType` to JSON, skipping the targeted operation entirely — so a step omitting the field
+  published JSON onto a channel the AsyncAPI document declared as `text/plain` (`"hi"` with quotes
+  instead of bare `hi`). Both directions now resolve **step `contentType` (send) / transport-carried
+  type (receive) → AsyncAPI message `contentType` → document `defaultContentType` → JSON**, via
+  `AsyncInfo.DeclaredContentType()`. Steps 2–3 are AsyncAPI's own precedence (*"When omitted, the value
+  MUST be the one specified on the defaultContentType field"*); `defaultContentType` was previously
+  ignored altogether. A channel's messages resolve **through `$ref`** (`$ref: '#/components/messages/x'`
+  is how a real document is written; reading the channel map directly finds only a `$ref` key and would
+  silently miss the declaration) — via the JSON Pointer resolver already used for channels and
+  operations, in the runtime and in the LSP indexer alike. The step's value stays authoritative when present — the document is consulted
+  only on omission — and a disagreement between the two logs a runtime warning.
+- **Two editor diagnostics for the same rule** (LSP): a send step where **neither** the step nor the
+  AsyncAPI document declares a content type reports, as **information**, that the message will be
+  serialized as JSON — legal, but an assumption nothing in either document states; and a step whose
+  `contentType` **disagrees** with the document's warns that the step wins, so the published message
+  will not match the format the channel's contract describes. Both need a fact outside the Arazzo text,
+  so the validator takes a second injected resolver (`WithStepContentTypeResolver`, alongside Phase 9's
+  action resolver — the two are now grouped as `diagnostics.StepResolvers`). Indexing resolves each
+  channel's declared type at parse time (`ChannelInfo.ContentType`) and records the channel an
+  operation targets (`OperationInfo.ChannelKey`), so `channelPath`, `operationId` and `operationPath`
+  steps all reach the same declaration. Media types are compared the way the runtime keys on them
+  (parameters dropped, `+json` suffix → JSON), so equivalent spellings never report a mismatch.
+
+- **A structured payload is not text.** `TextSerializer` stringified anything it didn't recognise, so
+  an object payload on a text/plain channel went on the wire as Go's own map rendering
+  (`map[kind:deploy note:v3]`) — unreadable to any consumer and silently wrong. It now fails with a
+  clear message naming the fix. This became reachable *without the author writing `text/plain`
+  themselves* once the AsyncAPI declaration started selecting the serializer for them, so the two
+  changes ship together. Scalars (numbers, booleans) still stringify — they have an unambiguous text
+  form. Registry lookups were also tightened: a `+json` suffix on a registry with no JSON serializer
+  reports the content type as unsupported instead of returning a nil `Serializer` with a nil error, and
+  `mustGet` panics on a missing alias target (a constructor-order programming error) rather than
+  wrapping nil and failing at the first message that uses it.
 
 **Tests:** `serializer_test.go` (registry selection incl. params/case/`+json`/unknown-error; JSON
-round-trip + empty/invalid body; text round-trip; stub serializers fail clearly) and new
-`async_executor_test.go` cases (receive **deserializes raw bytes** into `$message.payload`; text/plain
-send produces raw text; unsupported content type fails at send). Examples cover **every scenario**:
-[examples/async_test/phase10/](examples/async_test/phase10) — 01 text/plain, 02 JSON default,
-03 unsupported-content-type (fails), 04 protobuf-stub (fails), 05 avro-stub (fails),
-06 content-type normalization (`+json` suffix + `; charset` params → JSON). The one path not
-expressible as an example — receive-side deserialize of raw bytes (real-broker path; the in-memory
-adapter always carries a decoded payload) — is covered by the unit test. All green (module
-build/vet/test + examples e2e).
+round-trip + empty/invalid body; text round-trip; structured payload rejected; stub serializers fail
+clearly; `+json` on a JSON-less registry) and `async_executor_test.go` cases (receive **deserializes
+raw bytes** into `$message.payload`; text/plain send produces raw text; unsupported content type fails
+at send; the full step → document → `defaultContentType` → JSON chain; `$ref`'d message declarations;
+all three targeting forms resolving to the same channel and content type; an OpenAPI `operationPath`
+staying on the HTTP path). LSP: `navigation` covers declared/`$ref`'d/absent content types and the
+operation→channel link; `validator` covers both diagnostics incl. severity and normalization; and
+`server/contenttype_test.go` drives the **real server resolvers end-to-end**, which is what exposed the
+indexing race below. Examples cover **every scenario**:
+[examples/async_test/phase10_serialization/](examples/async_test/phase10_serialization) — 01
+text/plain, 02 JSON default, 03 unsupported-content-type (fails), 04 protobuf-stub (fails), 05
+avro-stub (fails), 06 content-type normalization (`+json` suffix + `; charset` params → JSON), **07 the
+AsyncAPI document deciding the format for a step that declares none** (two channels, two formats, one
+workflow), **08 a `$ref`'d message declaration reached by `operationPath`**, **09 step/document
+disagreement** (step wins, warned in both the editor and the run log), **10 document-level
+`defaultContentType`** plus a message overriding it, **11 an object payload on a text/plain channel**
+(fails), **12 all three targeting forms** reaching the same `$ref`'d declaration — the regression guard
+for the `operationPath` routing fix. Two AsyncAPI sources back them: `notifications.asyncapi.yaml`
+(per-message declarations, one `$ref`'d, one untyped channel) and `telemetry.asyncapi.yaml` (root
+`defaultContentType` + a message that overrides it).
+
+The README states plainly what an example **cannot** show: Phase 10 decides which serializer encodes a
+message, and the proof is the bytes on the wire — but the in-memory adapter hands the receive step the
+decoded payload alongside them, so the output is identical whichever serializer ran. The examples
+demonstrate which serializer is *chosen* (and fail loudly when the choice is impossible); the
+byte-level assertions live in unit tests that pull `Raw` back off the adapter. It also lists which
+steps should show the information/warning diagnostics in the editor, so the LSP half is testable by
+hand too.
+Scenario 02 targets a channel that declares nothing, so it exercises the JSON last resort rather than a
+declared `application/json`. The one path not expressible as an example — receive-side deserialize of
+raw bytes (real-broker path; the in-memory adapter always carries a decoded payload) — is covered by
+unit tests, including the case where the bytes arrive with **no** content type and the AsyncAPI
+declaration is the only thing that says how to decode them. All green (both module build/vet/test +
+examples e2e).
+
+**Diagnostics race closed here:** the validator's source-backed resolvers (Phase 9's action resolver
+and Phase 10's content-type resolver) read the operation index, but `DidOpen`/`DidChange` start
+indexing in a **background goroutine** and call `provideDiagnostics` immediately after — so on a fresh
+open the index was usually still empty and every source-dependent check silently stayed quiet. Both
+resolvers now call `ensureSourcesIndexed` (cache-backed, per-document lock) instead of
+`resolveDocSources`, exactly as Definition/Hover already did, making the checks deterministic rather
+than dependent on which goroutine wins. Found only by testing the resolvers end-to-end through the
+server rather than layer by layer — the per-layer unit tests all passed while nothing worked in situ.
+
+**Phase 9 gap closed here:** async steps could only be targeted by `channelPath` or `operationId` —
+`resolveAsyncTarget` never looked at **`operationPath`**, so a step using the third targeting form was
+not recognised as async at all, fell through to the HTTP path and failed with "Operation not found",
+even though the LSP navigated, hovered and validated it happily. `AsyncFinder.FindOperationByPath`
+resolves the pointer and follows the operation's channel `$ref` (shared with `FindOperationByID` via
+`attachOperationChannel`), and returns nil for an OpenAPI operation — AsyncAPI 3.0 makes `action`
+REQUIRED on an Operation Object and OpenAPI has no such field — so REST steps using `operationPath`
+still reach the HTTP executor untouched.
 
 **Deferred:** real Protobuf/Avro/CloudEvents codecs + schema-registry config (Phase 11 alongside the
 brokers that need them); binary passthrough is not yet a distinct serializer (add when a broker needs it).
+
+**Known gaps (end-cleanup batch, not blocking):** REST steps encode through
+`httpexec.buildRequestBody`, a separate encoder that never consults the registry and whose rules are
+looser (substring `"json"` match; an unknown content type is silently stringified rather than erroring;
+form-encoding exists only there) — so the same `contentType` value can behave differently on a REST and
+an async step. `serializerRegistry()` lazily assigns `se.Serializers` without a lock — harmless today,
+a data race once Phase 14 runs steps in goroutines. `resolveDocSources` re-parses the Arazzo document
+once per step during diagnostics (pre-existing; now also takes the per-document indexing lock), which
+is wasted work on a large document — hoist it to one resolution per diagnostics pass. On send,
+`Message.ContentType` is stamped with the serializer's canonical type, so a vendor type
+(`application/vnd.order+json`) reaches the wire as `application/json`; no effect today since neither
+MQTT 3.1.1 nor WebSocket carries the field. An empty `text/plain` payload serializes to zero bytes, so
+on the real-broker path it decodes back to nil rather than `""`. The LSP does not flag a structured
+payload on a text/plain channel — the runtime error is clear, but the editor could catch it earlier.
 
 <details><summary>Original design — kept for reference</summary>
 
