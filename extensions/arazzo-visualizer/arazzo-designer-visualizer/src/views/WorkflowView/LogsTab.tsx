@@ -539,6 +539,10 @@ function MessagePairCard({ pair, stepOutputs }: { pair: MessagePair; stepOutputs
     const adapter = info.attributes?.['messaging.adapter'];
     const correlationId = info.attributes?.['messaging.correlation_id'];
     const timeoutMs = info.attributes?.['messaging.timeout_ms'];
+    // Which serializer handled the message. Labelled by direction, since the same attribute means
+    // "what encoded this" on a send and "what decoded it" on a receive.
+    const contentType = info.attributes?.['messaging.content_type'];
+    const contentTypeLabel = operation === 'RECEIVE' ? 'Decoder' : 'Encoder';
 
     const status = pair.end
         ? (info.status_code === 'STATUS_CODE_ERROR' ? 'error' : 'ok')
@@ -561,7 +565,7 @@ function MessagePairCard({ pair, stepOutputs }: { pair: MessagePair; stepOutputs
         pair.start?.attributes?.['messaging.message.headers'] ?? pair.end?.attributes?.['messaging.message.headers']
     );
 
-    const hasDetails = correlationId != null || timeoutMs != null || adapter != null;
+    const hasDetails = correlationId != null || timeoutMs != null || adapter != null || contentType != null;
     const hasMessage = body != null || headers != null;
 
     const title = (
@@ -588,6 +592,12 @@ function MessagePairCard({ pair, stepOutputs }: { pair: MessagePair; stepOutputs
                             <>
                                 <InfoLabel>Adapter</InfoLabel>
                                 <InfoValue>{adapter}</InfoValue>
+                            </>
+                        )}
+                        {contentType != null && (
+                            <>
+                                <InfoLabel>{contentTypeLabel}</InfoLabel>
+                                <InfoValue>{contentType}</InfoValue>
                             </>
                         )}
                         {correlationId != null && (
