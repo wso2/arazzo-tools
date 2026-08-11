@@ -345,6 +345,14 @@ func (s *Server) provideDiagnostics(ctx context.Context, uri protocol.DocumentUR
 
 	utils.LogInfo("Generating diagnostics for: %s", uri)
 
+	// Both resolvers below read the operation index, so the document's declared sources must be in it
+	// BEFORE validation runs. DidOpen/DidChange kick indexing off in a background goroutine and call
+	// this function straight after, so on a fresh open the index is usually still empty when we get
+	// here — every source-dependent check would silently stay quiet. Indexing on demand here (the same
+	// call Definition/Hover make, cache-backed and holding the per-document lock) makes the checks
+	// deterministic instead of dependent on which goroutine wins.
+	s.ensureSourcesIndexed(uri, content)
+
 	// Give the validator the facts it cannot read from the document text — the direction an
 	// `operationId`/`operationPath` step targets, and the content type declared for its channel — both
 	// of which live in the AsyncAPI source. Passed per call and closed over THIS document's

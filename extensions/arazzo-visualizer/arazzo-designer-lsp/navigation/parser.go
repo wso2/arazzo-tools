@@ -132,7 +132,7 @@ func extractChannels(spec map[string]interface{}, fileURI, content string) []*Ch
 			FileURI:     fileURI,
 			FileName:    fileName,
 			LineNumber:  findKeyLineNumber(content, key),
-			ContentType: channelContentType(chMap, defaultContentType),
+			ContentType: channelContentType(spec, chMap, defaultContentType),
 		})
 	}
 	return channels
@@ -140,9 +140,10 @@ func extractChannels(spec map[string]interface{}, fileURI, content string) []*Ch
 
 // channelContentType resolves the wire format a channel's messages declare, following AsyncAPI 3.0's
 // own precedence: a message's `contentType` wins, and "When omitted, the value MUST be the one
-// specified on the defaultContentType field" (Message Object). Messages are visited in sorted key
-// order so a channel with several message definitions resolves identically on every parse.
-func channelContentType(channel map[string]interface{}, defaultContentType string) string {
+// specified on the defaultContentType field" (Message Object). A channel's messages may be inline or
+// `$ref`s into `components.messages`, so each is dereferenced first. Messages are visited in sorted
+// key order so a channel with several message definitions resolves identically on every parse.
+func channelContentType(spec, channel map[string]interface{}, defaultContentType string) string {
 	messages, _ := channel["messages"].(map[string]interface{})
 	names := make([]string, 0, len(messages))
 	for name := range messages {
@@ -151,11 +152,35 @@ func channelContentType(channel map[string]interface{}, defaultContentType strin
 	sort.Strings(names)
 	for _, name := range names {
 		msg, _ := messages[name].(map[string]interface{})
-		if ct := getString(msg, "contentType"); ct != "" {
+		if ct := getString(resolveLocalRef(spec, msg), "contentType"); ct != "" {
 			return ct
 		}
 	}
 	return defaultContentType
+}
+
+// resolveLocalRef follows a local "$ref" ("#/components/messages/alert") to the object it names.
+// Anything else — no $ref, an external ref, or one that doesn't resolve — is returned unchanged, so a
+// caller can always read the object it already has.
+func resolveLocalRef(spec, obj map[string]interface{}) map[string]interface{} {
+	ref := getString(obj, "$ref")
+	if !strings.HasPrefix(ref, "#/") {
+		return obj
+	}
+	var current interface{} = spec
+	for _, token := range utils.SplitJSONPointer(strings.TrimPrefix(ref, "#")) {
+		m, ok := current.(map[string]interface{})
+		if !ok {
+			return obj
+		}
+		if current, ok = m[token]; !ok {
+			return obj
+		}
+	}
+	if resolved, ok := current.(map[string]interface{}); ok {
+		return resolved
+	}
+	return obj
 }
 
 // operationChannelKey follows an AsyncAPI operation's `channel.$ref` (e.g. "#/channels/orders") to the
