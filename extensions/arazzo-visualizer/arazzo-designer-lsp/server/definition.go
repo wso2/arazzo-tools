@@ -248,7 +248,12 @@ func (s *Server) resolveStepAsyncAction(uri protocol.DocumentURI, content string
 	if step == nil {
 		return "", false
 	}
-	sources := s.resolveDocSources(uri, content)
+	// ensureSourcesIndexed, not resolveDocSources: the lookups below read the operation index, and
+	// diagnostics run concurrently with the background indexing pass DidOpen/DidChange start — so on a
+	// fresh open the index is usually still empty here and every check that needs it would silently
+	// stay quiet. Indexing on demand (cache-backed, same call Definition/Hover make) makes these
+	// checks deterministic rather than dependent on which goroutine wins.
+	sources := s.ensureSourcesIndexed(uri, content)
 	if len(sources) == 0 {
 		return "", false
 	}
@@ -292,7 +297,7 @@ func (s *Server) resolveStepMessageContentType(uri protocol.DocumentURI, content
 	if step == nil {
 		return "", false
 	}
-	sources := s.resolveDocSources(uri, content)
+	sources := s.ensureSourcesIndexed(uri, content) // see resolveStepAsyncAction on why this indexes
 	if len(sources) == 0 {
 		return "", false
 	}
