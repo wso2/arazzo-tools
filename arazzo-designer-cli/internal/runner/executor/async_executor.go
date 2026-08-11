@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wso2/arazzo-designer-cli/internal/evaluator"
@@ -397,11 +398,18 @@ func (se *StepExecutor) resolveCorrelationID(step map[string]interface{}, state 
 // serializerRegistry returns the executor's serializer registry, defaulting to the standard set if a
 // StepExecutor was constructed without one (all normal construction goes through NewStepExecutor).
 func (se *StepExecutor) serializerRegistry() *SerializerRegistry {
-	if se.Serializers == nil {
-		se.Serializers = NewDefaultSerializerRegistry()
+	if se.Serializers != nil {
+		return se.Serializers
 	}
-	return se.Serializers
+	// Return the shared default rather than assigning it: writing to se.Serializers here would be a
+	// data race the moment two steps run concurrently (Phase 14), and the executor is not otherwise
+	// mutated during a run. Built once, lazily, so nothing pays for it when Serializers is configured.
+	return defaultSerializers()
 }
+
+// defaultSerializers is the fallback registry for a StepExecutor built without one. All normal
+// construction goes through NewStepExecutor, which sets Serializers explicitly.
+var defaultSerializers = sync.OnceValue(NewDefaultSerializerRegistry)
 
 // previewBytes renders wire bytes for a log line: quoted so the exact characters are visible (a text
 // `23.5` and a JSON `"23.5"` are otherwise indistinguishable on screen), and truncated so a large
