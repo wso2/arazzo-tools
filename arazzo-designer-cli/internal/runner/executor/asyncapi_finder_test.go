@@ -112,3 +112,36 @@ func TestAsyncInfo_ActionMismatch(t *testing.T) {
 		t.Error("empty step action should not report a mismatch")
 	}
 }
+
+// A channel whose messages declare different content types is genuinely ambiguous — nothing says which
+// one a step sends. The pick stays deterministic (sorted order) so runs are repeatable.
+func TestDeclaredContentTypeAmbiguousChannel(t *testing.T) {
+	info := &AsyncInfo{
+		ChannelKey: "mixed",
+		Doc:        map[string]interface{}{},
+		Channel: map[string]interface{}{
+			"messages": map[string]interface{}{
+				"b_text": map[string]interface{}{"contentType": "text/plain"},
+				"a_json": map[string]interface{}{"contentType": "application/json"},
+			},
+		},
+	}
+	if got := info.DeclaredContentType(); got != "application/json" {
+		t.Errorf("expected the first message in sorted order, got %q", got)
+	}
+
+	// Different spellings of the SAME format are not ambiguous.
+	same := &AsyncInfo{
+		ChannelKey: "same",
+		Doc:        map[string]interface{}{},
+		Channel: map[string]interface{}{
+			"messages": map[string]interface{}{
+				"a": map[string]interface{}{"contentType": "application/json"},
+				"b": map[string]interface{}{"contentType": "application/vnd.order+json"},
+			},
+		},
+	}
+	if got := same.DeclaredContentType(); got != "application/json" {
+		t.Errorf("expected application/json, got %q", got)
+	}
+}

@@ -6,6 +6,7 @@
 package executor
 
 import (
+	"log"
 	"sort"
 	"strings"
 
@@ -236,11 +237,33 @@ func (info *AsyncInfo) DeclaredContentType() string {
 		names = append(names, name)
 	}
 	sort.Strings(names)
+
+	first := ""
+	ambiguous := false
 	for _, name := range names {
 		message := resolveLocalRef(info.Doc, toMap(messages[name]))
-		if ct, ok := message["contentType"].(string); ok && strings.TrimSpace(ct) != "" {
-			return strings.TrimSpace(ct)
+		ct, ok := message["contentType"].(string)
+		ct = strings.TrimSpace(ct)
+		if !ok || ct == "" {
+			continue
 		}
+		if first == "" {
+			first = ct
+			continue
+		}
+		if !sameMediaType(first, ct) {
+			ambiguous = true
+		}
+	}
+	// A channel may carry several message definitions, and they may declare DIFFERENT formats. Nothing
+	// in the document then says which one a given step sends, so the value returned here is a guess:
+	// deterministic (sorted order), but a guess. Say so, and point at the field that settles it — the
+	// step's own requestBody contentType, which takes precedence over the document either way.
+	if ambiguous {
+		log.Printf("Warning: channel %q declares messages with different contentTypes; using %q — set 'contentType' on the step's requestBody to choose explicitly", info.ChannelKey, first)
+	}
+	if first != "" {
+		return first
 	}
 	defaultContentType, _ := info.Doc["defaultContentType"].(string)
 	return strings.TrimSpace(defaultContentType)
