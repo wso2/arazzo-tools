@@ -150,3 +150,67 @@ channels:
 		t.Errorf("a document declaring nothing should resolve to an empty content type, got %q", got)
 	}
 }
+
+// A channel's messages are commonly $refs into components.messages. Reading the channel map without
+// following the ref finds only "$ref", so the declared content type would be silently missed and the
+// editor would claim the message defaults to JSON.
+func TestParseAsyncAPIContentTypeBehindRef(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "reffed.asyncapi.yaml")
+	content := `asyncapi: 3.0.0
+info:
+  title: Reffed
+  version: 1.0.0
+channels:
+  alerts:
+    address: notify/alerts
+    messages:
+      alert:
+        $ref: '#/components/messages/alert'
+components:
+  messages:
+    alert:
+      contentType: text/plain
+      payload:
+        type: string
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := ParseOpenAPIFile(utils.PathToURI(path))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got := f.Channels[0].ContentType; got != "text/plain" {
+		t.Errorf("a $ref'd message's contentType should resolve, got %q", got)
+	}
+}
+
+// A ref that cannot be followed must not crash or invent a content type — it simply declares nothing.
+func TestParseAsyncAPIUnresolvableRef(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "badref.asyncapi.yaml")
+	content := `asyncapi: 3.0.0
+info:
+  title: Bad ref
+  version: 1.0.0
+channels:
+  alerts:
+    address: notify/alerts
+    messages:
+      alert:
+        $ref: '#/components/messages/missing'
+      external:
+        $ref: 'other.yaml#/components/messages/alert'
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := ParseOpenAPIFile(utils.PathToURI(path))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got := f.Channels[0].ContentType; got != "" {
+		t.Errorf("an unresolvable ref declares nothing, got %q", got)
+	}
+}
