@@ -6,7 +6,18 @@ import (
 	"strings"
 
 	"github.com/arazzo/lsp/parser"
+	"github.com/arazzo/lsp/utils"
 )
+
+// findSourceDescription looks up a declared source description by its (already normalized) name.
+func findSourceDescription(doc *parser.ArazzoDocument, name string) (parser.SourceDescription, bool) {
+	for _, sd := range doc.SourceDescriptions {
+		if sd.Name == name {
+			return sd, true
+		}
+	}
+	return parser.SourceDescription{}, false
+}
 
 // componentKeyRegex matches valid component key names per Arazzo spec §5.8.9
 var componentKeyRegex = regexp.MustCompile(`^[a-zA-Z0-9\.\-_]+$`)
@@ -279,41 +290,108 @@ func (v *Validator) validateSteps(workflow *parser.Workflow, doc *parser.ArazzoD
 			})
 		}
 
-		// Validate channelPath format and source description type (spec §5.8.5)
+		// A 'channelPath' step needs an 'action': a channel has no direction (AsyncAPI 3.x puts
+		// direction on operations), so without 'action' the send/receive intent is undefined and the
+		// runtime cannot proceed.
+		if step.ChannelPath != "" && step.Action == "" {
+			errors = append(errors, ValidationError{
+				Line:     step.LineNumber,
+				Column:   0,
+				Message:  fmt.Sprintf("Step '%s': a 'channelPath' step must also specify 'action' ('send' or 'receive') — the message-flow direction is otherwise undefined", step.StepID),
+				Severity: "error",
+			})
+		}
+
+		// TODO(phase8/9): flag an operationId/action MISMATCH (step 'action' contradicts the referenced
+		// AsyncAPI operation's action). Deferred here because it needs cross-source resolution (loading
+		// the AsyncAPI doc + finding the operation), which this validator doesn't do yet. The CLI
+		// resolver (AsyncFinder.ActionMismatch) already detects it; runtime enforces (doc wins + warn).
+
+		// Validate the step's target reference (spec §5.8.5). `channelPath` and `operationPath` are
+		// both "<sourceRef>#<jsonPointer>"; the scoped `operationId` form is
+		// "$sourceDescriptions.<name>.<operationId>". In every case the source may be written as a
+		// bare name OR as the spec's runtime-expression form ("{$sourceDescriptions.<name>.url}") —
+		// utils.NormalizeSourceRef reduces both to the same name, so validation can't disagree with
+		// navigation about which source a step points at.
 		if step.ChannelPath != "" {
-			parts := strings.SplitN(step.ChannelPath, "#", 2)
-			if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+			sdName, _, ok := utils.SplitSourceRefAndPointer(step.ChannelPath)
+			if !ok {
 				errors = append(errors, ValidationError{
 					Line:     step.LineNumber,
 					Column:   0,
-					Message:  fmt.Sprintf("Step '%s': 'channelPath' must be in the format '{sourceDescriptionName}#{channelPath}' (got '%s')", step.StepID, step.ChannelPath),
+					Message:  fmt.Sprintf("Step '%s': 'channelPath' must be in the format '<sourceDescription>#<jsonPointer>' — the source may be a name or '{$sourceDescriptions.<name>.url}' (got '%s')", step.StepID, step.ChannelPath),
 					Severity: "error",
 				})
-			} else {
-				sdName := parts[0]
-				sdFound := false
-				for _, sd := range doc.SourceDescriptions {
-					if sd.Name == sdName {
-						sdFound = true
-						if sd.Type != "asyncapi" {
-							errors = append(errors, ValidationError{
-								Line:     step.LineNumber,
-								Column:   0,
-								Message:  fmt.Sprintf("Step '%s': 'channelPath' references source '%s' which has type '%s', but must be 'asyncapi'", step.StepID, sdName, sd.Type),
-								Severity: "error",
-							})
-						}
-						break
-					}
-				}
-				if !sdFound {
+			} else if sd, found := findSourceDescription(doc, sdName); !found {
+				errors = append(errors, ValidationError{
+					Line:     step.LineNumber,
+					Column:   0,
+					Message:  fmt.Sprintf("Step '%s': 'channelPath' references unknown source description '%s'", step.StepID, sdName),
+					Severity: "warning",
+				})
+			} else if sd.Type != "" && sd.Type != "asyncapi" {
+				// `type` is optional on a Source Description Object, so only a type that is present
+				// AND contradicts the reference is an error (matching the operationPath check below).
+				errors = append(errors, ValidationError{
+					Line:     step.LineNumber,
+					Column:   0,
+					Message:  fmt.Sprintf("Step '%s': 'channelPath' references source '%s' which has type '%s', but must be 'asyncapi'", step.StepID, sdName, sd.Type),
+					Severity: "error",
+				})
+			}
+		}
+
+		// `operationPath` targets an operation by JSON Pointer. It may point into an OpenAPI document
+		// (#/paths/~1pets/get) or an AsyncAPI one (#/operations/placeOrder) — the spec words it as
+		// "an operation" without restricting the document type — but never into an `arazzo` source,
+		// which describes workflows rather than operations.
+		if step.OperationPath != "" {
+			sdName, _, ok := utils.SplitSourceRefAndPointer(step.OperationPath)
+			if !ok {
+				errors = append(errors, ValidationError{
+					Line:     step.LineNumber,
+					Column:   0,
+					Message:  fmt.Sprintf("Step '%s': 'operationPath' must be in the format '<sourceDescription>#<jsonPointer>' — the source may be a name or '{$sourceDescriptions.<name>.url}' (got '%s')", step.StepID, step.OperationPath),
+					Severity: "error",
+				})
+			} else if sd, found := findSourceDescription(doc, sdName); !found {
+				errors = append(errors, ValidationError{
+					Line:     step.LineNumber,
+					Column:   0,
+					Message:  fmt.Sprintf("Step '%s': 'operationPath' references unknown source description '%s'", step.StepID, sdName),
+					Severity: "warning",
+				})
+			} else if sd.Type == "arazzo" {
+				errors = append(errors, ValidationError{
+					Line:     step.LineNumber,
+					Column:   0,
+					Message:  fmt.Sprintf("Step '%s': 'operationPath' references source '%s' which has type 'arazzo' — use 'workflowId' to target an Arazzo workflow", step.StepID, sdName),
+					Severity: "error",
+				})
+			}
+		}
+
+		// A scoped `operationId` ("$sourceDescriptions.<name>.<operationId>") must name a declared
+		// source too. A bare operationId is resolved across sources at runtime, so there is nothing
+		// to check here.
+		if step.OperationID != "" {
+			if sdName, _, scoped := utils.ParseScopedOperationID(step.OperationID); scoped {
+				if _, found := findSourceDescription(doc, sdName); !found {
 					errors = append(errors, ValidationError{
 						Line:     step.LineNumber,
 						Column:   0,
-						Message:  fmt.Sprintf("Step '%s': 'channelPath' references unknown source description '%s'", step.StepID, sdName),
+						Message:  fmt.Sprintf("Step '%s': 'operationId' references unknown source description '%s'", step.StepID, sdName),
 						Severity: "warning",
 					})
 				}
+			} else if strings.HasPrefix(strings.TrimSpace(step.OperationID), "$") {
+				// A '$' prefix that isn't the scoped form is a malformed runtime expression.
+				errors = append(errors, ValidationError{
+					Line:     step.LineNumber,
+					Column:   0,
+					Message:  fmt.Sprintf("Step '%s': 'operationId' expression must be '$sourceDescriptions.<name>.<operationId>' (got '%s')", step.StepID, step.OperationID),
+					Severity: "error",
+				})
 			}
 		}
 
@@ -648,6 +726,7 @@ func (v *Validator) validateDependsOn(step *parser.Step, workflow *parser.Workfl
 // Per spec §5.8.7.1 (SuccessAction) and §5.8.8.1 (FailureAction):
 //   - 'parameters' are ONLY meaningful when the action specifies a 'workflowId'
 //   - the 'in' field MUST NOT be used (parameters map to workflow inputs, not HTTP operations)
+//
 // validateDependsOnCycles detects circular local dependsOn relationships within a single workflow
 // (e.g. A dependsOn B, B dependsOn A), which have no resolvable execution order (spec §5.8.5.1).
 // Only bare (local) stepId references participate; cross-workflow / cross-document forms are validated

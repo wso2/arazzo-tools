@@ -24,32 +24,51 @@ func (s *Server) Hover(ctx context.Context, params *protocol.HoverParams) (*prot
 		return nil, nil
 	}
 
-	// Extract operationId at cursor position
+	// Hover covers the same three targeting forms as Go-to-Definition, resolved by the SAME helpers,
+	// so the popup can never describe a different file than Ctrl+Click would jump to.
 	operationID := extractOperationIdAtPosition(content, params.Position)
+	channelPath, operationPath := "", ""
 	if operationID == "" {
-		utils.LogDebug("No operationId found at position")
+		channelPath = extractChannelPathAtPosition(content, params.Position)
+	}
+	if operationID == "" && channelPath == "" {
+		operationPath = extractOperationPathAtPosition(content, params.Position)
+	}
+	if operationID == "" && channelPath == "" && operationPath == "" {
+		utils.LogDebug("No operationId, channelPath or operationPath found at position")
 		return nil, nil
 	}
 
-	utils.LogDebug("Looking up operationId for hover: %s", operationID)
+	// Resolve strictly within this document's declared sources (same as Go-to-Definition) so the
+	// popup can't show an operation from an unrelated spec that merely shares the operationId.
+	sources := s.ensureSourcesIndexed(uri, content)
 
-	// Ensure index is built
-	if s.operationIndex == nil || s.operationIndex.Count() == 0 {
-		utils.LogWarning("Operation index is empty for hover")
-		return nil, nil
+	var markdown string
+	switch {
+	case channelPath != "":
+		ch, found := s.lookupChannelInSources(sources, channelPath)
+		if !found {
+			utils.LogDebug("Channel not found for hover: %s", channelPath)
+			return nil, nil
+		}
+		markdown = buildChannelHoverMarkdown(ch)
+
+	case operationPath != "":
+		opInfo, found := s.lookupOperationByPath(sources, operationPath)
+		if !found {
+			utils.LogDebug("operationPath not resolved for hover: %s", operationPath)
+			return nil, nil
+		}
+		markdown = buildHoverMarkdown(opInfo)
+
+	default:
+		opInfo, found := s.lookupOperationInSources(sources, operationID)
+		if !found {
+			utils.LogDebug("Operation not found for hover in this document's sources: %s", operationID)
+			return nil, nil
+		}
+		markdown = buildHoverMarkdown(opInfo)
 	}
-
-	// Look up operation in index
-	opInfo, found := s.operationIndex.Lookup(operationID)
-	if !found {
-		utils.LogDebug("Operation not found for hover: %s", operationID)
-		return nil, nil
-	}
-
-	utils.LogDebug("Found operation for hover: %s", operationID)
-
-	// Build markdown hover content
-	markdown := buildHoverMarkdown(opInfo)
 
 	hover := &protocol.Hover{
 		Contents: protocol.MarkupContent{
@@ -105,6 +124,26 @@ func buildHoverMarkdown(opInfo *navigation.OperationInfo) string {
 	md.WriteString(fmt.Sprintf("📄 **Defined in**: `%s:%d`\n\n", fileName, op.LineNumber))
 
 	// Action hint
+	md.WriteString("*Ctrl+Click to navigate to definition*")
+
+	return md.String()
+}
+
+// buildChannelHoverMarkdown creates hover content for an AsyncAPI channel referenced by channelPath.
+// It shows the channel KEY (the doc-internal name the pointer addresses) and its ADDRESS (the real
+// broker topic) — the distinction that most often trips people up when reading AsyncAPI.
+func buildChannelHoverMarkdown(ch *navigation.ChannelInfo) string {
+	if ch == nil {
+		return "**Channel**: Information not available"
+	}
+
+	var md strings.Builder
+	md.WriteString(fmt.Sprintf("### channel `%s`\n\n", ch.Key))
+	if ch.Address != "" {
+		md.WriteString(fmt.Sprintf("**Address**: `%s`\n\n", ch.Address))
+	}
+	md.WriteString("---\n\n")
+	md.WriteString(fmt.Sprintf("📄 **Defined in**: `%s:%d`\n\n", filepath.Base(ch.FileName), ch.LineNumber))
 	md.WriteString("*Ctrl+Click to navigate to definition*")
 
 	return md.String()

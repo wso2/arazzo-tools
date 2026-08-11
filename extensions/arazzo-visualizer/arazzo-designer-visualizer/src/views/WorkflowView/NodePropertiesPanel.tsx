@@ -884,10 +884,63 @@ export function NodePropertiesPanel({ node, workflow, definition, traceSpans, fo
 
     const sections: JSX.Element[] = [];
 
-    // General Section (stepId, description)
+    // Step kind — classify the step's target:
+    //  - channelPath OR action -> AsyncAPI (action only applies to async steps)
+    //  - workflowId            -> Workflow (nested)
+    //  - operationId scoped "$sourceDescriptions.<name>.*" -> that source's declared type
+    //  - operationId (bare): if the document declares exactly one typed source, use it; else OpenAPI
+    //  - operationPath         -> the referenced source's declared type (NOT always OpenAPI: the spec
+    //                            words operationPath as "an operation" and its own AsyncAPI example
+    //                            uses operationPath against a `type: asyncapi` source)
+    const sourceDescriptions = definition?.sourceDescriptions ?? [];
+    const mapSourceType = (t?: string): string | undefined =>
+        t === 'asyncapi' ? 'AsyncAPI' : t === 'openapi' ? 'OpenAPI' : t === 'arazzo' ? 'Arazzo' : undefined;
+    const sourceTypeByName = (name: string): string | undefined =>
+        mapSourceType(sourceDescriptions.find(sd => sd.name === name)?.type);
+
+    // Extract the source-description NAME an `operationPath` points at. Its shape differs from the
+    // scoped `operationId` form, so this cannot reuse that branch's parsing:
+    //   catalog#/paths/~1products/get                          -> catalog   (bare name before '#')
+    //   '{$sourceDescriptions.catalog.url}#/paths/~1p/get'     -> catalog   (expression before '#')
+    //   $sourceDescriptions.asyncOrderApi.placeOrder           -> asyncOrderApi (no '#'; the form the
+    //                                                             spec's own AsyncAPI example uses)
+    // In the '#' forms the trailing segment is a FIELD of the source (".url") and is dropped; in the
+    // scoped-operationId form the trailing segment is the operation id — which is why that branch
+    // keeps it and this one does not.
+    const sourceNameFromOperationPath = (raw: string): string => {
+        let ref = String(raw).trim().replace(/^['"]|['"]$/g, '').trim();
+        const hash = ref.indexOf('#');
+        if (hash >= 0) {
+            ref = ref.slice(0, hash);
+        }
+        ref = ref.trim().replace(/^\{/, '').replace(/\}$/, '').trim();
+        const prefix = '$sourceDescriptions.';
+        return ref.startsWith(prefix) ? ref.slice(prefix.length).split('.')[0] : ref;
+    };
+
+    let stepKind: string | undefined;
+    if (stepData.channelPath || stepData.action) {
+        stepKind = 'AsyncAPI';
+    } else if (stepData.workflowId) {
+        stepKind = 'Workflow';
+    } else if (stepData.operationId) {
+        const opId = String(stepData.operationId);
+        if (opId.startsWith('$sourceDescriptions.')) {
+            const name = opId.slice('$sourceDescriptions.'.length).split('.')[0];
+            stepKind = sourceTypeByName(name) ?? 'OpenAPI';
+        } else {
+            const typed = sourceDescriptions.filter(sd => sd.type);
+            stepKind = (typed.length === 1 ? mapSourceType(typed[0].type) : undefined) ?? 'OpenAPI';
+        }
+    } else if (stepData.operationPath) {
+        stepKind = sourceTypeByName(sourceNameFromOperationPath(String(stepData.operationPath))) ?? 'OpenAPI';
+    }
+
+    // General Section (stepId, step type, description)
     if (stepData.stepId || stepData.description) {
         const fields: Array<{ label: string; value: string }> = [];
         if (stepData.stepId) fields.push({ label: 'Step ID', value: String(stepData.stepId) });
+        if (stepKind) fields.push({ label: 'Step Type', value: stepKind });
         if (stepData.description) fields.push({ label: 'Description', value: String(stepData.description) });
         sections.push(renderMarkdownSection('General', fields, 'general'));
     }
@@ -899,6 +952,34 @@ export function NodePropertiesPanel({ node, workflow, definition, traceSpans, fo
         if (stepData.operationPath) fields.push({ label: 'Operation Path', value: String(stepData.operationPath) });
         if (stepData.workflowId) fields.push({ label: 'Workflow ID', value: String(stepData.workflowId) });
         sections.push(renderMarkdownSection('Operation Details', fields, 'operation'));
+    }
+
+    // AsyncAPI Details (v1.1.0) — channelPath / action / correlationId / timeout.
+    if (stepData.channelPath || stepData.action || stepData.correlationId ||
+        (stepData.timeout !== undefined && stepData.timeout !== null)) {
+        const fields: Array<{ label: string; value: string }> = [];
+        if (stepData.channelPath) fields.push({ label: 'Channel Path', value: String(stepData.channelPath) });
+        if (stepData.action) fields.push({ label: 'Action', value: String(stepData.action) });
+        if (stepData.correlationId) fields.push({ label: 'Correlation ID', value: String(stepData.correlationId) });
+        if (stepData.timeout !== undefined && stepData.timeout !== null) {
+            fields.push({ label: 'Timeout (ms)', value: String(stepData.timeout) });
+        }
+        if (fields.length > 0) sections.push(renderMarkdownSection('AsyncAPI', fields, 'asyncapi'));
+    }
+
+    // Depends On (v1.1.0 step-level dependencies) — stepIds / cross-workflow references.
+    if (Array.isArray(stepData.dependsOn) && stepData.dependsOn.length > 0) {
+        sections.push(
+            renderSimpleSection(
+                'Depends On',
+                <>
+                    {stepData.dependsOn.map((dep: any, i: number) => (
+                        <FieldValue key={i} style={{ marginBottom: 4 }}>{String(dep)}</FieldValue>
+                    ))}
+                </>,
+                'dependsOn'
+            )
+        );
     }
 
     // Parameters (array)

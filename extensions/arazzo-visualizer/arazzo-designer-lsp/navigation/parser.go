@@ -21,9 +21,9 @@ func ParseOpenAPIFile(fileURI string) (*OpenAPIFile, error) {
 		utils.LogError("Failed to convert URI to path - URI: '%s', Error: %v", fileURI, err)
 		return nil, fmt.Errorf("invalid URI %s: %w", fileURI, err)
 	}
-	
+
 	utils.LogDebug("Converted URI to path: '%s' -> '%s'", fileURI, filePath)
-	
+
 	content, err := os.ReadFile(filePath)
 	if err != nil {
 		utils.LogError("Failed to read file - URI: '%s', Path: '%s', Error: %v", fileURI, filePath, err)
@@ -46,11 +46,16 @@ func ParseOpenAPIFile(fileURI string) (*OpenAPIFile, error) {
 		}
 	}
 
-	// Extract OpenAPI file metadata
+	// Extract OpenAPI file metadata. SpecType records what the file ACTUALLY is (from its own
+	// `openapi:`/`asyncapi:` key), which lets callers compare it against the `type` an Arazzo
+	// document declared for this source.
 	openAPIFile := &OpenAPIFile{
 		URI:        fileURI,
 		Version:    getString(spec, "openapi"),
 		Operations: make([]*OperationInfo, 0),
+	}
+	if openAPIFile.Version != "" {
+		openAPIFile.SpecType = "openapi"
 	}
 
 	// Extract info if present
@@ -67,9 +72,90 @@ func ParseOpenAPIFile(fileURI string) (*OpenAPIFile, error) {
 	}
 
 	openAPIFile.Operations = operations
-	utils.LogInfo("Parsed %d operations from %s", len(operations), filepath.Base(filePath))
+
+	// If this is an AsyncAPI document, also extract its operations (keyed by id) and channels so
+	// `operationId` and `channelPath` references can navigate into it.
+	if asyncVersion := getString(spec, "asyncapi"); asyncVersion != "" {
+		openAPIFile.Version = asyncVersion
+		openAPIFile.SpecType = "asyncapi"
+		openAPIFile.Operations = append(openAPIFile.Operations, extractAsyncOperations(spec, fileURI, string(content))...)
+		openAPIFile.Channels = extractChannels(spec, fileURI, string(content))
+	}
+
+	utils.LogInfo("Parsed %d operations, %d channels from %s", len(openAPIFile.Operations), len(openAPIFile.Channels), filepath.Base(filePath))
 
 	return openAPIFile, nil
+}
+
+// extractAsyncOperations extracts AsyncAPI 3.x operations (the `operations` map keyed by id).
+func extractAsyncOperations(spec map[string]interface{}, fileURI, content string) []*OperationInfo {
+	ops := make([]*OperationInfo, 0)
+	operationsObj, ok := spec["operations"].(map[string]interface{})
+	if !ok {
+		return ops
+	}
+	fileName := baseName(fileURI)
+	for opID, opRaw := range operationsObj {
+		opMap, ok := opRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		ops = append(ops, &OperationInfo{
+			OperationID: opID,
+			Method:      strings.ToUpper(getString(opMap, "action")), // SEND / RECEIVE (for display)
+			Summary:     getString(opMap, "summary"),
+			Description: getString(opMap, "description"),
+			FileURI:     fileURI,
+			FileName:    fileName,
+			LineNumber:  findKeyLineNumber(content, opID),
+			Column:      0,
+		})
+	}
+	return ops
+}
+
+// extractChannels extracts AsyncAPI channels (the `channels` map keyed by channel key).
+func extractChannels(spec map[string]interface{}, fileURI, content string) []*ChannelInfo {
+	channels := make([]*ChannelInfo, 0)
+	channelsObj, ok := spec["channels"].(map[string]interface{})
+	if !ok {
+		return channels
+	}
+	fileName := baseName(fileURI)
+	for key, chRaw := range channelsObj {
+		chMap, _ := chRaw.(map[string]interface{})
+		channels = append(channels, &ChannelInfo{
+			Key:        key,
+			Address:    getString(chMap, "address"),
+			FileURI:    fileURI,
+			FileName:   fileName,
+			LineNumber: findKeyLineNumber(content, key),
+		})
+	}
+	return channels
+}
+
+// findKeyLineNumber finds the (0-indexed) line where a YAML/JSON map key is defined, e.g. the
+// `placeOrder:` operation key or the `orders:` channel key.
+func findKeyLineNumber(content, key string) int {
+	lines := strings.Split(content, "\n")
+	yamlKey := key + ":"
+	jsonKey := `"` + key + `"`
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, yamlKey) || strings.HasPrefix(trimmed, jsonKey) {
+			return i
+		}
+	}
+	return 0
+}
+
+// baseName returns the display filename for a URI.
+func baseName(fileURI string) string {
+	if filePath, err := utils.URIToPath(fileURI); err == nil {
+		return filepath.Base(filePath)
+	}
+	return filepath.Base(fileURI)
 }
 
 // extractOperations extracts operation information from the paths object
@@ -128,7 +214,7 @@ func extractOperations(spec map[string]interface{}, fileURI, content string) ([]
 			if filePath, err := utils.URIToPath(fileURI); err == nil {
 				fileName = filepath.Base(filePath)
 			}
-			
+
 			opInfo := &OperationInfo{
 				OperationID: operationID,
 				Method:      methodUpper,

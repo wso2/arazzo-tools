@@ -1,0 +1,53 @@
+# Phase 8 — Scenario 1: PROPERTIES PANEL + NAVIGATION showcase (a valid async order flow).
+#
+# Open this file in the Arazzo visualizer and click each step to see the properties panel:
+#   - browseCatalog (OpenAPI)  -> General shows "Step Type: OpenAPI"; Operation Details shows getProducts
+#   - sendOrder     (AsyncAPI) -> "Step Type: AsyncAPI"; AsyncAPI section: Channel Path, Action, Timeout;
+#                                 Depends On: browseCatalog
+#   - awaitConfirmation (AsyncAPI receive) -> AsyncAPI section: Channel Path, Action, Correlation ID,
+#                                 Timeout; Depends On: sendOrder
+#
+# Navigation (Part 2): Ctrl/Cmd-click a `channelPath` value to jump to that channel in
+# order-events.asyncapi.yaml. This file is valid — the LSP shows NO diagnostics.
+#
+# NOTE: async steps do not EXECUTE yet (send/receive is Phase 9); this exercises the LSP +
+# visualizer only.
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 8 - async properties panel showcase"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: catalog
+    url: ./catalog.openapi.yaml
+    type: openapi
+  - name: orderEvents
+    url: ./order-events.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: placeAndConfirm
+    steps:
+      - stepId: browseCatalog                         # OpenAPI step -> Step Type: OpenAPI
+        operationId: getProducts
+        successCriteria:
+          - condition: "$statusCode == 200"
+
+      - stepId: sendOrder                             # AsyncAPI send -> channelPath + action + timeout
+        channelPath: orderEvents#/channels/orders
+        action: send
+        timeout: 5000
+        dependsOn:
+          - browseCatalog
+
+      - stepId: awaitConfirmation                     # AsyncAPI receive -> + correlationId
+        channelPath: orderEvents#/channels/confirmations
+        action: receive
+        correlationId: $message.payload.orderId
+        timeout: 30000
+        dependsOn:
+          - sendOrder
+        successCriteria:
+          - condition: '$message.payload.status == "confirmed"'

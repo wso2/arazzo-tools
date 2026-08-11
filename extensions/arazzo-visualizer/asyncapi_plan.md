@@ -314,7 +314,17 @@ Status:
   (JSON default — JSON Pointer — is already in place.)
 - Optional: LSP validation of `targetSelectorType` as an Expression Type Object (version required + valid per type).
 
-### Phase 7: Step Dependencies (`dependsOn`) — ❌ NOT STARTED
+### Phase 7: Step Dependencies (`dependsOn`) — ✅ DONE
+
+**Implemented (matches the design below):**
+- **Runtime step gate** ([runner.go](../../arazzo-designer-cli/internal/runner/runner.go) `checkStepDependencies`) — checked before each step; no reordering, no triggering; hard error on an unmet prerequisite (spec §5.8.5.1). Reference forms: local `stepId`; `$workflows.<wf>.steps.<s>`; `$sourceDescriptions.<name>.<wf>.steps.<s>` (form-validated, execution deferred).
+- **Cross-workflow step granularity** — the gate verifies the **specific** referenced step reached success (not just that the workflow ran). The runner now surfaces each dependency workflow's per-step status (`WorkflowExecutionResult.StepsStatus` → `ExecutionState.DependencyStepStatus`), so a step skipped via `goto` in a dependency correctly fails the gate.
+- **Workflow-level `dependsOn` cycle guard** ([runner.go](../../arazzo-designer-cli/internal/runner/runner.go) `executeDependencies` `depStack`) — a circular workflow dep now errors clearly instead of stack-overflowing (trigger behavior kept).
+- **LSP static validation** ([validator.go](arazzo-designer-lsp/validator/validator.go)) — `dependsOn` reference forms + existence + self-reference, plus **cycle detection** for both **step-level** (`validateDependsOnCycles`) and **workflow-level** (`validateWorkflowDependsOnCycles`) `dependsOn`.
+- **Examples**: [examples/async_test/phase7/](../../examples/async_test/phase7) 01–08 (gate satisfied/unmet, workflow dep, step & workflow cycles, cross-workflow dep, cross-workflow specific-step-ran vs step-skipped-by-goto). Unit tests: `runner_phase7_test.go`, `validator_test.go`.
+- **Deferred (unchanged):** async wait-with-timeout (Phases 8–11); cross-**document** `dependsOn` execution (end-of-project batch); the **visualization** of `dependsOn` edges / blocked-step state (Phase 13, needs team sign-off).
+
+<details><summary>Original design (as implemented) — kept for reference</summary>
 
 **Runner currently ignores `Step.DependsOn`** (parsed into the model at `models/arazzo.go`, never read by the
 execution loop) and runs steps in document order + control flow.
@@ -372,23 +382,34 @@ fine; a step whose `dependsOn` prerequisite did not run → workflow fails with 
 prerequisite does not satisfy the gate; LSP flags a cycle and a missing `stepId`; a **circular WORKFLOW-level
 `dependsOn`** errors clearly instead of crashing (stack overflow).
 
-### Phase 8: AsyncAPI Model Resolution And Visualization — ❌ NOT STARTED
+</details>
 
-Goal: understand AsyncAPI sources and show them before real broker execution.
+### Phase 8: AsyncAPI Model Resolution — ✅ DONE
 
-Changes:
-- Load AsyncAPI source docs from `sourceDescriptions`; index operations & channels.
-- Resolve AsyncAPI refs from `operationId`, scoped ids (`$sourceDescriptions.orderEvents.placeOrder`),
-  and `channelPath`.
-- Navigation: keep OpenAPI op nav; add AsyncAPI operation nav and `channelPath` channel nav.
-- Visualizer ([arazzo-designer-visualizer](arazzo-designer-visualizer)):
-  - show `$self` in overview; source-type badges (OpenAPI / AsyncAPI / Arazzo).
-  - render `send`/`receive` steps distinctly.
-  - show `channelPath`/`action`/`correlationId`/`timeout`/`dependsOn` in the properties panel.
-  - draw **step-level** `dependsOn` edges (workflow-level already drawn).
+Goal: understand AsyncAPI sources (resolve + navigate + surface info) before real broker execution.
+**NO visual/UI changes to the graph in this phase** — node appearance, badges, icons, and edges stay
+exactly as they are (UI changes need team confirmation; they are parked in the final UI phase below).
 
-Tests: AsyncAPI source loads; op/channel indexed; `channelPath` navigation resolves; async
-metadata shown; dependency edges render without breaking success/failure/goto edges.
+**Status by part:**
+- **Part 1 — CLI resolver ✅ DONE.** [asyncapi_finder.go](../../arazzo-designer-cli/internal/runner/executor/asyncapi_finder.go) (+ `asyncapi_finder_test.go`): `FindChannelByPath` (`source#/channels/x` via JSON Pointer), `FindOperationByID` (bare + scoped `$sourceDescriptions.<name>.<op>`, follows the operation's channel `$ref`), `ActionMismatch` detection. It **resolves/identifies** async targets only — it is **not** wired into step execution (no `Send`/`Receive`); that is Phase 9 (marked with a `TODO(phase9)` in the file).
+- **Part 2 — LSP indexing + navigation + validation ✅ DONE.**
+  - Indexing: [parser.go](arazzo-designer-lsp/navigation/parser.go) / [types.go](arazzo-designer-lsp/navigation/types.go) index AsyncAPI channels + operations (`extractChannels`, `ChannelInfo`, `AddChannel`/`LookupChannel`).
+  - Navigation: [definition.go](arazzo-designer-lsp/server/definition.go) + [position_utils.go](arazzo-designer-lsp/server/position_utils.go) — go-to-definition for `channelPath` (→ channel location), OpenAPI + AsyncAPI operations, and the scoped `$sourceDescriptions.<name>.<op>` form. Hardened during testing:
+    - **Scoped to the document's declared `sourceDescriptions`** (not a workspace/directory scan) — a reference resolves only inside the specs this Arazzo doc declares, never into an unrelated same-named op elsewhere. Per-file lookups (`LookupOperationInFile`/`LookupChannelInFile`) bypass the global deduped map.
+    - **On open/change, only the declared sources are parsed/indexed** ([server.go](arazzo-designer-lsp/server/server.go) `indexDeclaredSources`) — the old directory-scan path (`BuildIndex`/`DiscoverOpenAPIFiles`) is now dead (marked `// NOT USED`).
+    - **`$self`-aware source resolution** ([resolve.go](arazzo-designer-lsp/server/resolve.go)) mirrors the runner (spec §5.5), so navigation resolves relative source URLs exactly as execution does (standalone copy — no CLI-module import).
+    - **Hover uses the same scoped resolver as Go-to-Definition** (`lookupOperationInSources`), so the hover popup can't disagree with the click target. Hover now also covers `channelPath` (channel key + broker address) and `operationPath`.
+    - **All THREE targeting forms navigate**: `operationId` (bare + scoped), `channelPath`, and **`operationPath`** (JSON-Pointer based — `#/paths/~1products/get` for OpenAPI, `#/operations/<id>` for AsyncAPI; `LookupOperationByPointerInFile`). `operationPath` navigation is new — it had never existed in any version.
+    - **Both source-reference spellings are accepted everywhere.** The spec REQUIRES a runtime expression (`{$sourceDescriptions.<name>.url}#…`) in `channelPath`/`operationPath`, while a bare source name is the common shorthand. One shared helper ([utils/sourceref.go](arazzo-designer-lsp/utils/sourceref.go): `NormalizeSourceRef`, `SplitSourceRefAndPointer`, `ParseScopedOperationID`, `SplitJSONPointer` incl. `~1`/`~0` unescaping) is used by navigation, hover AND validation, so they can't disagree. **Fixed:** the validator previously reported the spec-mandated expression form as an "unknown source description".
+    - **Indexing runs on open, change AND save**, always file-scoped: saving an Arazzo file re-resolves and re-indexes its declared sources (so a newly added `sourceDescription` works without reopening); saving a source spec re-indexes that file (AsyncAPI files included, not just `openapi:`).
+    - **Per-document typed source registry** ([server/source_registry.go](arazzo-designer-lsp/server/source_registry.go)) — for each Arazzo document it records every declared source's name, declared `type`, the type the file **actually** is (`OpenAPIFile.SpecType`), resolved file URI, and a remote flag; exposes `AsyncSources`/`RESTSources` so **event-driven sources are tracked separately from REST ones**, plus `TypeMismatch()` when a file contradicts its declared type. Entries are document-scoped (a source name means nothing outside the document that declared it) and dropped on close. Surfaced to clients — e.g. the graph, to tell which kind of API a step targets — via the additive **`arazzo/getSourceInfo`** LSP method (`{sources, async, rest}`); `arazzo/getModel`'s shape is unchanged.
+  - Validation now also covers **`operationPath`** (format, unknown source, `arazzo`-typed source → use `workflowId`) and the **scoped `operationId`** (unknown source, malformed `$` expression), symmetric with the existing `channelPath` rules.
+  - Validation: [validator.go](arazzo-designer-lsp/validator/validator.go) — **`channelPath` present but `action` absent → ERROR** (direction undefined), plus channelPath format + source-type (`asyncapi`) checks. The **`operationId`/`action` mismatch** LSP diagnostic is deferred (needs cross-source resolution in the validator; enforcement rides with Phase 9 — prefer the AsyncAPI document's action and warn).
+- **Part 3 — Visualizer properties panel ✅ DONE.** [NodePropertiesPanel.tsx](arazzo-designer-visualizer/src/views/WorkflowView/NodePropertiesPanel.tsx) now shows, on a clicked step: a **Step Type** field (AsyncAPI via `channelPath`/`action`; a scoped `operationId` resolves to its source's declared type; a bare `operationId` resolves when the doc declares exactly one typed source, else OpenAPI; `workflowId` → Workflow), an **AsyncAPI** section (`channelPath`/`action`/`correlationId`/`timeout`), and a **Depends On** section. The async fields already reach the panel via `...stepData` (no plumbing needed). **Properties panel ONLY** — no node/graph/badge/edge changes (those stay in Phase 13).
+
+Tests: AsyncAPI source loads ✅; op/channel indexed ✅; **all three targeting forms** (`operationId` bare+scoped, `channelPath`, `operationPath`) navigate to the right file+line in **both source-reference spellings** ✅; hover matches the click target for every form ✅; navigation stays scoped to declared sources (an undeclared same-named op is never reached) ✅; `$self`-aware resolution matches the runner ✅; per-document registry records declared/resolved types, splits async vs REST, flags type mismatches, and is dropped on close ✅; save re-indexes declared sources ✅; channelPath-without-action errors ✅; targeting validation (unknown source / bad format / malformed expression / arazzo-source operationPath) ✅; async metadata + Step Type shown in the properties panel ✅; graph rendering otherwise unchanged ✅. Examples: [examples/async_test/phase8/](../../examples/async_test/phase8) (01 panel/nav, 02 operationId, 03 async validation, **04 every targeting form × both spellings, 05 targeting validation**) — 04 and 05 are also test fixtures, so the shipped examples are verified to behave exactly as their headers claim.
+
+**Deferred out of Phase 8 (tracked):** the single-clickable-link for a whole `channelPath` value (needs a DocumentLink provider — Ctrl+click/hover already navigate correctly, the link is just segmented); removal of the dead directory-scan code.
 
 ### Phase 9: AsyncAPI Adapter Interface — ❌ NOT STARTED
 
@@ -405,6 +426,22 @@ Runner behavior:
 - `action: send` → resolve op/channel, evaluate params & body, serialize, `Send`, store send metadata.
 - `action: receive` → resolve op/channel, evaluate `correlationId`, `Receive`, enforce
   `timeout`, expose `$message`, evaluate `successCriteria`, extract outputs from `$message`.
+- **`channelPath` requires `action`** → without it the runner can't choose send vs receive → hard error.
+- **`operationId`/`action` mismatch** → the AsyncAPI document's operation action WINS; log a warning
+  about the contradiction (spec doesn't define a conflict rule, so we don't hard-fail on this).
+
+Blocking model & `dependsOn` (design decision to finalize here):
+- The spec frames `dependsOn` around *"non-blocking/asynchronous"* steps (§5.8.5). Two viable models:
+  (a) **blocking receive** — the receive step waits (up to `timeout`) inline; `dependsOn` stays a pure
+  gate (Phase 7). Simpler. (b) **non-blocking receive** — the step starts listening in the background,
+  the workflow proceeds, and a later step's `dependsOn` is what *waits* for completion. Pick (a) first
+  unless a real use-case needs (b).
+- When a receive step (or a `dependsOn` on a not-yet-complete async step) is waited on: wait up to
+  `timeout`; **received in time → step completes (success);** **timed out → step fails.** This is the
+  `dependsOn` "started-but-not-completed → wait-with-timeout" branch deferred from Phase 7 — it lands here.
+- Execution-status visualization (existing node red/green driven by run telemetry) then reflects it:
+  a completed async step shows success, a timed-out one shows failure. (No new node *styling* — that's
+  Phase 13; this is just the existing pass/fail status coloring.)
 
 Initial adapters: in-memory/test adapter; clear error when a real broker adapter is required
 but unconfigured: `AsyncAPI execution requires a configured adapter for this protocol`.
@@ -459,6 +496,22 @@ Changes:
 Tests: CLI still lists/runs old workflows; CLI reports async adapter errors clearly; MCP output
 stable for old workflows; new examples parse and validate.
 
+### Phase 13 (FINAL): Visualizer UI Enhancements — ❌ NOT STARTED (⚠️ needs TEAM CONFIRMATION first)
+
+Goal: the graph-appearance changes deliberately pulled OUT of Phase 8. Do these LAST, and only after
+the UI direction is confirmed with the team — until then, async steps render as normal steps.
+
+Changes (all visual):
+- Source-type badges (OpenAPI / AsyncAPI / Arazzo) and `$self` in the overview.
+- Render `send`/`receive` steps distinctly (icons/styling direction TBD with the team).
+- Draw **step-level** `dependsOn` edges (workflow-level `dependsOn` edges: also confirm — none exist
+  today). Must not break existing success/failure/goto edges. Note: no reordering exists at runtime
+  (Phase 7 gate), so the execution highlight stays sequential and needs no change; a step blocked by
+  its `dependsOn` gate could show an error/blocked state.
+
+Tests: dependency edges render without breaking success/failure/goto edges; old workflows render
+unchanged; badges/styling match the confirmed design.
+
 ---
 
 ## Final Acceptance Criteria
@@ -489,7 +542,8 @@ The model/LSP work (Phases 1–2) is done, so an implementing AI should start at
 proceed 3 → 12. Phases 4 and 5 share the selector/expression service and are best done together;
 Phase 6 depends on Phase 4; Phase 7 is independent and can be parallelized with 4–6; Phases
 8–11 form the AsyncAPI runtime track and depend on 3 (resolution) + 4–5 (evaluation) + 9
-(adapter) before 10–11. Phase 12 closes out docs/samples last.
+(adapter) before 10–11. Phase 12 closes out docs/samples; Phase 13 (visualizer UI, needs team
+confirmation) is the very last.
 
 ## Known Issues / Bugs (separate from the v1.1.0 phases — fix independently)
 

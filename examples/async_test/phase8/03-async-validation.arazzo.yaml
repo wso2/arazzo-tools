@@ -1,0 +1,48 @@
+# Phase 8 — Scenario 3: LSP VALIDATION for AsyncAPI steps. Open this file and you should see a
+# squiggle on EVERY step below — each is wrong on purpose. This exercises Part 2's validation rules.
+#
+# Expected diagnostics (step -> severity: message):
+#   noAction        -> ERROR:   a 'channelPath' step must also specify 'action' (direction undefined)
+#   actionNoChannel -> WARNING: 'action' is only applicable to AsyncAPI steps (needs channelPath)
+#   corrOnSend      -> WARNING: 'correlationId' is only applicable to steps with action 'receive'
+#   wrongSourceType -> ERROR:   'channelPath' references source of type 'openapi', must be 'asyncapi'
+#   badFormat       -> ERROR:   'channelPath' must be in the format '{sourceDescriptionName}#{channelPath}'
+#
+# (These are static/editor diagnostics; nothing here is meant to run.)
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 8 - async validation errors (on purpose)"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: orderEvents
+    url: ./order-events.asyncapi.yaml
+    type: asyncapi
+  - name: catalog
+    url: ./catalog.openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: badAsync
+    steps:
+      - stepId: noAction                              # channelPath but NO action -> ERROR
+        channelPath: orderEvents#/channels/orders
+
+      - stepId: actionNoChannel                       # action but NO channelPath -> WARNING
+        operationId: getProducts
+        action: send
+
+      - stepId: corrOnSend                            # correlationId on a send step -> WARNING
+        channelPath: orderEvents#/channels/orders
+        action: send
+        correlationId: $message.payload.orderId
+
+      - stepId: wrongSourceType                       # channelPath -> OpenAPI source -> ERROR
+        channelPath: catalog#/channels/orders
+        action: receive
+
+      - stepId: badFormat                             # channelPath missing '#' -> ERROR
+        channelPath: orderEvents/channels/orders
+        action: send

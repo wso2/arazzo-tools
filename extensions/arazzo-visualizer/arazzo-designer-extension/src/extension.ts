@@ -855,11 +855,25 @@ function checkDocumentForOpenAPI(document?: vscode.TextDocument) {
 	}
 
 	// Content-based detection per Arazzo Spec §4.6.1:
-	// The `arazzo` field is REQUIRED and MUST be used by tooling to interpret the Arazzo Description.
-	// Check the first few lines for the `arazzo: X.X.X` version pattern.
-	const firstFewLines = document.getText(new vscode.Range(0, 0, 10, 0));
-	const hasOpenAPI = /\bopenapi\s*:/i.test(firstFewLines);
-	const hasArazzo = /\barazzo\s*:\s*\d+\.\d+\.\d+/i.test(firstFewLines);
+	// The REQUIRED root field (`arazzo` for an Arazzo Description, `openapi` for an OpenAPI document)
+	// is the first meaningful line of the file. Detect on the TOPMOST non-blank, non-comment line
+	// ONLY — this both (a) allows a comment header of any length before the field (v1.1.0 examples
+	// commonly have one, which the old first-10-lines check missed) and (b) avoids a false positive
+	// from a stray `arazzo:`/`openapi:` appearing deeper in the file (in a description, a comment, or
+	// a source-description name). `---` YAML document markers are skipped. An optional quote around
+	// the version is allowed so `arazzo: "1.1.0"` matches as well as `arazzo: 1.1.0`.
+	//
+	// JSON documents open with a bare `{`, so that line is skipped too and the key itself may be
+	// quoted — otherwise `{ "arazzo": "1.1.0" }` would never be recognised and the arazzo-json
+	// language (and with it the language server) would not attach.
+	const firstMeaningfulLine = document.getText()
+		.split(/\r?\n/)
+		.find(l => {
+			const t = l.trim();
+			return t !== '' && t !== '---' && t !== '{' && !t.startsWith('#');
+		}) || '';
+	const hasOpenAPI = /^\s*"?openapi"?\s*:/i.test(firstMeaningfulLine);
+	const hasArazzo = /^\s*"?arazzo"?\s*:\s*["']?\d+\.\d+\.\d+/i.test(firstMeaningfulLine);
 
 	// Set context variables — detect Arazzo purely by content, not file name
 	const isOpenAPI = hasOpenAPI && !hasArazzo;

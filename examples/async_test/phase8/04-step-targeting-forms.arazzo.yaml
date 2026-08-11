@@ -1,0 +1,71 @@
+# Phase 8 — Scenario 4: EVERY WAY A STEP TARGETS SOMETHING, in both source-reference spellings.
+#
+# An Arazzo step points at what it should invoke in exactly one of three ways:
+#
+#   operationId    — by name.        Bare ("getProducts") or scoped ("$sourceDescriptions.<name>.<op>").
+#   channelPath    — an AsyncAPI CHANNEL, by JSON Pointer:  <sourceRef>#/channels/<key>
+#   operationPath  — an operation,        by JSON Pointer:  <sourceRef>#/paths/~1products/get
+#
+# The <sourceRef> before '#' names the source description. The spec (§4.8.1) says a Runtime Expression
+# MUST be used there — "{$sourceDescriptions.<name>.url}" — while a bare source name is the common
+# shorthand. THIS TOOLING ACCEPTS BOTH, and resolves them identically; each pair of steps below proves
+# it by pointing the two spellings at the same definition.
+#
+# Note the JSON Pointer escaping (RFC 6901): '/' inside a path segment is written '~1', so the
+# OpenAPI path "/products" appears as "~1products". And because a value starting with '{' would be
+# read as a YAML flow mapping, the runtime-expression form must be quoted.
+#
+# HOW TO VERIFY (LSP): Ctrl/Cmd-click each value below — every one must jump to the definition named
+# in its comment, and hovering must name the SAME file. Nothing here executes (Phase 9+ does that).
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 8 - step targeting forms"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: catalog
+    url: ./catalog.openapi.yaml
+    type: openapi
+  - name: orderEvents
+    url: ./order-events.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: targetingForms
+    steps:
+      # --- operationId: by name -------------------------------------------------------------------
+      # Bare form. Resolvable because the name is unique across this document's sources.
+      - stepId: bareOperationId
+        operationId: getProducts                                   # -> catalog.openapi.yaml, getProducts
+
+      # Scoped form. REQUIRED by the spec when 2+ non-arazzo sources are declared (as here), because a
+      # bare name could otherwise clash between sources.
+      - stepId: scopedOperationId
+        operationId: $sourceDescriptions.orderEvents.placeOrder     # -> order-events.asyncapi.yaml, placeOrder
+
+      # --- channelPath: an AsyncAPI channel by JSON Pointer ---------------------------------------
+      # Both spellings target the SAME channel. `action` is mandatory: a channel carries no direction.
+      - stepId: channelPathBareRef
+        channelPath: orderEvents#/channels/orders                   # -> channel `orders`
+        action: send
+
+      - stepId: channelPathExpressionRef
+        channelPath: '{$sourceDescriptions.orderEvents.url}#/channels/orders'   # -> the SAME channel
+        action: send
+
+      # --- operationPath: an operation by JSON Pointer --------------------------------------------
+      # Both spellings target the SAME OpenAPI operation. operationPath exists for operations that
+      # have no operationId; when one exists the spec says to prefer `operationId`.
+      - stepId: operationPathBareRef
+        operationPath: catalog#/paths/~1products/get                # -> catalog.openapi.yaml, GET /products
+
+      - stepId: operationPathExpressionRef
+        operationPath: '{$sourceDescriptions.catalog.url}#/paths/~1products/get' # -> the SAME operation
+
+      # operationPath may also address an AsyncAPI operation — the spec words it as "an operation"
+      # without restricting the document type. (In practice AsyncAPI 3 operations are map keys and so
+      # always have an id, which makes `operationId` the natural choice there.)
+      - stepId: operationPathIntoAsyncAPI
+        operationPath: 'orderEvents#/operations/onOrderConfirmed'   # -> order-events.asyncapi.yaml

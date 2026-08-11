@@ -1,0 +1,45 @@
+asyncapi: 3.0.0
+info:
+  title: Order Events
+  version: 1.0.0
+
+# AsyncAPI 3.x: `channels` is a MAP keyed by a channel KEY (the doc-internal name a
+# channelPath points at). Each channel's `address` is the real broker topic. Direction
+# (send/receive) lives on OPERATIONS, never on channels.
+channels:
+  orders:
+    address: orders/new
+    messages:
+      orderPlaced:
+        payload:
+          type: object
+          properties:
+            orderId:
+              type: string
+            items:
+              type: array
+              items:
+                type: string
+  confirmations:
+    address: orders/confirmed
+    messages:
+      orderConfirmed:
+        payload:
+          type: object
+          properties:
+            orderId:
+              type: string
+            status:
+              type: string
+
+# `operations` is a MAP keyed by operationId. Each has an `action` (send/receive) and a
+# `channel.$ref` pointing back at a channel. This is what an Arazzo `operationId` resolves to.
+operations:
+  placeOrder:
+    action: send
+    channel:
+      $ref: '#/channels/orders'
+  onOrderConfirmed:
+    action: receive
+    channel:
+      $ref: '#/channels/confirmations'

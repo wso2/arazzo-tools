@@ -28,6 +28,7 @@ type Server struct {
 	shutdownRequested   bool                            // Track if shutdown was requested
 	operationIndex      *navigation.OperationIndex      // Index of OpenAPI operations
 	indexer             *navigation.Indexer             // Operation indexer
+	sourceRegistry      *sourceRegistry                 // Per-Arazzo-document declared sources (name/type/file)
 }
 
 // NewServer creates a new LSP server
@@ -42,6 +43,7 @@ func NewServer() *Server {
 		documents:           make(map[protocol.DocumentURI]string),
 		operationIndex:      operationIndex,
 		indexer:             indexer,
+		sourceRegistry:      newSourceRegistry(),
 	}
 }
 
@@ -127,18 +129,16 @@ func (s *Server) DidOpen(ctx context.Context, params *protocol.DidOpenTextDocume
 	// Store document content
 	s.documents[uri] = content
 
-	// Build operation index for Arazzo files (async, don't block)
-	go func() {
-		if s.isArazzoFile(string(uri)) {
-			utils.LogInfo("Building operation index for Arazzo file...")
-			err := s.indexer.BuildIndex(string(uri))
-			if err != nil {
-				utils.LogError("Failed to build operation index: %v", err)
-			} else {
-				utils.LogInfo("Operation index built successfully with %d operations", s.operationIndex.Count())
-			}
-		}
-	}()
+	// Index ONLY the source descriptions this Arazzo document declares (async, don't block) — the
+	// document resolves its own sources rather than scanning the surrounding directory.
+	// isArazzoFile reads s.documents, so it is evaluated on the handler goroutine (see DidSave).
+	if s.isArazzoFile(string(uri)) {
+		go func() {
+			utils.LogInfo("Indexing declared sources for Arazzo file...")
+			s.indexDeclaredSources(uri, content)
+			utils.LogInfo("Declared-source index ready (%d operations, %d channels)", s.operationIndex.Count(), s.operationIndex.ChannelCount())
+		}()
+	}
 
 	// Provide diagnostics
 	s.provideDiagnostics(ctx, uri, content)
@@ -181,6 +181,12 @@ func (s *Server) DidChange(ctx context.Context, params *protocol.DidChangeTextDo
 
 		utils.LogInfo("Document content updated, length: %d bytes", len(content))
 
+		// The sourceDescriptions may have changed — re-resolve and index this document's declared
+		// sources so newly-referenced specs become navigable without reopening the file.
+		if s.isArazzoFile(string(uri)) {
+			go s.indexDeclaredSources(uri, content)
+		}
+
 		// Provide diagnostics
 		utils.LogInfo("Running diagnostics for changed document: %s", uri)
 		s.provideDiagnostics(ctx, uri, content)
@@ -206,15 +212,33 @@ func (s *Server) DidSave(ctx context.Context, params *protocol.DidSaveTextDocume
 		s.provideDiagnostics(ctx, uri, content)
 	}
 
-	// File watching: Re-index OpenAPI files when they are saved
+	// Re-index on save. Two distinct cases:
+	//   - an ARAZZO file was saved -> its `sourceDescriptions`/`$self` may have changed, so re-resolve
+	//     and re-index the sources it declares (file-scoped, never a workspace scan).
+	//   - a SOURCE spec (OpenAPI/AsyncAPI) was saved -> drop its stale entries and re-index it so
+	//     navigation and hover point at the updated definitions.
+	//
+	// Everything read from `s.documents` is captured HERE, on the handler goroutine, and passed by
+	// value into the background goroutine. Reading the map inside the goroutine would race with
+	// other handlers writing it (a concurrent map read/write is a fatal runtime error, not an error
+	// value), and the index/registry the goroutine then touches are themselves mutex-protected.
+	content := s.documents[uri]
+	isArazzo := s.isArazzoFile(string(uri))
+	isSpecSource := !isArazzo && s.isSpecSourceFile(string(uri))
+
 	go func() {
-		if s.isOpenAPIFile(string(uri)) {
-			utils.LogInfo("OpenAPI file saved, re-indexing: %s", uri)
-			err := s.indexer.ReindexFile(string(uri))
-			if err != nil {
-				utils.LogError("Failed to re-index OpenAPI file: %v", err)
+		if isArazzo {
+			utils.LogInfo("Arazzo file saved, re-indexing its declared sources: %s", uri)
+			s.indexDeclaredSources(uri, content)
+			utils.LogInfo("Declared-source index refreshed (%d operations, %d channels)", s.operationIndex.Count(), s.operationIndex.ChannelCount())
+			return
+		}
+		if isSpecSource {
+			utils.LogInfo("Source spec saved, re-indexing: %s", uri)
+			if err := s.indexer.ReindexFile(string(uri)); err != nil {
+				utils.LogError("Failed to re-index source spec: %v", err)
 			} else {
-				utils.LogInfo("OpenAPI file re-indexed successfully: %s", uri)
+				utils.LogInfo("Source spec re-indexed successfully: %s", uri)
 			}
 		}
 	}()
@@ -222,20 +246,18 @@ func (s *Server) DidSave(ctx context.Context, params *protocol.DidSaveTextDocume
 	return nil
 }
 
-// isOpenAPIFile checks if the file is an OpenAPI specification
-func (s *Server) isOpenAPIFile(uri string) bool {
-	// Check if it's already indexed
-	if s.operationIndex != nil {
-		// Check if file is in the index
-		files := s.operationIndex.Files
-		if _, exists := files[uri]; exists {
-			return true
-		}
+// isSpecSourceFile checks whether the file is an API description a step can target — an OpenAPI or
+// an AsyncAPI document (either already indexed, or recognizable from its content).
+func (s *Server) isSpecSourceFile(uri string) bool {
+	// Already indexed as a source description of some document.
+	if s.operationIndex != nil && s.operationIndex.HasFile(uri) {
+		return true
 	}
 
 	// Check content (if document is loaded)
 	if content, ok := s.documents[protocol.DocumentURI(uri)]; ok {
-		return strings.Contains(content, "openapi:") || strings.Contains(content, `"openapi"`)
+		return strings.Contains(content, "openapi:") || strings.Contains(content, `"openapi"`) ||
+			strings.Contains(content, "asyncapi:") || strings.Contains(content, `"asyncapi"`)
 	}
 
 	return false
@@ -249,6 +271,9 @@ func (s *Server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocu
 
 	// Remove document from storage
 	delete(s.documents, uri)
+	// Drop this document's source registry entry — source names are only meaningful within the
+	// document that declared them.
+	s.sourceRegistry.remove(uri)
 
 	// Clear diagnostics
 	if s.client != nil {
@@ -376,9 +401,9 @@ func (s *Server) GetModel(ctx context.Context, params *GetModelParams) (interfac
 			utils.LogError("Failed to convert URI to path - URI: '%s', Error: %v", uri, err)
 			return nil, fmt.Errorf("invalid URI %s: %w", uri, err)
 		}
-		
+
 		utils.LogDebug("Converted URI to path: '%s' -> '%s'", uri, filePath)
-		
+
 		data, err := os.ReadFile(filePath)
 		if err != nil {
 			utils.LogError("Failed to read file - URI: '%s', Path: '%s', Error: %v", uri, filePath, err)
@@ -397,6 +422,32 @@ func (s *Server) GetModel(ctx context.Context, params *GetModelParams) (interfac
 
 	utils.LogInfo("GetModel returning parsed document with %d workflows", len(doc.Workflows))
 	return doc, nil
+}
+
+// MethodArazzoGetSourceInfo is a custom request returning the source descriptions an Arazzo document
+// declares, split into event-driven (AsyncAPI) and REST (OpenAPI/Arazzo) groups. It lets a client —
+// e.g. the graph — tell which kind of API each step targets without re-implementing resolution.
+const MethodArazzoGetSourceInfo = "arazzo/getSourceInfo"
+
+// GetSourceInfoParams defines the parameters for the arazzo/getSourceInfo request
+type GetSourceInfoParams struct {
+	URI string `json:"uri"`
+}
+
+// GetSourceInfo handles the arazzo/getSourceInfo custom request.
+func (s *Server) GetSourceInfo(ctx context.Context, params *GetSourceInfoParams) (interface{}, error) {
+	uri := protocol.DocumentURI(params.URI)
+	utils.LogInfo("GetSourceInfo request for: %s", uri)
+
+	// Resolve from the current content when the document is open, so the answer reflects unsaved
+	// edits; otherwise fall back to whatever was last registered.
+	if content, ok := s.documents[uri]; ok {
+		s.refreshDocumentSources(uri, content)
+	}
+
+	info := s.buildSourceInfo(uri)
+	utils.LogInfo("GetSourceInfo: %d sources (%d async, %d rest)", len(info.Sources), len(info.Async), len(info.REST))
+	return info, nil
 }
 
 // SetClient sets the LSP client
@@ -498,6 +549,13 @@ func (s *Server) Handle(ctx context.Context, conn jsonrpc2.Conn, req jsonrpc2.Re
 			return nil, fmt.Errorf("failed to unmarshal getModel params: %w", err)
 		}
 		return s.GetModel(ctx, &params)
+
+	case MethodArazzoGetSourceInfo:
+		var params GetSourceInfoParams
+		if err := json.Unmarshal(req.Params(), &params); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal getSourceInfo params: %w", err)
+		}
+		return s.GetSourceInfo(ctx, &params)
 
 	default:
 		utils.LogWarning(">>> Unhandled LSP method: %s", method)

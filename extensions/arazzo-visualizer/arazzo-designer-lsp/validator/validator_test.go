@@ -163,6 +163,133 @@ func TestActionEnumAndChannel(t *testing.T) {
 	}
 }
 
+// `type` is optional on a Source Description Object, so a channelPath into a source that omits it
+// must not be reported as a type violation.
+func TestChannelPathAllowsUntypedSource(t *testing.T) {
+	untyped := "  - name: bus\n    url: ./bus.yaml\n"
+	errs := diagnose(t, docWith(untyped, "      - stepId: s1\n        channelPath: bus#/channels/orders\n        action: send\n"))
+	if has(errs, "error", "must be 'asyncapi'") {
+		t.Errorf("a source without a declared type should not trigger the type error, got:%s", dump(errs))
+	}
+}
+
+func TestChannelPathRequiresAction(t *testing.T) {
+	bus := "  - name: bus\n    url: ./bus.yaml\n    type: asyncapi\n"
+	// channelPath present but no action -> error (direction undefined)
+	errs := diagnose(t, docWith(bus, "      - stepId: s1\n        channelPath: bus#/channels/c\n"))
+	if !has(errs, "error", "must also specify 'action'") {
+		t.Errorf("expected channelPath-without-action error, got:%s", dump(errs))
+	}
+	// channelPath WITH action -> no such error
+	errs = diagnose(t, docWith(bus, "      - stepId: s1\n        channelPath: bus#/channels/c\n        action: send\n"))
+	if has(errs, "error", "must also specify 'action'") {
+		t.Errorf("channelPath with action should not trigger the error, got:%s", dump(errs))
+	}
+}
+
+// ---- step target references: both source-reference spellings, all three targeting fields ----
+
+// The spec REQUIRES a runtime expression to identify the source document in channelPath /
+// operationPath ("{$sourceDescriptions.<name>.url}#..."), while a bare source name is the common
+// shorthand. Both must resolve to the same source and neither may be reported as unknown.
+func TestSourceRefFormsAccepted(t *testing.T) {
+	bus := "  - name: bus\n    url: ./bus.yaml\n    type: asyncapi\n"
+	api := "  - name: api\n    url: ./api.yaml\n    type: openapi\n"
+
+	channelPaths := []string{
+		"bus#/channels/orders",
+		"'{$sourceDescriptions.bus.url}#/channels/orders'",
+	}
+	for _, cp := range channelPaths {
+		errs := diagnose(t, docWith(bus, "      - stepId: s1\n        channelPath: "+cp+"\n        action: send\n"))
+		if has(errs, "warning", "unknown source description") {
+			t.Errorf("channelPath %s must resolve to the declared source, got:%s", cp, dump(errs))
+		}
+		if has(errs, "error", "must be in the format") {
+			t.Errorf("channelPath %s should be a valid format, got:%s", cp, dump(errs))
+		}
+	}
+
+	operationPaths := []string{
+		"api#/paths/~1products/get",
+		"'{$sourceDescriptions.api.url}#/paths/~1products/get'",
+	}
+	for _, op := range operationPaths {
+		errs := diagnose(t, docWith(api, "      - stepId: s1\n        operationPath: "+op+"\n"))
+		if has(errs, "warning", "unknown source description") {
+			t.Errorf("operationPath %s must resolve to the declared source, got:%s", op, dump(errs))
+		}
+		if has(errs, "error", "must be in the format") {
+			t.Errorf("operationPath %s should be a valid format, got:%s", op, dump(errs))
+		}
+	}
+
+	// Scoped operationId naming a declared source is fine.
+	errs := diagnose(t, docWith(api, "      - stepId: s1\n        operationId: $sourceDescriptions.api.getProducts\n"))
+	if has(errs, "warning", "unknown source description") {
+		t.Errorf("scoped operationId must resolve to the declared source, got:%s", dump(errs))
+	}
+}
+
+// Each targeting field must report a source description that was never declared.
+func TestUnknownSourceReported(t *testing.T) {
+	bus := "  - name: bus\n    url: ./bus.yaml\n    type: asyncapi\n"
+	api := "  - name: api\n    url: ./api.yaml\n    type: openapi\n"
+
+	errs := diagnose(t, docWith(bus, "      - stepId: s1\n        channelPath: ghost#/channels/orders\n        action: send\n"))
+	if !has(errs, "warning", "'channelPath' references unknown source description 'ghost'") {
+		t.Errorf("expected unknown-source warning for channelPath, got:%s", dump(errs))
+	}
+
+	errs = diagnose(t, docWith(api, "      - stepId: s1\n        operationPath: ghost#/paths/~1p/get\n"))
+	if !has(errs, "warning", "'operationPath' references unknown source description 'ghost'") {
+		t.Errorf("expected unknown-source warning for operationPath, got:%s", dump(errs))
+	}
+
+	errs = diagnose(t, docWith(api, "      - stepId: s1\n        operationId: $sourceDescriptions.ghost.getProducts\n"))
+	if !has(errs, "warning", "'operationId' references unknown source description 'ghost'") {
+		t.Errorf("expected unknown-source warning for scoped operationId, got:%s", dump(errs))
+	}
+}
+
+func TestOperationPathValidation(t *testing.T) {
+	api := "  - name: api\n    url: ./api.yaml\n    type: openapi\n"
+
+	// missing '#' -> format error
+	errs := diagnose(t, docWith(api, "      - stepId: s1\n        operationPath: nohashhere\n"))
+	if !has(errs, "error", "'operationPath' must be in the format") {
+		t.Errorf("expected operationPath format error, got:%s", dump(errs))
+	}
+
+	// an arazzo source describes workflows, not operations
+	arazzo := "  - name: other\n    url: ./other.arazzo.yaml\n    type: arazzo\n"
+	errs = diagnose(t, docWith(arazzo, "      - stepId: s1\n        operationPath: other#/workflows/wf\n"))
+	if !has(errs, "error", "use 'workflowId' to target an Arazzo workflow") {
+		t.Errorf("expected arazzo-source operationPath error, got:%s", dump(errs))
+	}
+
+	// operationPath into an AsyncAPI operation is allowed (spec says "an operation", not "a REST one")
+	bus := "  - name: bus\n    url: ./bus.yaml\n    type: asyncapi\n"
+	errs = diagnose(t, docWith(bus, "      - stepId: s1\n        operationPath: bus#/operations/placeOrder\n"))
+	if countErrors(errs) != 0 {
+		t.Errorf("operationPath into an AsyncAPI operation should be valid, got:%s", dump(errs))
+	}
+}
+
+func TestMalformedOperationIdExpression(t *testing.T) {
+	api := "  - name: api\n    url: ./api.yaml\n    type: openapi\n"
+	// a '$' expression that isn't the scoped form is malformed
+	errs := diagnose(t, docWith(api, "      - stepId: s1\n        operationId: $sourceDescriptions.api\n"))
+	if !has(errs, "error", "must be '$sourceDescriptions.<name>.<operationId>'") {
+		t.Errorf("expected malformed operationId expression error, got:%s", dump(errs))
+	}
+	// a bare operationId is always fine (resolved across sources at runtime)
+	errs = diagnose(t, docWith(api, "      - stepId: s1\n        operationId: getProducts\n"))
+	if countErrors(errs) != 0 {
+		t.Errorf("bare operationId should be valid, got:%s", dump(errs))
+	}
+}
+
 func TestTimeout(t *testing.T) {
 	errs := diagnose(t, docWith("", "      - stepId: s1\n        operationId: op\n        timeout: -5\n"))
 	if !has(errs, "error", "'timeout' must be a non-negative integer") {
@@ -498,6 +625,57 @@ func TestExampleFixtures(t *testing.T) {
 			}
 		})
 	}
+
+	// The Phase 8 targeting examples double as fixtures: 04 must validate cleanly (every legal
+	// targeting form, in both source-reference spellings), 05 must produce exactly the diagnostics
+	// its header documents.
+	t.Run("phase8/04-step-targeting-forms.arazzo.yaml", func(t *testing.T) {
+		content, err := os.ReadFile(filepath.Join(dir, "phase8", "04-step-targeting-forms.arazzo.yaml"))
+		if err != nil {
+			t.Skipf("fixture not found: %v", err)
+		}
+		errs := diagnose(t, string(content))
+		if len(errs) != 0 {
+			t.Errorf("every targeting form should validate cleanly, got:%s", dump(errs))
+		}
+	})
+
+	t.Run("phase8/05-targeting-validation.arazzo.yaml", func(t *testing.T) {
+		content, err := os.ReadFile(filepath.Join(dir, "phase8", "05-targeting-validation.arazzo.yaml"))
+		if err != nil {
+			t.Skipf("fixture not found: %v", err)
+		}
+		errs := diagnose(t, string(content))
+
+		expected := []struct{ severity, substr string }{
+			{"warning", "'channelPath' references unknown source description 'ghostBus'"},
+			{"warning", "'operationPath' references unknown source description 'ghostApi'"},
+			{"warning", "'operationId' references unknown source description 'ghostApi'"},
+			{"error", "'operationPath' must be in the format"},
+			{"error", "must be '$sourceDescriptions.<name>.<operationId>'"},
+			{"error", "use 'workflowId' to target an Arazzo workflow"},
+		}
+		for _, e := range expected {
+			if !has(errs, e.severity, e.substr) {
+				t.Errorf("expected %s containing %q, got:%s", e.severity, e.substr, dump(errs))
+			}
+		}
+
+		// The `goodTargets` workflow uses both legal source-reference spellings; neither may be
+		// reported as unknown. Exactly three unknown-source warnings are expected — the ghost ones.
+		unknown := 0
+		for _, e := range errs {
+			if strings.Contains(e.Message, "unknown source description") {
+				unknown++
+				if !strings.Contains(e.Message, "ghost") {
+					t.Errorf("a legal source reference was reported unknown: %s", e.Message)
+				}
+			}
+		}
+		if unknown != 3 {
+			t.Errorf("expected 3 unknown-source warnings, got %d:%s", unknown, dump(errs))
+		}
+	})
 
 	t.Run("invalid-v110.arazzo.yaml", func(t *testing.T) {
 		content, err := os.ReadFile(filepath.Join(dir, "invalid-v110.arazzo.yaml"))
