@@ -3,10 +3,14 @@
 #
 # EXPECTED: run **badFlow** → send fails with:
 #   send on channel "notify/events": no serializer registered for content type
-#   "application/octet-stream" (supported: application/avro, application/json, ...)
+#   "application/octet-stream" (supported: application/json, text/plain; recognized but not yet
+#   implemented: application/avro, application/protobuf, application/x-protobuf, avro/binary)
 #
-# (application/x-protobuf and application/avro are recognized but stubbed — they fail with a clear
-#  "needs schema config" message, completed with real brokers in Phase 11.)
+# The message names the two lists SEPARATELY on purpose. Only JSON and text can actually encode
+# anything; Protobuf and Avro are registered so those content types resolve and fail with a clear
+# "needs schema config" message (see 04 and 05) rather than looking like a typo — but calling them
+# "supported" would send the reader off to try one, straight into a different failure. They are
+# completed alongside the real brokers that need them in Phase 11.
 
 arazzo: 1.1.0
 
