@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/arazzo/lsp/utils"
@@ -108,6 +109,7 @@ func extractAsyncOperations(spec map[string]interface{}, fileURI, content string
 			FileName:    fileName,
 			LineNumber:  findKeyLineNumber(content, opID),
 			Column:      0,
+			ChannelKey:  operationChannelKey(opMap),
 		})
 	}
 	return ops
@@ -121,17 +123,50 @@ func extractChannels(spec map[string]interface{}, fileURI, content string) []*Ch
 		return channels
 	}
 	fileName := baseName(fileURI)
+	defaultContentType := getString(spec, "defaultContentType")
 	for key, chRaw := range channelsObj {
 		chMap, _ := chRaw.(map[string]interface{})
 		channels = append(channels, &ChannelInfo{
-			Key:        key,
-			Address:    getString(chMap, "address"),
-			FileURI:    fileURI,
-			FileName:   fileName,
-			LineNumber: findKeyLineNumber(content, key),
+			Key:         key,
+			Address:     getString(chMap, "address"),
+			FileURI:     fileURI,
+			FileName:    fileName,
+			LineNumber:  findKeyLineNumber(content, key),
+			ContentType: channelContentType(chMap, defaultContentType),
 		})
 	}
 	return channels
+}
+
+// channelContentType resolves the wire format a channel's messages declare, following AsyncAPI 3.0's
+// own precedence: a message's `contentType` wins, and "When omitted, the value MUST be the one
+// specified on the defaultContentType field" (Message Object). Messages are visited in sorted key
+// order so a channel with several message definitions resolves identically on every parse.
+func channelContentType(channel map[string]interface{}, defaultContentType string) string {
+	messages, _ := channel["messages"].(map[string]interface{})
+	names := make([]string, 0, len(messages))
+	for name := range messages {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		msg, _ := messages[name].(map[string]interface{})
+		if ct := getString(msg, "contentType"); ct != "" {
+			return ct
+		}
+	}
+	return defaultContentType
+}
+
+// operationChannelKey follows an AsyncAPI operation's `channel.$ref` (e.g. "#/channels/orders") to the
+// channel key it targets. Returns "" when the operation has no local channel reference.
+func operationChannelKey(op map[string]interface{}) string {
+	channel, _ := op["channel"].(map[string]interface{})
+	ref := getString(channel, "$ref")
+	if !strings.HasPrefix(ref, "#/channels/") {
+		return ""
+	}
+	return utils.UnescapeJSONPointerToken(strings.TrimPrefix(ref, "#/channels/"))
 }
 
 // findKeyLineNumber finds the (0-indexed) line where a YAML/JSON map key is defined, e.g. the

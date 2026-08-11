@@ -277,6 +277,54 @@ func (s *Server) resolveStepAsyncAction(uri protocol.DocumentURI, content string
 	}
 }
 
+// resolveStepMessageContentType returns the content type the AsyncAPI document declares for the
+// channel a step targets, and whether that channel was resolved at all.
+//
+// The two return values answer different questions, and the validator needs both:
+//   - resolved=false — the target could not be reached (undeclared source, unindexed file, an OpenAPI
+//     operation). Nothing can be said, so the content-type diagnostics stay quiet.
+//   - resolved=true with contentType="" — the channel WAS found and declares no content type, which is
+//     precisely when the runtime silently falls back to JSON.
+//
+// It reaches the channel the same way navigation does: a `channelPath` addresses one directly, while
+// an `operationId`/`operationPath` resolves to an operation whose indexed ChannelKey points at it.
+func (s *Server) resolveStepMessageContentType(uri protocol.DocumentURI, content string, step *parser.Step) (contentType string, resolved bool) {
+	if step == nil {
+		return "", false
+	}
+	sources := s.resolveDocSources(uri, content)
+	if len(sources) == 0 {
+		return "", false
+	}
+
+	if step.ChannelPath != "" {
+		ch, found := s.lookupChannelInSources(sources, step.ChannelPath)
+		if !found || ch == nil {
+			return "", false
+		}
+		return ch.ContentType, true
+	}
+
+	var op *navigation.OperationInfo
+	var found bool
+	switch {
+	case step.OperationID != "":
+		op, found = s.lookupOperationInSources(sources, step.OperationID)
+	case step.OperationPath != "":
+		op, found = s.lookupOperationByPath(sources, step.OperationPath)
+	default:
+		return "", false
+	}
+	if !found || op == nil || op.ChannelKey == "" {
+		return "", false // no channel reference: an OpenAPI operation, or an unresolvable one
+	}
+	ch, ok := s.operationIndex.LookupChannelInFile(op.FileURI, op.ChannelKey)
+	if !ok || ch == nil {
+		return "", false
+	}
+	return ch.ContentType, true
+}
+
 // sourceFileURI returns the resolved file URI for the source description with the given name (or "").
 func sourceFileURI(sources []resolvedSource, name string) string {
 	for _, s := range sources {
