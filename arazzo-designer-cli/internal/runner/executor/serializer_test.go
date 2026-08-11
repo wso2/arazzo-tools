@@ -41,11 +41,42 @@ func TestSerializerRegistry_Selection(t *testing.T) {
 	}
 }
 
-func TestSerializerRegistry_UnknownErrorListsSupported(t *testing.T) {
+// The error must not present a stub as something the reader can use: pointing them at
+// "application/avro" only sends them into a different failure.
+func TestSerializerRegistry_UnknownErrorSeparatesStubsFromSupported(t *testing.T) {
 	r := NewDefaultSerializerRegistry()
 	_, err := r.For("application/octet-stream")
-	if err == nil || !strings.Contains(err.Error(), "application/json") {
-		t.Fatalf("unknown content type error should list supported types, got: %v", err)
+	if err == nil {
+		t.Fatal("unknown content type should error")
+	}
+	msg := err.Error()
+
+	supported, stubbed, found := strings.Cut(msg, "; recognized but not yet implemented: ")
+	if !found {
+		t.Fatalf("error should name the not-yet-implemented types separately, got: %s", msg)
+	}
+	for _, ct := range []string{"application/json", "text/plain"} {
+		if !strings.Contains(supported, ct) {
+			t.Errorf("%q should be listed as supported, got: %s", ct, supported)
+		}
+	}
+	for _, ct := range []string{"application/avro", "avro/binary", "application/x-protobuf", "application/protobuf"} {
+		if strings.Contains(supported, ct) {
+			t.Errorf("stub %q must not be listed as supported, got: %s", ct, supported)
+		}
+		if !strings.Contains(stubbed, ct) {
+			t.Errorf("stub %q should be listed as recognized-but-unimplemented, got: %s", ct, stubbed)
+		}
+	}
+}
+
+// A registry with no stubs at all keeps the simpler one-list message.
+func TestSerializerRegistry_UnknownErrorOmitsEmptyStubList(t *testing.T) {
+	r := &SerializerRegistry{byType: map[string]Serializer{}, fallback: &JSONSerializer{}}
+	r.Register(&JSONSerializer{})
+	_, err := r.For("application/octet-stream")
+	if err == nil || strings.Contains(err.Error(), "not yet implemented") {
+		t.Errorf("a registry with no stubs should not mention them, got: %v", err)
 	}
 }
 

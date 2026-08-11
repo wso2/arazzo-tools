@@ -74,17 +74,41 @@ func (r *SerializerRegistry) For(contentType string) (Serializer, error) {
 			return s, nil
 		}
 	}
-	return nil, fmt.Errorf("no serializer registered for content type %q (supported: %s)", ct, strings.Join(r.supported(), ", "))
+	// Name the types that actually work separately from the ones that are only recognised. Listing a
+	// stub as "supported" sends the reader off to try `application/avro`, which then fails with a
+	// different error — the message would be pointing at a dead end.
+	usable, stubbed := r.supported()
+	if len(stubbed) == 0 {
+		return nil, fmt.Errorf("no serializer registered for content type %q (supported: %s)", ct, strings.Join(usable, ", "))
+	}
+	return nil, fmt.Errorf("no serializer registered for content type %q (supported: %s; recognized but not yet implemented: %s)",
+		ct, strings.Join(usable, ", "), strings.Join(stubbed, ", "))
 }
 
-// supported lists the registered content types (sorted) for use in error messages.
-func (r *SerializerRegistry) supported() []string {
-	types := make([]string, 0, len(r.byType))
-	for ct := range r.byType {
-		types = append(types, ct)
+// supported splits the registered content types (each sorted) into the ones that can actually encode
+// and decode, and the ones that are only recognised — a stub selects cleanly but fails on use, so
+// calling it "supported" in an error message would be misleading.
+func (r *SerializerRegistry) supported() (usable, stubbed []string) {
+	for ct, s := range r.byType {
+		if isStub(s) {
+			stubbed = append(stubbed, ct)
+			continue
+		}
+		usable = append(usable, ct)
 	}
-	sort.Strings(types)
-	return types
+	sort.Strings(usable)
+	sort.Strings(stubbed)
+	return usable, stubbed
+}
+
+// isStub reports whether a serializer is registered so its content type resolves and fails with an
+// explanatory error, but cannot actually encode anything. An alias is whatever it points at.
+func isStub(s Serializer) bool {
+	if alias, ok := s.(*aliasSerializer); ok {
+		s = alias.target
+	}
+	_, stub := s.(*schemaRequiredSerializer)
+	return stub
 }
 
 // mustGet fetches an already-registered serializer by canonical content type (used to wire aliases).
@@ -206,6 +230,7 @@ type aliasSerializer struct {
 
 func (a *aliasSerializer) Name() string        { return a.target.Name() }
 func (a *aliasSerializer) ContentType() string { return a.contentType }
+
 func (a *aliasSerializer) Serialize(payload interface{}) ([]byte, error) {
 	return a.target.Serialize(payload)
 }
