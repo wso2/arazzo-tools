@@ -128,18 +128,28 @@ func (v *Validator) WithStepContentTypeResolver(fn func(step *parser.Step) (stri
 	return v
 }
 
-// stepAction returns the direction of an async step: the `action` written on the step when present,
-// otherwise the action declared by the operation it targets (resolved through the injected hook).
-// ok is false when the direction cannot be established, in which case direction-dependent checks
-// must not fire.
+// stepAction returns the direction an async step will actually run with.
+//
+// The AsyncAPI operation's action comes FIRST, because that is what the runtime does: when a step
+// targets an operation, the operation's declared action wins and a contradicting step `action` is only
+// warned about (spec/Phase-8 decision, enforced in resolveAsyncAction). Trusting the step's own
+// `action` here would make every direction-dependent check reason about a direction the run will not
+// take — a step declaring `receive` on a send operation really sends, so the send-only checks must
+// fire on it and the receive-only ones must not.
+//
+// The step's `action` is the answer when no operation action is available: a `channelPath` step has no
+// operation, and the resolver is nil in content-only contexts. ok is false when neither is available,
+// in which case direction-dependent checks must stay quiet rather than guess.
 func (v *Validator) stepAction(step *parser.Step) (string, bool) {
+	if v.resolveStepAction != nil {
+		if action, ok := v.resolveStepAction(step); ok && action != "" {
+			return action, true
+		}
+	}
 	if step.Action != "" {
 		return step.Action, true
 	}
-	if v.resolveStepAction == nil {
-		return "", false
-	}
-	return v.resolveStepAction(step)
+	return "", false
 }
 
 // Validate validates an Arazzo document and returns validation errors

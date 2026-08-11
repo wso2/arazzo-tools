@@ -869,16 +869,21 @@ func TestExampleFixtures(t *testing.T) {
 // resolved reports whether that channel could be reached at all.
 func diagnoseWithContentType(t *testing.T, content, declared string, resolved bool) []ValidationError {
 	t.Helper()
+	return diagnoseWithContentTypeAction(t, content, declared, resolved, "send")
+}
+
+// diagnoseWithContentTypeAction is the same with the operation's action spelled out. The action
+// resolver stands in for the LSP's operation index and is deliberately INDEPENDENT of step.Action —
+// it reports what the AsyncAPI document declares, which is the whole point of the hook.
+func diagnoseWithContentTypeAction(t *testing.T, content, declared string, resolved bool, opAction string) []ValidationError {
+	t.Helper()
 	doc, err := parser.NewParser().Parse(content)
 	if err != nil {
 		t.Fatalf("parse failed: %v", err)
 	}
 	v := NewValidator().
-		WithStepActionResolver(func(step *parser.Step) (string, bool) {
-			if step.Action != "" {
-				return step.Action, true
-			}
-			return "send", true // steps in these fixtures target a send operation
+		WithStepActionResolver(func(*parser.Step) (string, bool) {
+			return opAction, opAction != ""
 		}).
 		WithStepContentTypeResolver(func(step *parser.Step) (string, bool) {
 			return declared, resolved
@@ -959,5 +964,29 @@ func TestContentTypeChecksSkipReceiveSteps(t *testing.T) {
 		Validate(doc)
 	if has(errs, "information", "serialized as 'application/json'") {
 		t.Errorf("a receive step has no requestBody and must not be asked for a contentType, got:%s", dump(errs))
+	}
+}
+
+// The operation's action decides which checks apply, because that is the direction the runtime will
+// take: a contradicting step `action` is warned about and ignored at run time. A step declaring
+// `receive` on a send operation really sends, so the send-only content-type checks must still fire.
+func TestContentTypeChecksFollowTheOperationAction(t *testing.T) {
+	step := `      - stepId: emit
+        operationId: recordAudit
+        action: receive
+        requestBody:
+          contentType: application/json
+          payload: "hi"
+`
+
+	errs := diagnoseWithContentTypeAction(t, docWith(contentTypeBus, step), "text/plain", true, "send")
+	if !has(errs, "warning", "overrides the AsyncAPI declaration") {
+		t.Errorf("the step runs as a send, so the content-type mismatch must be reported, got:%s", dump(errs))
+	}
+
+	// The reverse: the operation really is a receive, so the send-only checks stay quiet.
+	errs = diagnoseWithContentTypeAction(t, docWith(contentTypeBus, step), "text/plain", true, "receive")
+	if has(errs, "warning", "overrides the AsyncAPI declaration") {
+		t.Errorf("a receive has no requestBody content type to check, got:%s", dump(errs))
 	}
 }
