@@ -189,3 +189,28 @@ func TestRegistryWithoutJSONReportsSuffixAsUnsupported(t *testing.T) {
 		t.Errorf("a failed lookup must return a nil serializer alongside the error, got %v", s)
 	}
 }
+
+// The runtime's mismatch check must fold media types the same way the editor's does, or the same
+// document produces a runtime warning and no editor warning (or the reverse).
+func TestSameMediaType(t *testing.T) {
+	same := [][2]string{
+		{"application/json", "application/json; charset=utf-8"},
+		{"application/json", "application/vnd.order+json"},
+		{"application/vnd.order+json", "application/vnd.other+json"},
+		{"TEXT/PLAIN", "text/plain"},
+	}
+	for _, p := range same {
+		if !sameMediaType(p[0], p[1]) {
+			t.Errorf("%q and %q select the same serializer and must compare equal", p[0], p[1])
+		}
+	}
+	differ := [][2]string{
+		{"application/json", "text/plain"},
+		{"application/json", "application/avro"},
+	}
+	for _, p := range differ {
+		if sameMediaType(p[0], p[1]) {
+			t.Errorf("%q and %q are different wire formats", p[0], p[1])
+		}
+	}
+}

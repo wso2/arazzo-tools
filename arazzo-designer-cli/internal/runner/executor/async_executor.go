@@ -223,7 +223,7 @@ func resolveSendContentType(stepContentType string, info *AsyncInfo, stepID, cha
 	if strings.TrimSpace(stepContentType) == "" {
 		return declared
 	}
-	if declared != "" && normalizeContentType(declared) != normalizeContentType(stepContentType) {
+	if declared != "" && !sameMediaType(declared, stepContentType) {
 		log.Printf("Warning: step %s: requestBody contentType %q differs from the %q declared by the AsyncAPI document for channel %q; the value declared in this step overrides the AsyncAPI declaration", stepID, stepContentType, declared, channel)
 	}
 	return stepContentType

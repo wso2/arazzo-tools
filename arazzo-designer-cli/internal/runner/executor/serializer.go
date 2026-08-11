@@ -124,6 +124,24 @@ func (r *SerializerRegistry) mustGet(contentType string) Serializer {
 	return s
 }
 
+// sameMediaType reports whether two content types resolve to the same wire format. Parameters are
+// dropped and a `+json` structured suffix counts as JSON, so "application/vnd.order+json",
+// "application/json" and "application/json; charset=utf-8" all compare equal — they select the same
+// serializer, so nothing disagrees about the format.
+//
+// Kept separate from normalizeContentType, which the registry uses as its MAP KEY: folding the suffix
+// there would make a serializer registered for a vendor "+json" type overwrite the JSON entry.
+func sameMediaType(a, b string) bool {
+	fold := func(ct string) string {
+		ct = normalizeContentType(ct)
+		if strings.HasSuffix(ct, "+json") {
+			return "application/json"
+		}
+		return ct
+	}
+	return fold(a) == fold(b)
+}
+
 // normalizeContentType lowercases, trims, and drops any parameters (e.g. "; charset=utf-8") so
 // "application/json; charset=utf-8" and "application/json" select the same serializer.
 func normalizeContentType(contentType string) string {
