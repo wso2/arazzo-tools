@@ -1,0 +1,49 @@
+# Phase 10 — Scenario 8: a `$ref`'d message declaration, reached by **operationPath**.
+#
+# Two things a real AsyncAPI document does that the earlier scenarios don't:
+#
+# 1. THE CONTENT TYPE LIVES BEHIND A `$ref`. The `audits` channel writes its message as
+#    `$ref: '#/components/messages/audit'`, and the `contentType: text/plain` is declared over in
+#    `components.messages`. Reading the channel's message map without following the ref finds only a
+#    `$ref` key, no contentType — so the declaration would be silently missed and the payload would go
+#    out as JSON (`"entry 1"` WITH quotes) onto a channel documented as carrying plain text.
+#
+# 2. THE STEPS TARGET BY `operationPath`. Arazzo allows three targeting forms — `channelPath`,
+#    `operationId` and `operationPath` — and an async step may use any of them. The direction comes
+#    from the operation, so neither step below declares `action`.
+#
+# EXPECTED: run **auditFlow** → completes with `entry = "entry 1"` (bare text, no quotes).
+#
+# If the ref were not followed, the receive would decode JSON and `entry` would come back as
+# `"entry 1"` including the quote characters — or the criteria would simply fail.
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 10 - $ref'd message + operationPath targeting"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: notify
+    url: ./notifications.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: auditFlow
+    steps:
+      # No `action`: the operation addressed by the pointer declares it (send).
+      # No `contentType`: the channel's $ref'd message declares text/plain.
+      - stepId: record
+        operationPath: notify#/operations/recordAudit
+        requestBody:
+          payload: "entry 1"
+
+      - stepId: read
+        operationPath: notify#/operations/readAudit
+        timeout: 2000
+        successCriteria:
+          - condition: '$message.payload == "entry 1"'
+        outputs:
+          entry: $message.payload
+    outputs:
+      entry: $steps.read.outputs.entry

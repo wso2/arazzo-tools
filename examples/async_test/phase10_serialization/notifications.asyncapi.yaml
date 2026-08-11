@@ -44,6 +44,13 @@ channels:
   # back to application/json on its own (see 02).
   untyped:
     address: notify/untyped
+  # This channel's message is a $ref into components.messages — the idiomatic way a real AsyncAPI
+  # document is written. The contentType is declared over there, not inline (see 08).
+  audits:
+    address: notify/audits
+    messages:
+      audit:
+        $ref: '#/components/messages/audit'
 operations:
   publishEvent:
     action: send
@@ -53,3 +60,17 @@ operations:
     action: send
     channel:
       $ref: '#/channels/alerts'
+  recordAudit:
+    action: send
+    channel:
+      $ref: '#/channels/audits'
+  readAudit:
+    action: receive
+    channel:
+      $ref: '#/channels/audits'
+components:
+  messages:
+    audit:
+      contentType: text/plain
+      payload:
+        type: string
