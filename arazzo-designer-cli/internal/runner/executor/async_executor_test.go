@@ -806,3 +806,36 @@ func TestReceiveSpanReportsDecodedPayload(t *testing.T) {
 		t.Errorf("span body should be the decoded payload, got %q", body)
 	}
 }
+
+// A step's declared content type reaches the wire as written. Canonicalizing it would discard a vendor
+// type or a charset parameter the receiver may care about, while still selecting the same serializer.
+func TestSendPublishesResolvedContentType(t *testing.T) {
+	for _, c := range []struct{ declared, wantContentType, wantRaw string }{
+		{"application/json; charset=utf-8", "application/json; charset=utf-8", `"hi"`},
+		{"application/vnd.order+json", "application/vnd.order+json", `"hi"`},
+		{"", "application/json", `"hi"`}, // nothing declared: the serializer names itself
+	} {
+		se := newAsyncExecutor()
+		state := models.NewExecutionState("wf", nil, nil, nil)
+		body := map[string]interface{}{"payload": "hi"}
+		if c.declared != "" {
+			body["contentType"] = c.declared
+		}
+		if r := se.ExecuteStep(map[string]interface{}{
+			"stepId": "send", "channelPath": "orderBus#/channels/orders", "action": "send",
+			"requestBody": body,
+		}, nil, state); !r.Success {
+			t.Fatalf("%q: send failed: %s", c.declared, r.Error)
+		}
+		msg, err := se.AsyncAdapter.Receive("orders/new", "", time.Second)
+		if err != nil {
+			t.Fatalf("%q: receive: %v", c.declared, err)
+		}
+		if msg.ContentType != c.wantContentType {
+			t.Errorf("%q: published contentType = %q, want %q", c.declared, msg.ContentType, c.wantContentType)
+		}
+		if string(msg.Raw) != c.wantRaw {
+			t.Errorf("%q: raw = %q, want %q", c.declared, msg.Raw, c.wantRaw)
+		}
+	}
+}

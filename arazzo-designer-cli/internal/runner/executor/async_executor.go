@@ -129,10 +129,18 @@ func (se *StepExecutor) executeSend(step map[string]interface{}, info *AsyncInfo
 	if err != nil {
 		return se.createFailureResult(stepID, step, state, fmt.Sprintf("send on channel %q: could not serialize payload: %v", channel, err))
 	}
+	// Publish the content type as RESOLVED, not the serializer's canonical name: a vendor type
+	// ("application/vnd.order+json") or a charset parameter is information the receiver may care about,
+	// and canonicalizing would quietly discard it. Fall back to the serializer's own type when nothing
+	// was declared anywhere, so the message still says what format it is.
+	publishedContentType := contentType
+	if strings.TrimSpace(publishedContentType) == "" {
+		publishedContentType = serializer.ContentType()
+	}
 	msg := &Message{
 		Payload:     payload,
 		Headers:     headers,
-		ContentType: serializer.ContentType(),
+		ContentType: publishedContentType,
 		Raw:         raw,
 		Metadata:    map[string]interface{}{},
 	}
@@ -281,14 +289,15 @@ func (se *StepExecutor) executeReceive(step map[string]interface{}, info *AsyncI
 	if contentType == "" {
 		contentType = info.DeclaredContentType()
 	}
-	// Name it the way the registry does, which also turns "nothing declared" into the JSON default.
-	if s, serr := se.serializerRegistry().For(contentType); serr == nil {
-		contentType = s.ContentType()
+	// One lookup, used both to name the format the way the registry does (which also turns "nothing
+	// declared" into the JSON default) and to decode below.
+	serializer, serr := se.serializerRegistry().For(contentType)
+	if serr == nil {
+		contentType = serializer.ContentType()
 	}
 
 	payload := msg.Payload
 	if payload == nil && len(msg.Raw) > 0 {
-		serializer, serr := se.serializerRegistry().For(contentType)
 		if serr != nil {
 			reason := fmt.Sprintf("receive on channel %q: cannot decode message: %v", channel, serr)
 			span.end(telemetry.SpanStatusError, reason, nil)
