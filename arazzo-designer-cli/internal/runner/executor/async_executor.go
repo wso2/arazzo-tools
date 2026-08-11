@@ -137,9 +137,11 @@ func (se *StepExecutor) executeSend(step map[string]interface{}, info *AsyncInfo
 	}
 
 	// The message being published is the request-side detail of this span, mirroring how the HTTP
-	// span carries the request body.
-	span := se.startMessagingSpan(state.TraceID, parentSpanID, "send", channel, se.AsyncAdapter.Name(),
-		messageAttrs("messaging.message", payload, headers))
+	// span carries the request body. The encoder that produced the bytes goes with it — which
+	// serializer ran is the one thing Phase 10 decides, and it is invisible from the payload alone.
+	sendAttrs := messageAttrs("messaging.message", payload, headers)
+	sendAttrs["messaging.content_type"] = msg.ContentType
+	span := se.startMessagingSpan(state.TraceID, parentSpanID, "send", channel, se.AsyncAdapter.Name(), sendAttrs)
 
 	if err := se.AsyncAdapter.Send(channel, msg); err != nil {
 		span.end(telemetry.SpanStatusError, err.Error(), nil)
@@ -171,7 +173,12 @@ func (se *StepExecutor) executeSend(step map[string]interface{}, info *AsyncInfo
 	if success {
 		state.StepsStatus[stepID] = models.StepStatusSuccess
 		span.end(telemetry.SpanStatusOK, "", nil)
-		log.Printf("Step %s: sent a message on channel %q via %s adapter", stepID, channel, se.AsyncAdapter.Name())
+		// Log the wire form, not just the fact of sending: which serializer ran is the whole subject of
+		// the content-type resolution above, and it is otherwise invisible — the in-memory adapter
+		// carries the decoded payload alongside the bytes, so a receive step never has to decode and
+		// every format looks identical from the workflow's outputs.
+		log.Printf("Step %s: sent a message on channel %q via %s adapter as %s (%d bytes): %s",
+			stepID, channel, se.AsyncAdapter.Name(), msg.ContentType, len(raw), previewBytes(raw))
 	} else {
 		state.StepsStatus[stepID] = models.StepStatusFailure
 		span.end(telemetry.SpanStatusError, "sent message did not satisfy successCriteria", nil)
@@ -265,12 +272,21 @@ func (se *StepExecutor) executeReceive(step map[string]interface{}, info *AsyncI
 	// transport speaks first when it can (HTTP has a Content-Type header, MQTT 5 a Content Type
 	// property), but MQTT 3.1.1 and WebSocket carry no such field at all — for those the AsyncAPI
 	// document is the only thing that says how to read the bytes. JSON stays the last resort.
+	//
+	// Resolved up front rather than inside the decode branch so the format can be REPORTED even when
+	// no decode was needed: with the in-memory adapter the payload arrives already decoded, and a user
+	// still needs to see which decoder governs the channel.
+	contentType := strings.TrimSpace(msg.ContentType)
+	if contentType == "" {
+		contentType = info.DeclaredContentType()
+	}
+	// Name it the way the registry does, which also turns "nothing declared" into the JSON default.
+	if s, serr := se.serializerRegistry().For(contentType); serr == nil {
+		contentType = s.ContentType()
+	}
+
 	payload := msg.Payload
 	if payload == nil && len(msg.Raw) > 0 {
-		contentType := msg.ContentType
-		if strings.TrimSpace(contentType) == "" {
-			contentType = info.DeclaredContentType()
-		}
 		serializer, serr := se.serializerRegistry().For(contentType)
 		if serr != nil {
 			reason := fmt.Sprintf("receive on channel %q: cannot decode message: %v", channel, serr)
@@ -304,12 +320,15 @@ func (se *StepExecutor) executeReceive(step map[string]interface{}, info *AsyncI
 	if len(toSlice(step["successCriteria"])) > 0 {
 		success = se.SuccessChecker.CheckSuccessCriteria(step, responseForCheck, state)
 	}
-	// The message that arrived is the result-side detail, mirroring the HTTP response body.
+	// The message that arrived is the result-side detail, mirroring the HTTP response body. The
+	// decoder is reported alongside it: which format governed the message is otherwise invisible.
 	receivedAttrs := messageAttrs("messaging.message", msg.Payload, msg.Headers)
+	receivedAttrs["messaging.content_type"] = contentType
 	if success {
 		state.StepsStatus[stepID] = models.StepStatusSuccess
 		span.end(telemetry.SpanStatusOK, "", receivedAttrs)
-		log.Printf("Step %s: received a message on channel %q via %s adapter", stepID, channel, se.AsyncAdapter.Name())
+		log.Printf("Step %s: received a message on channel %q via %s adapter, decoded as %s",
+			stepID, channel, se.AsyncAdapter.Name(), contentType)
 	} else {
 		state.StepsStatus[stepID] = models.StepStatusFailure
 		span.end(telemetry.SpanStatusError, "received message did not satisfy successCriteria", receivedAttrs)
@@ -382,6 +401,17 @@ func (se *StepExecutor) serializerRegistry() *SerializerRegistry {
 		se.Serializers = NewDefaultSerializerRegistry()
 	}
 	return se.Serializers
+}
+
+// previewBytes renders wire bytes for a log line: quoted so the exact characters are visible (a text
+// `23.5` and a JSON `"23.5"` are otherwise indistinguishable on screen), and truncated so a large
+// message cannot flood the log.
+func previewBytes(raw []byte) string {
+	const max = 120
+	if len(raw) > max {
+		return fmt.Sprintf("%q…", raw[:max])
+	}
+	return fmt.Sprintf("%q", raw)
 }
 
 // headerParams pulls the "header" bucket out of the prepared parameters map for use as message headers.
