@@ -489,12 +489,13 @@ Goal: separate message **shape** (headers/payload the runtime reasons about) fro
 - **`Serializer` interface + `SerializerRegistry`** — [serializer.go](arazzo-designer-cli/internal/runner/executor/serializer.go).
   `Serializer` = `Serialize`/`Deserialize` + `Name`/`ContentType`. The registry maps a content type
   to a serializer: empty → default JSON; `; charset=…` parameters stripped; case-insensitive; a
-  `<x>+json` structured suffix → JSON; an **unknown content type is a hard error** listing the
-  supported types (never guesses a wire format).
+  `<x>+json` structured suffix → JSON; an **unknown content type is a hard error** (never guesses a
+  wire format) naming the types that actually encode separately from the ones that are only
+  recognized — listing a stub as "supported" would point the reader at a different failure.
 - **Serializers:** JSON (`application/json`, default) and **text/plain** are fully implemented;
   **Protobuf** (`application/x-protobuf`, `application/protobuf`) and **Avro** (`application/avro`,
-  `avro/binary`) are registered as clear **"needs schema config" stubs** — they select cleanly but
-  fail with an explanatory error on use (schema wiring lands with real brokers in Phase 11).
+  `avro/binary`) are registered as **stubs** — they select cleanly and fail with a plain "not
+  supported yet" rather than looking like a typo (real codecs land with the brokers in Phase 11).
 - **Wired into the runtime** — [async_executor.go](arazzo-designer-cli/internal/runner/executor/async_executor.go):
   `executeSend` picks the serializer from the resolved content type and encodes the payload to
   `Message.Raw` (replacing the inline `json.Marshal`); `executeReceive` **deserializes `Raw` back
@@ -519,7 +520,8 @@ Goal: separate message **shape** (headers/payload the runtime reasons about) fro
 - **Two editor diagnostics for the same rule** (LSP): a send step where **neither** the step nor the
   AsyncAPI document declares a content type reports, as **information**, that the message will be
   serialized as JSON — legal, but an assumption nothing in either document states; and a step whose
-  `contentType` **disagrees** with the document's warns that the step wins, so the published message
+  `contentType` **disagrees** with the document's warns that the step's value overrides the AsyncAPI
+  declaration, so the published message
   will not match the format the channel's contract describes. Both need a fact outside the Arazzo text,
   so the validator takes a second injected resolver (`WithStepContentTypeResolver`, alongside Phase 9's
   action resolver — the two are now grouped as `diagnostics.StepResolvers`). Indexing resolves each
@@ -554,20 +556,28 @@ text/plain, 02 JSON default, 03 unsupported-content-type (fails), 04 protobuf-st
 avro-stub (fails), 06 content-type normalization (`+json` suffix + `; charset` params → JSON), **07 the
 AsyncAPI document deciding the format for a step that declares none** (two channels, two formats, one
 workflow), **08 a `$ref`'d message declaration reached by `operationPath`**, **09 step/document
-disagreement** (step wins, warned in both the editor and the run log), **10 document-level
+disagreement** (the step's value overrides the declaration, warned in both the editor and the run log), **10 document-level
 `defaultContentType`** plus a message overriding it, **11 an object payload on a text/plain channel**
 (fails), **12 all three targeting forms** reaching the same `$ref`'d declaration — the regression guard
 for the `operationPath` routing fix. Two AsyncAPI sources back them: `notifications.asyncapi.yaml`
 (per-message declarations, one `$ref`'d, one untyped channel) and `telemetry.asyncapi.yaml` (root
 `defaultContentType` + a message that overrides it).
 
-The README states plainly what an example **cannot** show: Phase 10 decides which serializer encodes a
-message, and the proof is the bytes on the wire — but the in-memory adapter hands the receive step the
-decoded payload alongside them, so the output is identical whichever serializer ran. The examples
-demonstrate which serializer is *chosen* (and fail loudly when the choice is impossible); the
-byte-level assertions live in unit tests that pull `Raw` back off the adapter. It also lists which
-steps should show the information/warning diagnostics in the editor, so the LSP half is testable by
-hand too.
+**Which serializer ran is now reported, not just decided.** A workflow's outputs cannot reveal it —
+the in-memory adapter hands the receive step the decoded payload alongside the bytes, so the output is
+identical either way. Three places now say it explicitly:
+- **send log**: the resolved encoder plus the exact bytes, quoted and length-capped
+  (`as text/plain (9 bytes): "all clear"` vs `as application/json (6 bytes): "\"beta\""`) — the quoting
+  is what makes a text `beta` (4 bytes) distinguishable from a JSON `"beta"` (6);
+- **receive log**: `decoded as <content type>`, resolved through the same chain even when the payload
+  arrived pre-decoded and no decode was needed;
+- **the run-log span**: a `messaging.content_type` attribute on both directions, which the visualizer's
+  Logs tab renders in the Channel block as **Encoder** (send) or **Decoder** (receive), beside Adapter
+  and Correlation ID. `timeout` was dropped from that block — it is a value declared on the step and
+  already shown in the properties panel, not something the run produced; the span still carries it.
+
+The README explains how to read all of it, and lists which steps should show the information/warning
+diagnostics in the editor, so the LSP half is testable by hand too.
 Scenario 02 targets a channel that declares nothing, so it exercises the JSON last resort rather than a
 declared `application/json`. The one path not expressible as an example — receive-side deserialize of
 raw bytes (real-broker path; the in-memory adapter always carries a decoded payload) — is covered by

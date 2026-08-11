@@ -27,9 +27,9 @@ Supported serializers (see [serializer.go](../../../arazzo-designer-cli/internal
 |---|---|---|
 | _(none)_ / `application/json` / `*+json` | JSON | default; object ⇄ JSON bytes |
 | `text/plain` | text | raw UTF-8 string (non-strings stringified) |
-| `application/x-protobuf`, `application/protobuf` | protobuf **stub** | selects but fails "needs `.proto`/descriptor" — Phase 11 |
-| `application/avro`, `avro/binary` | avro **stub** | selects but fails "needs Avro schema/registry" — Phase 11 |
-| anything else | — | **hard error** listing supported types (never guesses) |
+| `application/x-protobuf`, `application/protobuf` | protobuf **stub** | selects but fails "not supported yet" — Phase 11 |
+| `application/avro`, `avro/binary` | avro **stub** | selects but fails "not supported yet" — Phase 11 |
+| anything else | — | **hard error** naming what actually works, and separately what is only recognized (never guesses) |
 
 ## Scenarios (every Phase 10 behavior)
 
@@ -37,13 +37,13 @@ Supported serializers (see [serializer.go](../../../arazzo-designer-cli/internal
 |---|---|---|---|
 | `01-text-plain.arazzo.yaml` | `contentType: text/plain` → payload is raw text, not JSON | `textFlow` | ✅ `heard = "system reboot at 02:00"` |
 | `02-json-default.arazzo.yaml` | nothing declares a content type **anywhere** → the JSON last resort | `jsonFlow` | ✅ `note = "v2 shipped"` |
-| `03-unsupported-contenttype.arazzo.yaml` | unknown content type → fails loudly at send | `badFlow` | ❌ "no serializer registered for content type ..." |
-| `04-protobuf-stub.arazzo.yaml` | Protobuf recognized but stubbed → clear "needs `.proto`/descriptor" | `protoFlow` | ❌ "protobuf serialization ... is not yet implemented" |
-| `05-avro-stub.arazzo.yaml` | Avro recognized but stubbed → clear "needs schema/registry" | `avroFlow` | ❌ "avro serialization ... is not yet implemented" |
+| `03-unsupported-contenttype.arazzo.yaml` | unknown content type → fails loudly at send, listing what works and what is only recognized | `badFlow` | ❌ "no serializer registered ... (supported: application/json, text/plain; recognized but not yet implemented: …)" |
+| `04-protobuf-stub.arazzo.yaml` | Protobuf recognized but stubbed → fails clearly instead of mis-encoding | `protoFlow` | ❌ "protobuf serialization (application/x-protobuf) is not supported yet" |
+| `05-avro-stub.arazzo.yaml` | Avro recognized but stubbed → fails clearly instead of mis-encoding | `avroFlow` | ❌ "avro serialization (application/avro) is not supported yet" |
 | `06-contenttype-normalization.arazzo.yaml` | `+json` suffix and `; charset=…` params both normalize to JSON | `suffixFlow`, `paramsFlow` | ✅ `id = "S-1"` / `id = "P-1"` |
 | `07-declared-contenttype.arazzo.yaml` | step omits `contentType` → the **AsyncAPI document** decides; two channels, two formats | `declaredFlow` | ✅ `heard = "all clear"` (bare text), `kind = "deploy"` |
 | `08-ref-and-operationpath.arazzo.yaml` | contentType declared behind a **`$ref`** into `components.messages`, reached by **`operationPath`** | `auditFlow` | ✅ `entry = "entry 1"` (bare text) |
-| `09-contenttype-mismatch.arazzo.yaml` | step says `application/json`, channel says `text/plain` → **step wins, both layers warn** | `mismatchFlow` | ✅ `heard = "beta"` + a warning in the log and a yellow squiggle in the editor |
+| `09-contenttype-mismatch.arazzo.yaml` | step says `application/json`, channel says `text/plain` → **the step overrides the declaration, both layers warn** | `mismatchFlow` | ✅ `heard = "beta"` + a warning in the log and a yellow squiggle in the editor |
 | `10-default-contenttype.arazzo.yaml` | document-level **`defaultContentType`**, and a message overriding it | `defaultsFlow` | ✅ `reading = "23.5"`, `kind = "threshold"` |
 | `11-structured-payload-as-text.arazzo.yaml` | object payload on a `text/plain` channel → **hard error** | `badTextFlow` | ❌ "cannot serialize a structured payload (object/array) as text/plain" |
 | `12-targeting-forms.arazzo.yaml` | `channelPath` / `operationId` / `operationPath` all reach the same `$ref`'d declaration | `formsFlow` | ✅ `viaChannel = "A"`, `viaOperationId = "B"`, `viaOperationPath = "C"` |
@@ -88,26 +88,54 @@ extension and look at the step:
 | file | step | what you should see |
 |---|---|---|
 | `02-json-default.arazzo.yaml` | `emit` | **blue/information**: no contentType on the step and none in the document — the message will be serialized as `application/json` |
-| `09-contenttype-mismatch.arazzo.yaml` | `emitJson` | **yellow/warning**: the step's contentType disagrees with the document's; the step's value wins |
+| `09-contenttype-mismatch.arazzo.yaml` | `emitJson` | **yellow/warning**: the step's contentType disagrees with the document's; the step's value overrides the AsyncAPI declaration |
 | `12-targeting-forms.arazzo.yaml` | every step | **nothing** — the `$ref`'d declaration resolves through all three targeting forms, so there is nothing to report |
 
 If 09 shows no warning, the source index has not been built for the document — that is the bug fixed
 by having the diagnostics resolvers index on demand rather than racing the background indexing pass.
 
-## Why an example cannot show you the raw bytes
+## Seeing which serializer actually ran
 
-Phase 10 decides **which serializer encodes a message**, and the visible proof of that is the bytes on
-the wire. An Arazzo example cannot show them: the in-memory adapter (Phase 9) hands the receive step
-the decoded payload it was given, alongside the bytes, so the receive never has to decode and the
-output is the same whichever serializer ran. Only a real broker (Phase 11) transmits bytes alone.
+A workflow's **outputs cannot show you this**. The in-memory adapter (Phase 9) hands the receive step
+the decoded payload it was given, alongside the bytes, so the receive never decodes and the output is
+identical whichever serializer ran. Only a real broker (Phase 11) transmits bytes alone.
 
-So these examples demonstrate **which serializer gets chosen** — and fail loudly when that choice is
-impossible (03, 04, 05, 11) — while the byte-level assertions live in unit tests:
-`TestSendFallsBackToAsyncAPIDeclaredContentType`, `TestSendFallsBackToDocumentDefaultContentType`,
-`TestSendStepContentTypeWinsOverDeclared`, `TestDeclaredContentTypeFollowsMessageRef` and
-`TestAsyncSendUsesContentTypeSerializer` all pull the raw bytes back off the adapter and check them,
-and `TestReceiveUsesDeclaredContentTypeForRawBytes` seeds a bytes-only message to exercise the
-real-broker decode path.
+**The run log shows it** (the pseudo-terminal the extension opens for the server, or the CLI's own
+output). Every send logs the encoder it resolved and the exact bytes it put on the wire, and every
+receive logs the decoder that governed the message:
+
+```
+Step raiseAlert:  ... as text/plain (9 bytes): "all clear"
+Step publishEvent: ... as application/json (37 bytes): "{\"kind\":\"deploy\",\"note\":\"v3 shipped\"}"
+```
+
+The bytes are quoted, so the difference is visible directly. A string sent as **text** carries no
+quotes; the same string sent as **JSON** carries them — that is what the escaped `\"` are:
+
+```
+09 (string as JSON):  as application/json (6 bytes): "\"beta\""
+01 (string as text): as text/plain (22 bytes): "system reboot at 02:00"
+```
+
+So `beta` is 4 bytes as text and 6 as JSON — the two extra bytes are the quote characters a consumer
+reading plain text would not expect.
+
+Receives report the other half:
+
+```
+Step takeReading: ... via in-memory adapter, decoded as text/plain
+Step takeEvent:   ... via in-memory adapter, decoded as application/json
+```
+
+**In the editor**, the same facts appear on the step's **Logs** section: expand the SEND/RECEIVE entry
+and the Channel block lists **Encoder** (on a send) or **Decoder** (on a receive), next to Adapter and
+Correlation ID.
+
+Unit tests assert the same bytes automatically: `TestSendFallsBackToAsyncAPIDeclaredContentType`,
+`TestSendFallsBackToDocumentDefaultContentType`, `TestSendStepContentTypeWinsOverDeclared`,
+`TestDeclaredContentTypeFollowsMessageRef` and `TestAsyncSendUsesContentTypeSerializer` pull the raw
+bytes back off the adapter and check them, and `TestReceiveUsesDeclaredContentTypeForRawBytes` seeds a
+bytes-only message to exercise the real-broker decode path.
 
 ## What Phase 10 delivers
 
