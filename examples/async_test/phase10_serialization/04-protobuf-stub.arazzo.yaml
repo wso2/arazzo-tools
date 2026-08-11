@@ -4,7 +4,7 @@
 #
 # EXPECTED: run **protoFlow** → send fails with:
 #   send on channel "notify/metrics": could not serialize payload: protobuf serialization
-#   (application/x-protobuf) is not yet implemented: it needs a .proto/descriptor ...
+#   (application/x-protobuf) is not supported yet
 
 arazzo: 1.1.0
 

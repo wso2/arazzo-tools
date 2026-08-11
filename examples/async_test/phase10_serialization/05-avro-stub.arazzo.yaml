@@ -4,7 +4,7 @@
 #
 # EXPECTED: run **avroFlow** → send fails with:
 #   send on channel "notify/audit": could not serialize payload: avro serialization
-#   (application/avro) is not yet implemented: it needs an Avro schema/registry ...
+#   (application/avro) is not supported yet
 
 arazzo: 1.1.0
 

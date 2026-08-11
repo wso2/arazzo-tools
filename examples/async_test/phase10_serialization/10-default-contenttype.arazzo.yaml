@@ -14,10 +14,11 @@
 #   reading = "23.5"        (bare text from the document default)
 #   kind    = "threshold"   (structured, because the message overrode the default with JSON)
 #
-# The two steps SELECT DIFFERENT SERIALIZERS with nothing but the AsyncAPI document to go on: the
-# reading is encoded as bare text (`23.5`), the event as JSON. The exact bytes are asserted in
-# TestSendFallsBackToDocumentDefaultContentType — see the note at the end of the README on why an
-# example cannot show them directly.
+# The two steps SELECT DIFFERENT SERIALIZERS with nothing but the AsyncAPI document to go on. The
+# workflow outputs look the same either way (the in-memory adapter carries the decoded payload), so
+# check the RUN LOG, which prints the bytes each send produced:
+#   Step publishReading: ... as text/plain (4 bytes): "23.5"
+#   Step publishEvent:   ... as application/json (31 bytes): "{\"kind\":\"threshold\",\"value\":30}"
 
 arazzo: 1.1.0
 

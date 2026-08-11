@@ -13,9 +13,10 @@
 #
 # If the send path defaulted straight to JSON (ignoring the document), the alert would go on the wire
 # as `"all clear"` — WITH the quote characters — onto a channel every other consumer reads as plain
-# text. What this example demonstrates is that the two steps SELECT DIFFERENT SERIALIZERS from the
-# document alone; the exact bytes are asserted in TestSendFallsBackToAsyncAPIDeclaredContentType (see
-# the note at the end of the README on why an example cannot show them).
+# text. The workflow's OUTPUTS cannot show you this (the in-memory adapter carries the decoded payload,
+# so nothing ever decodes) — but the RUN LOG can. Each send logs the bytes it produced:
+#   Step raiseAlert:  ... as text/plain (9 bytes): "all clear"
+#   Step publishEvent: ... as application/json (37 bytes): "{\"kind\":\"deploy\",...}"
 #
 # EXPECTED: run **declaredFlow** → completes with
 #   heard = "all clear"   and   kind = "deploy"
