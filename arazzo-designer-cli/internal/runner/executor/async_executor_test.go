@@ -522,3 +522,121 @@ func TestAsyncSendUnsupportedContentTypeFails(t *testing.T) {
 		t.Error("send with an unsupported content type should fail clearly")
 	}
 }
+
+// ---- content type resolution: step -> AsyncAPI document -> JSON ----
+
+// declaredContentTypeSources is asyncSourceDescs with the AsyncAPI document declaring a content type,
+// either on the channel's message or (when defaultOnly) only at the document root.
+func declaredContentTypeSources(contentType string, defaultOnly bool) map[string]interface{} {
+	channel := map[string]interface{}{"address": "orders/new"}
+	spec := map[string]interface{}{
+		"asyncapi": "3.0.0",
+		"channels": map[string]interface{}{"orders": channel},
+		"operations": map[string]interface{}{
+			"placeOrder": map[string]interface{}{
+				"action":  "send",
+				"channel": map[string]interface{}{"$ref": "#/channels/orders"},
+			},
+		},
+	}
+	if defaultOnly {
+		spec["defaultContentType"] = contentType
+	} else {
+		channel["messages"] = map[string]interface{}{
+			"order": map[string]interface{}{"contentType": contentType},
+		}
+	}
+	return map[string]interface{}{"orderBus": spec}
+}
+
+func executorWithSources(sources map[string]interface{}) *StepExecutor {
+	return NewStepExecutor(map[string]interface{}{}, sources, &models.RuntimeParams{}, &telemetry.NoopSink{})
+}
+
+// sendRaw publishes a payload and returns the raw bytes that reached the channel — the bytes a real
+// broker would carry, which is what the content type actually decides.
+func sendRaw(t *testing.T, se *StepExecutor, step map[string]interface{}) []byte {
+	t.Helper()
+	state := models.NewExecutionState("wf", nil, nil, nil)
+	if r := se.ExecuteStep(step, nil, state); !r.Success {
+		t.Fatalf("send failed: %s", r.Error)
+	}
+	msg, err := se.AsyncAdapter.Receive("orders/new", "", time.Second)
+	if err != nil {
+		t.Fatalf("receive: %v", err)
+	}
+	return msg.Raw
+}
+
+// Arazzo §5.8.14.1: a request body with no `contentType` must "refer to Content-Type specified at the
+// targeted operation" — for an async step, the AsyncAPI document. Defaulting straight to JSON would
+// publish `"hi"` (JSON-quoted) onto a channel documented as carrying bare text.
+func TestSendFallsBackToAsyncAPIDeclaredContentType(t *testing.T) {
+	se := executorWithSources(declaredContentTypeSources("text/plain", false))
+	raw := sendRaw(t, se, map[string]interface{}{
+		"stepId": "send", "channelPath": "orderBus#/channels/orders", "action": "send",
+		"requestBody": map[string]interface{}{"payload": "hi"}, // no contentType on the step
+	})
+	if string(raw) != "hi" {
+		t.Errorf("channel declares text/plain, so a step omitting contentType should send bare text; got %q", raw)
+	}
+}
+
+// AsyncAPI 3.0 Message Object: "When omitted, the value MUST be the one specified on the
+// defaultContentType field" — so a document-level default counts as declared.
+func TestSendFallsBackToDocumentDefaultContentType(t *testing.T) {
+	se := executorWithSources(declaredContentTypeSources("text/plain", true))
+	raw := sendRaw(t, se, map[string]interface{}{
+		"stepId": "send", "channelPath": "orderBus#/channels/orders", "action": "send",
+		"requestBody": map[string]interface{}{"payload": "hi"},
+	})
+	if string(raw) != "hi" {
+		t.Errorf("root defaultContentType text/plain should apply; got %q", raw)
+	}
+}
+
+// The step's own contentType is authoritative: the spec consults the target only when it is OMITTED.
+func TestSendStepContentTypeWinsOverDeclared(t *testing.T) {
+	se := executorWithSources(declaredContentTypeSources("text/plain", false))
+	raw := sendRaw(t, se, map[string]interface{}{
+		"stepId": "send", "channelPath": "orderBus#/channels/orders", "action": "send",
+		"requestBody": map[string]interface{}{"contentType": "application/json", "payload": "hi"},
+	})
+	if string(raw) != `"hi"` {
+		t.Errorf("the step's contentType must win over the document's; got %q", raw)
+	}
+}
+
+// Nothing declared anywhere still means JSON.
+func TestSendDefaultsToJSONWhenNothingDeclared(t *testing.T) {
+	se := newAsyncExecutor()
+	raw := sendRaw(t, se, map[string]interface{}{
+		"stepId": "send", "channelPath": "orderBus#/channels/orders", "action": "send",
+		"requestBody": map[string]interface{}{"payload": "hi"},
+	})
+	if string(raw) != `"hi"` {
+		t.Errorf("with no contentType anywhere the default is JSON; got %q", raw)
+	}
+}
+
+// The real-broker receive path: bytes arrive with no content type (MQTT 3.1.1 / WebSocket carry none),
+// so the AsyncAPI declaration is the only thing that says how to decode them.
+func TestReceiveUsesDeclaredContentTypeForRawBytes(t *testing.T) {
+	se := executorWithSources(declaredContentTypeSources("text/plain", false))
+	state := models.NewExecutionState("wf", nil, nil, nil)
+
+	// Bytes only — exactly what a real broker delivers.
+	_ = se.AsyncAdapter.Send("orders/new", &Message{Raw: []byte("plain words")})
+
+	r := se.ExecuteStep(map[string]interface{}{
+		"stepId": "recv", "channelPath": "orderBus#/channels/orders", "action": "receive",
+		"timeout": 500,
+		"outputs": map[string]interface{}{"got": "$message.payload"},
+	}, nil, state)
+	if !r.Success {
+		t.Fatalf("receive failed: %s", r.Error)
+	}
+	if r.Outputs["got"] != "plain words" {
+		t.Errorf("channel declares text/plain, so raw bytes should decode as text; got %v", r.Outputs["got"])
+	}
+}

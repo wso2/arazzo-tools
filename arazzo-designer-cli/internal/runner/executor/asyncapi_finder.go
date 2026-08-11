@@ -21,6 +21,11 @@ type AsyncInfo struct {
 	OperationID    string                 // the operation key (when resolved via operationId)
 	Operation      map[string]interface{} // the operation object (when resolved via operationId)
 	Action         string                 // the operation's declared action ("send"/"receive"), if known
+
+	// DefaultContentType is the AsyncAPI document's root `defaultContentType`. AsyncAPI 3.0 makes it
+	// the fallback for a message that omits its own contentType ("When omitted, the value MUST be the
+	// one specified on the defaultContentType field"), so message-level resolution needs it.
+	DefaultContentType string
 }
 
 // Wired into execution as of Phase 9: async_executor.go resolves each async step through
@@ -61,9 +66,10 @@ func (af *AsyncFinder) FindChannelByPath(channelPath string) *AsyncInfo {
 		return nil
 	}
 	info := &AsyncInfo{
-		Source:     name,
-		Channel:    channel,
-		ChannelKey: lastPointerSegment(pointer),
+		Source:             name,
+		Channel:            channel,
+		ChannelKey:         lastPointerSegment(pointer),
+		DefaultContentType: docDefaultContentType(spec),
 	}
 	if addr, ok := channel["address"].(string); ok {
 		info.ChannelAddress = addr
@@ -117,7 +123,7 @@ func (af *AsyncFinder) findOperationInSource(sourceName, opID string) *AsyncInfo
 	if op == nil {
 		return nil
 	}
-	info := &AsyncInfo{Source: sourceName, OperationID: opID, Operation: op}
+	info := &AsyncInfo{Source: sourceName, OperationID: opID, Operation: op, DefaultContentType: docDefaultContentType(spec)}
 	if action, ok := op["action"].(string); ok {
 		info.Action = action
 	}
@@ -135,6 +141,41 @@ func (af *AsyncFinder) findOperationInSource(sourceName, opID string) *AsyncInfo
 		}
 	}
 	return info
+}
+
+// docDefaultContentType reads an AsyncAPI document's root `defaultContentType`.
+func docDefaultContentType(spec map[string]interface{}) string {
+	ct, _ := spec["defaultContentType"].(string)
+	return strings.TrimSpace(ct)
+}
+
+// DeclaredContentType returns the content type the AsyncAPI document declares for this target, or ""
+// when it declares none. It is the "targeted operation" half of the Arazzo rule for a request body's
+// contentType: "If omitted then refer to Content-Type specified at the targeted operation to
+// understand serialization requirements" (Arazzo §5.8.14.1).
+//
+// Within the AsyncAPI document the lookup follows that spec's own precedence: a message's own
+// `contentType` first, then the document's root `defaultContentType` ("When omitted, the value MUST
+// be the one specified on the defaultContentType field", AsyncAPI 3.0 Message Object).
+//
+// Messages are visited in sorted key order so a channel carrying several message definitions resolves
+// the same way on every run (Go randomizes map iteration).
+func (info *AsyncInfo) DeclaredContentType() string {
+	if info == nil {
+		return ""
+	}
+	messages := toMap(info.Channel["messages"])
+	names := make([]string, 0, len(messages))
+	for name := range messages {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if ct, ok := toMap(messages[name])["contentType"].(string); ok && strings.TrimSpace(ct) != "" {
+			return strings.TrimSpace(ct)
+		}
+	}
+	return info.DefaultContentType
 }
 
 // ActionMismatch reports whether a step's declared `action` contradicts the resolved operation's
