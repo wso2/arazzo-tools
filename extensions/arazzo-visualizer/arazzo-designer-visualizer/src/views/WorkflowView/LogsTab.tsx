@@ -538,7 +538,6 @@ function MessagePairCard({ pair, stepOutputs }: { pair: MessagePair; stepOutputs
     const channel = info.attributes?.['messaging.channel'] ?? info.name;
     const adapter = info.attributes?.['messaging.adapter'];
     const correlationId = info.attributes?.['messaging.correlation_id'];
-    const timeoutMs = info.attributes?.['messaging.timeout_ms'];
     // Which serializer handled the message. Labelled by direction, since the same attribute means
     // "what encoded this" on a send and "what decoded it" on a receive.
     const contentType = info.attributes?.['messaging.content_type'];
@@ -565,7 +564,9 @@ function MessagePairCard({ pair, stepOutputs }: { pair: MessagePair; stepOutputs
         pair.start?.attributes?.['messaging.message.headers'] ?? pair.end?.attributes?.['messaging.message.headers']
     );
 
-    const hasDetails = correlationId != null || timeoutMs != null || adapter != null || contentType != null;
+    // Timeout is deliberately not shown here: it is a value declared on the step, already visible in
+    // the properties panel, and not something this run produced. The span still carries it for traces.
+    const hasDetails = correlationId != null || adapter != null || contentType != null;
     const hasMessage = body != null || headers != null;
 
     const title = (
@@ -604,12 +605,6 @@ function MessagePairCard({ pair, stepOutputs }: { pair: MessagePair; stepOutputs
                             <>
                                 <InfoLabel>Correlation ID</InfoLabel>
                                 <InfoValue>{correlationId}</InfoValue>
-                            </>
-                        )}
-                        {timeoutMs != null && (
-                            <>
-                                <InfoLabel>Timeout</InfoLabel>
-                                <InfoValue>{timeoutMs} ms</InfoValue>
                             </>
                         )}
                     </InfoGrid>
