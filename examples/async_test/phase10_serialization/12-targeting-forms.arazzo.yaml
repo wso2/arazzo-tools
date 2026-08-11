@@ -10,10 +10,6 @@
 # components.messages where `contentType: text/plain` is declared. None of the steps declares a
 # contentType or an `action` — the document supplies both — and all six steps must behave identically.
 #
-# `operationPath` is the form that did NOT work at runtime until recently: it was never recognised as
-# async at all, fell through to the HTTP path and failed with "Operation not found", even though the
-# editor navigated, hovered and validated it happily. This example is the regression guard for that.
-#
 # EXPECTED: run **formsFlow** → completes with
 #   viaChannel = "A"   viaOperationId = "B"   viaOperationPath = "C"
 #

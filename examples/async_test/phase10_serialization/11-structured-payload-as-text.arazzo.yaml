@@ -38,6 +38,7 @@ workflows:
         channelPath: notify#/channels/alerts     # declares text/plain
         action: send
         requestBody:
+          #contentType: application/json
           payload:                               # ...but the payload is an object
             kind: "deploy"
             note: "v3"
