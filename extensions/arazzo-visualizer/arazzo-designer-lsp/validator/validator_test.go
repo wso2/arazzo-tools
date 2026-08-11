@@ -914,7 +914,8 @@ func TestMissingContentTypeIsInformational(t *testing.T) {
 	}
 }
 
-// Both declare one and they disagree. The step wins per the spec, so the published message will not
+// Both declare one and they disagree. The step's value overrides the document's per the spec, so the
+// published message will not
 // match the format the AsyncAPI document describes to every other consumer of the channel.
 func TestContentTypeMismatchWarns(t *testing.T) {
 	step := func(ct string) string {
@@ -922,26 +923,26 @@ func TestContentTypeMismatchWarns(t *testing.T) {
 	}
 
 	errs := diagnoseWithContentType(t, docWith(contentTypeBus, step("application/json")), "text/plain", true)
-	if !has(errs, "warning", "the step's value wins") {
+	if !has(errs, "warning", "overrides the AsyncAPI declaration") {
 		t.Errorf("a step/document content-type disagreement should warn, got:%s", dump(errs))
 	}
 
 	// Agreement -> silent.
 	errs = diagnoseWithContentType(t, docWith(contentTypeBus, step("text/plain")), "text/plain", true)
-	if has(errs, "warning", "the step's value wins") {
+	if has(errs, "warning", "overrides the AsyncAPI declaration") {
 		t.Errorf("matching content types must not warn, got:%s", dump(errs))
 	}
 
 	// Same media type spelled with parameters -> still agreement, not a mismatch.
 	errs = diagnoseWithContentType(t, docWith(contentTypeBus, step(`"application/json; charset=utf-8"`)), "application/json", true)
-	if has(errs, "warning", "the step's value wins") {
+	if has(errs, "warning", "overrides the AsyncAPI declaration") {
 		t.Errorf("a charset parameter is not a content-type mismatch, got:%s", dump(errs))
 	}
 
 	// A `+json` structured suffix selects the JSON serializer, exactly as "application/json" does, so
 	// the two do not disagree about the wire format.
 	errs = diagnoseWithContentType(t, docWith(contentTypeBus, step("application/vnd.order+json")), "application/json", true)
-	if has(errs, "warning", "the step's value wins") {
+	if has(errs, "warning", "overrides the AsyncAPI declaration") {
 		t.Errorf("a +json structured suffix is not a content-type mismatch, got:%s", dump(errs))
 	}
 }

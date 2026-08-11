@@ -769,7 +769,8 @@ func (v *Validator) validateComponentKeys(doc *parser.ArazzoDocument) []Validati
 //  1. Neither declares one. Legal, and the runtime serializes as JSON — but that is an assumption
 //     nothing in either document states, and it is wrong for a channel that really carries text.
 //     Reported as information: the document is correct, it is just silent.
-//  2. Both declare one and they disagree. The step wins (per the rule above), so the message goes out
+//  2. Both declare one and they disagree. The step's value overrides the document's (per the rule
+//     above), so the message goes out
 //     in a format the AsyncAPI document — the contract every other consumer of that channel reads —
 //     does not describe. That is a warning.
 //
@@ -810,7 +811,7 @@ func (v *Validator) validateMessageContentType(step *parser.Step) []ValidationEr
 		return []ValidationError{{
 			Line:     step.LineNumber,
 			Column:   0,
-			Message:  fmt.Sprintf("Step '%s': requestBody 'contentType' is '%s' but the AsyncAPI document declares '%s' for this channel — the step's value wins, so this message will not match the format the document describes", step.StepID, stepContentType, declared),
+			Message:  fmt.Sprintf("Step '%s': requestBody 'contentType' is '%s' but the AsyncAPI document declares '%s' for this channel — the value declared in this step overrides the AsyncAPI declaration, so this message will not match the format the document describes", step.StepID, stepContentType, declared),
 			Severity: "warning",
 		}}
 	}
