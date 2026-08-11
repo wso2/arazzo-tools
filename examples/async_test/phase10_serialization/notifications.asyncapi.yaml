@@ -51,6 +51,19 @@ channels:
     messages:
       audit:
         $ref: '#/components/messages/audit'
+  # A channel carrying TWO message definitions that declare DIFFERENT formats. Nothing here says which
+  # one a given step sends, so the document cannot answer the question on its own (see 13).
+  mixed:
+    address: notify/mixed
+    messages:
+      alphaJson:
+        contentType: application/json
+        payload:
+          type: object
+      betaText:
+        contentType: text/plain
+        payload:
+          type: string
 operations:
   publishEvent:
     action: send

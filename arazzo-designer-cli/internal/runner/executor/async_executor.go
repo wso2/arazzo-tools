@@ -227,8 +227,15 @@ func (se *StepExecutor) executeSend(step map[string]interface{}, info *AsyncInfo
 // above. It is worth a warning though, because the AsyncAPI document is the contract other consumers
 // of the channel read, and publishing a format it doesn't describe is usually a mistake.
 func resolveSendContentType(stepContentType string, info *AsyncInfo, stepID, channel string) string {
-	declared := info.DeclaredContentType()
+	declared, ambiguous := info.declaredContentType()
 	if strings.TrimSpace(stepContentType) == "" {
+		// A channel may define several messages declaring DIFFERENT formats, and nothing then says which
+		// one this step sends — the value above is a deterministic guess. Only worth saying when the step
+		// did NOT declare its own contentType: a step that did has already settled it, and telling it to
+		// "set contentType" would be advice it has followed.
+		if ambiguous {
+			log.Printf("Warning: step %s: channel %q declares messages with different contentTypes; using %q — set 'contentType' on the step's requestBody to choose explicitly", stepID, channel, declared)
+		}
 		return declared
 	}
 	if declared != "" && !sameMediaType(declared, stepContentType) {

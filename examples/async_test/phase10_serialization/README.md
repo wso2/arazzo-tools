@@ -47,6 +47,7 @@ Supported serializers (see [serializer.go](../../../arazzo-designer-cli/internal
 | `10-default-contenttype.arazzo.yaml` | document-level **`defaultContentType`**, and a message overriding it | `defaultsFlow` | ✅ `reading = "23.5"`, `kind = "threshold"` |
 | `11-structured-payload-as-text.arazzo.yaml` | object payload on a `text/plain` channel → **hard error** | `badTextFlow` | ❌ "cannot serialize a structured payload (object/array) as text/plain" |
 | `12-targeting-forms.arazzo.yaml` | `channelPath` / `operationId` / `operationPath` all reach the same `$ref`'d declaration | `formsFlow` | ✅ `viaChannel = "A"`, `viaOperationId = "B"`, `viaOperationPath = "C"` |
+| `13-ambiguous-channel.arazzo.yaml` | channel declares **two different** message formats → the runtime guesses and says so | `ambiguousFlow` | ✅ `guessed = "hello"`, `chosen = "hello"` + one warning naming the guessing step |
 
 The one serializer behavior **not** expressible as an example is the receive-side **deserialize of
 raw bytes** (the path a real broker takes when it delivers bytes + a content type, with no pre-decoded
@@ -74,6 +75,7 @@ test_runner examples/async_test/phase10_serialization/09-contenttype-mismatch.ar
 test_runner examples/async_test/phase10_serialization/10-default-contenttype.arazzo.yaml defaultsFlow
 test_runner examples/async_test/phase10_serialization/11-structured-payload-as-text.arazzo.yaml badTextFlow  # fails on purpose
 test_runner examples/async_test/phase10_serialization/12-targeting-forms.arazzo.yaml formsFlow
+test_runner examples/async_test/phase10_serialization/13-ambiguous-channel.arazzo.yaml ambiguousFlow
 ```
 
 The four ❌ workflows (`badFlow`, `protoFlow`, `avroFlow`, `badTextFlow`) are meant to end in error —

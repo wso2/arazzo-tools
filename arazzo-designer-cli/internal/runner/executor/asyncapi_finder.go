@@ -6,7 +6,6 @@
 package executor
 
 import (
-	"log"
 	"sort"
 	"strings"
 
@@ -228,8 +227,17 @@ func resolveLocalRef(doc, obj map[string]interface{}) map[string]interface{} {
 // visited in sorted key order so a channel carrying several message definitions resolves the same way
 // on every run (Go randomizes map iteration).
 func (info *AsyncInfo) DeclaredContentType() string {
+	ct, _ := info.declaredContentType()
+	return ct
+}
+
+// declaredContentType is DeclaredContentType plus whether the answer had to be guessed: true when the
+// channel's messages declare more than one DIFFERENT format, so nothing in the document says which one
+// a given step sends. Kept separate from the warning itself, because whether that guess MATTERS
+// depends on the caller — a step that declares its own contentType is unaffected by the ambiguity.
+func (info *AsyncInfo) declaredContentType() (contentType string, ambiguous bool) {
 	if info == nil {
-		return ""
+		return "", false
 	}
 	messages := toMap(info.Channel["messages"])
 	names := make([]string, 0, len(messages))
@@ -239,7 +247,6 @@ func (info *AsyncInfo) DeclaredContentType() string {
 	sort.Strings(names)
 
 	first := ""
-	ambiguous := false
 	for _, name := range names {
 		message := resolveLocalRef(info.Doc, toMap(messages[name]))
 		ct, ok := message["contentType"].(string)
@@ -255,18 +262,11 @@ func (info *AsyncInfo) DeclaredContentType() string {
 			ambiguous = true
 		}
 	}
-	// A channel may carry several message definitions, and they may declare DIFFERENT formats. Nothing
-	// in the document then says which one a given step sends, so the value returned here is a guess:
-	// deterministic (sorted order), but a guess. Say so, and point at the field that settles it — the
-	// step's own requestBody contentType, which takes precedence over the document either way.
-	if ambiguous {
-		log.Printf("Warning: channel %q declares messages with different contentTypes; using %q — set 'contentType' on the step's requestBody to choose explicitly", info.ChannelKey, first)
-	}
 	if first != "" {
-		return first
+		return first, ambiguous
 	}
 	defaultContentType, _ := info.Doc["defaultContentType"].(string)
-	return strings.TrimSpace(defaultContentType)
+	return strings.TrimSpace(defaultContentType), false
 }
 
 // ActionMismatch reports whether a step's declared `action` contradicts the resolved operation's

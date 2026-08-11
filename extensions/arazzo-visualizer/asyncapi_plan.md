@@ -559,7 +559,8 @@ workflow), **08 a `$ref`'d message declaration reached by `operationPath`**, **0
 disagreement** (the step's value overrides the declaration, warned in both the editor and the run log), **10 document-level
 `defaultContentType`** plus a message overriding it, **11 an object payload on a text/plain channel**
 (fails), **12 all three targeting forms** reaching the same `$ref`'d declaration — the regression guard
-for the `operationPath` routing fix. Two AsyncAPI sources back them: `notifications.asyncapi.yaml`
+for the `operationPath` routing fix — and **13 a channel declaring two different message formats**,
+where the runtime guesses deterministically and says which step had to guess. Two AsyncAPI sources back them: `notifications.asyncapi.yaml`
 (per-message declarations, one `$ref`'d, one untyped channel) and `telemetry.asyncapi.yaml` (root
 `defaultContentType` + a message that overrides it).
 
