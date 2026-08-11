@@ -322,7 +322,7 @@ func (se *StepExecutor) executeReceive(step map[string]interface{}, info *AsyncI
 	}
 	// The message that arrived is the result-side detail, mirroring the HTTP response body. The
 	// decoder is reported alongside it: which format governed the message is otherwise invisible.
-	receivedAttrs := messageAttrs("messaging.message", msg.Payload, msg.Headers)
+	receivedAttrs := messageAttrs("messaging.message", payload, msg.Headers)
 	receivedAttrs["messaging.content_type"] = contentType
 	if success {
 		state.StepsStatus[stepID] = models.StepStatusSuccess

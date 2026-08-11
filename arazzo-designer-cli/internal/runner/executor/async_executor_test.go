@@ -765,3 +765,44 @@ func TestOperationPathAsyncRoundTrip(t *testing.T) {
 		t.Errorf("expected the round-tripped text payload, got %v", r.Outputs["got"])
 	}
 }
+
+// captureSink records the trace events a run emits so a test can assert on span attributes.
+type captureSink struct{ events []telemetry.TraceEvent }
+
+func (c *captureSink) Send(event telemetry.TraceEvent) { c.events = append(c.events, event) }
+func (c *captureSink) Shutdown()                       {}
+
+// attr returns the first non-empty value recorded for a span attribute.
+func (c *captureSink) attr(key string) (string, bool) {
+	for _, e := range c.events {
+		if v, ok := e.Attributes[key]; ok && v != "" {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+// The run-log span must report the message the step actually saw. On the real-broker path the adapter
+// delivers bytes only (msg.Payload is nil) and the payload appears after decoding — reporting
+// msg.Payload there would show an empty body for every message a real broker delivers.
+func TestReceiveSpanReportsDecodedPayload(t *testing.T) {
+	sink := &captureSink{}
+	se := NewStepExecutor(map[string]interface{}{}, declaredContentTypeSources("text/plain", false), &models.RuntimeParams{}, sink)
+	state := models.NewExecutionState("wf", nil, nil, nil)
+
+	_ = se.AsyncAdapter.Send("orders/new", &Message{Raw: []byte("decoded me")}) // bytes only
+
+	if r := se.ExecuteStep(map[string]interface{}{
+		"stepId": "recv", "channelPath": "orderBus#/channels/orders", "action": "receive", "timeout": 500,
+	}, nil, state); !r.Success {
+		t.Fatalf("receive failed: %s", r.Error)
+	}
+
+	body, found := sink.attr("messaging.message.body")
+	if !found {
+		t.Fatal("the receive span should carry the message body")
+	}
+	if !strings.Contains(body, "decoded me") {
+		t.Errorf("span body should be the decoded payload, got %q", body)
+	}
+}
