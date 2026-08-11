@@ -861,3 +861,102 @@ func TestExampleFixtures(t *testing.T) {
 		}
 	})
 }
+
+// ---- Phase 10: message content type (Arazzo §5.8.14.1) ----
+
+// diagnoseWithContentType validates content with both resolvers wired in, standing in for the LSP
+// server's index. declared is the content type the AsyncAPI document declares for the step's channel;
+// resolved reports whether that channel could be reached at all.
+func diagnoseWithContentType(t *testing.T, content, declared string, resolved bool) []ValidationError {
+	t.Helper()
+	doc, err := parser.NewParser().Parse(content)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	v := NewValidator().
+		WithStepActionResolver(func(step *parser.Step) (string, bool) {
+			if step.Action != "" {
+				return step.Action, true
+			}
+			return "send", true // steps in these fixtures target a send operation
+		}).
+		WithStepContentTypeResolver(func(step *parser.Step) (string, bool) {
+			return declared, resolved
+		})
+	return v.Validate(doc)
+}
+
+const contentTypeBus = "  - name: bus\n    url: ./bus.yaml\n    type: asyncapi\n"
+
+// Neither the step nor the AsyncAPI document says anything: legal, but the JSON fallback is an
+// assumption no document states, so it is surfaced as information rather than a warning.
+func TestMissingContentTypeIsInformational(t *testing.T) {
+	step := "      - stepId: emit\n        channelPath: bus#/channels/orders\n        action: send\n        requestBody:\n          payload:\n            id: \"1\"\n"
+
+	errs := diagnoseWithContentType(t, docWith(contentTypeBus, step), "", true)
+	if !has(errs, "information", "serialized as 'application/json'") {
+		t.Errorf("a send with no contentType anywhere should be reported as information, got:%s", dump(errs))
+	}
+	if has(errs, "warning", "contentType") {
+		t.Errorf("a legal default must not be reported as a warning, got:%s", dump(errs))
+	}
+
+	// The AsyncAPI document supplies one -> nothing to say.
+	errs = diagnoseWithContentType(t, docWith(contentTypeBus, step), "text/plain", true)
+	if has(errs, "information", "serialized as 'application/json'") {
+		t.Errorf("a declared content type must silence the fallback notice, got:%s", dump(errs))
+	}
+
+	// Channel unreachable -> the check cannot know anything and must stay quiet.
+	errs = diagnoseWithContentType(t, docWith(contentTypeBus, step), "", false)
+	if has(errs, "information", "serialized as 'application/json'") {
+		t.Errorf("an unresolvable channel must not produce a content-type notice, got:%s", dump(errs))
+	}
+}
+
+// Both declare one and they disagree. The step wins per the spec, so the published message will not
+// match the format the AsyncAPI document describes to every other consumer of the channel.
+func TestContentTypeMismatchWarns(t *testing.T) {
+	step := func(ct string) string {
+		return "      - stepId: emit\n        channelPath: bus#/channels/orders\n        action: send\n        requestBody:\n          contentType: " + ct + "\n          payload: \"hi\"\n"
+	}
+
+	errs := diagnoseWithContentType(t, docWith(contentTypeBus, step("application/json")), "text/plain", true)
+	if !has(errs, "warning", "the step's value wins") {
+		t.Errorf("a step/document content-type disagreement should warn, got:%s", dump(errs))
+	}
+
+	// Agreement -> silent.
+	errs = diagnoseWithContentType(t, docWith(contentTypeBus, step("text/plain")), "text/plain", true)
+	if has(errs, "warning", "the step's value wins") {
+		t.Errorf("matching content types must not warn, got:%s", dump(errs))
+	}
+
+	// Same media type spelled with parameters -> still agreement, not a mismatch.
+	errs = diagnoseWithContentType(t, docWith(contentTypeBus, step(`"application/json; charset=utf-8"`)), "application/json", true)
+	if has(errs, "warning", "the step's value wins") {
+		t.Errorf("a charset parameter is not a content-type mismatch, got:%s", dump(errs))
+	}
+
+	// A `+json` structured suffix selects the JSON serializer, exactly as "application/json" does, so
+	// the two do not disagree about the wire format.
+	errs = diagnoseWithContentType(t, docWith(contentTypeBus, step("application/vnd.order+json")), "application/json", true)
+	if has(errs, "warning", "the step's value wins") {
+		t.Errorf("a +json structured suffix is not a content-type mismatch, got:%s", dump(errs))
+	}
+}
+
+// A receive step has no requestBody, so neither check applies to it.
+func TestContentTypeChecksSkipReceiveSteps(t *testing.T) {
+	doc, err := parser.NewParser().Parse(docWith(contentTypeBus,
+		"      - stepId: await\n        channelPath: bus#/channels/orders\n        action: receive\n        correlationId: $inputs.id\n"))
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	errs := NewValidator().
+		WithStepContentTypeResolver(func(*parser.Step) (string, bool) { return "", true }).
+		Validate(doc)
+	if has(errs, "information", "serialized as 'application/json'") {
+		t.Errorf("a receive step has no requestBody and must not be asked for a contentType, got:%s", dump(errs))
+	}
+}

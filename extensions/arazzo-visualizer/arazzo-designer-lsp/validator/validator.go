@@ -95,6 +95,15 @@ type Validator struct {
 	// nil in content-only contexts (unit tests, any caller without an index); the checks that need it
 	// simply stay quiet rather than guessing.
 	resolveStepAction func(step *parser.Step) (action string, ok bool)
+
+	// resolveStepContentType, when set, returns the content type the AsyncAPI document declares for
+	// the channel a step targets, and whether that channel was resolved at all. Same arrangement as
+	// resolveStepAction: the fact lives in another document, so a caller holding the index supplies it.
+	//
+	// resolved=false means "could not be established" and every content-type check stays quiet;
+	// resolved=true with an empty content type is the meaningful case — the channel exists and declares
+	// no format, so the runtime will fall back to JSON.
+	resolveStepContentType func(step *parser.Step) (contentType string, resolved bool)
 }
 
 // NewValidator creates a new Validator
@@ -108,6 +117,14 @@ func NewValidator() *Validator {
 // through fn. Passing nil restores content-only behaviour.
 func (v *Validator) WithStepActionResolver(fn func(step *parser.Step) (string, bool)) *Validator {
 	v.resolveStepAction = fn
+	return v
+}
+
+// WithStepContentTypeResolver returns the validator configured to resolve the content type an
+// AsyncAPI document declares for a step's channel through fn. Passing nil restores content-only
+// behaviour.
+func (v *Validator) WithStepContentTypeResolver(fn func(step *parser.Step) (string, bool)) *Validator {
+	v.resolveStepContentType = fn
 	return v
 }
 
@@ -546,6 +563,9 @@ func (v *Validator) validateSteps(workflow *parser.Workflow, doc *parser.ArazzoD
 			}
 		}
 
+		// Content type of the message a send step publishes (spec §5.8.14.1).
+		errors = append(errors, v.validateMessageContentType(&step)...)
+
 		// Validate parameter 'in' locations (spec §5.8.6)
 		errors = append(errors, v.validateParameterLocations(step.Parameters, step.StepID, step.LineNumber)...)
 
@@ -737,6 +757,80 @@ func (v *Validator) validateComponentKeys(doc *parser.ArazzoDocument) []Validati
 		check("failureActions", key)
 	}
 	return errors
+}
+
+// validateMessageContentType surfaces how a send step's payload will actually be serialized.
+//
+// Arazzo §5.8.14.1 on a Request Body Object's contentType: "The Content-Type for the request content.
+// If omitted then refer to Content-Type specified at the targeted operation to understand
+// serialization requirements." So the step's own value is authoritative and the AsyncAPI document is
+// consulted only in its absence — which produces exactly two things worth telling an author:
+//
+//  1. Neither declares one. Legal, and the runtime serializes as JSON — but that is an assumption
+//     nothing in either document states, and it is wrong for a channel that really carries text.
+//     Reported as information: the document is correct, it is just silent.
+//  2. Both declare one and they disagree. The step wins (per the rule above), so the message goes out
+//     in a format the AsyncAPI document — the contract every other consumer of that channel reads —
+//     does not describe. That is a warning.
+//
+// Only send steps carry a requestBody, so this never fires on a receive. Everything depends on
+// resolving the target: with no resolver, or a channel that cannot be reached, both checks stay quiet.
+func (v *Validator) validateMessageContentType(step *parser.Step) []ValidationError {
+	if v.resolveStepContentType == nil {
+		return nil
+	}
+	if action, known := v.stepAction(step); !known || action != "send" {
+		return nil
+	}
+
+	stepContentType := ""
+	if step.RequestBody != nil {
+		stepContentType = strings.TrimSpace(step.RequestBody.ContentType)
+	}
+
+	declared, resolved := v.resolveStepContentType(step)
+	if !resolved {
+		return nil
+	}
+	declared = strings.TrimSpace(declared)
+
+	if stepContentType == "" {
+		if declared != "" {
+			return nil // the document supplies it; the runtime will use that
+		}
+		return []ValidationError{{
+			Line:     step.LineNumber,
+			Column:   0,
+			Message:  fmt.Sprintf("Step '%s': no 'contentType' on the requestBody and the AsyncAPI document declares none for this channel — the message will be serialized as 'application/json'", step.StepID),
+			Severity: "information",
+		}}
+	}
+
+	if declared != "" && normalizeContentType(declared) != normalizeContentType(stepContentType) {
+		return []ValidationError{{
+			Line:     step.LineNumber,
+			Column:   0,
+			Message:  fmt.Sprintf("Step '%s': requestBody 'contentType' is '%s' but the AsyncAPI document declares '%s' for this channel — the step's value wins, so this message will not match the format the document describes", step.StepID, stepContentType, declared),
+			Severity: "warning",
+		}}
+	}
+	return nil
+}
+
+// normalizeContentType reduces a media type to what the runtime's serializer registry actually keys
+// on, so two spellings the runtime treats identically are never reported as a mismatch: parameters
+// ("; charset=utf-8") are dropped, case is folded, and a `+json` structured suffix resolves to
+// application/json — "application/vnd.order+json" and "application/json" select the same serializer,
+// so they do not disagree about the wire format.
+func normalizeContentType(contentType string) string {
+	ct := strings.TrimSpace(strings.ToLower(contentType))
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = strings.TrimSpace(ct[:i])
+	}
+	if strings.HasSuffix(ct, "+json") {
+		return "application/json"
+	}
+	return ct
 }
 
 // validateDependsOn validates step-level dependsOn references (spec §5.8.3).
