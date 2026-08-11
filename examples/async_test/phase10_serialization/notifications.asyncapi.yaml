@@ -39,6 +39,11 @@ channels:
         contentType: application/avro
         payload:
           type: object
+  # A channel that declares NO contentType, and this document sets no `defaultContentType` either.
+  # Nothing anywhere says what this channel carries, which is the one case where the runtime falls
+  # back to application/json on its own (see 02).
+  untyped:
+    address: notify/untyped
 operations:
   publishEvent:
     action: send

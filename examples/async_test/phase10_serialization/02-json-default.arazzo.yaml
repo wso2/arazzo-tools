@@ -1,6 +1,12 @@
-# Phase 10 — Scenario 2: JSON serialization (default). With no `contentType` the serializer layer
-# defaults to application/json, so the object payload is JSON-encoded on send and decoded back into a
-# structured `$message.payload` on receive — the criteria/outputs read fields off the object.
+# Phase 10 — Scenario 2: JSON serialization (the LAST-RESORT default).
+#
+# The step declares no `contentType` AND the targeted channel (`untyped`) declares none either — the
+# document sets no `defaultContentType` at all. With nothing anywhere to say otherwise, the serializer
+# layer falls back to application/json: the object payload is JSON-encoded on send and decoded back
+# into a structured `$message.payload` on receive, so criteria/outputs read fields off the object.
+#
+# This is the ONLY case where JSON is chosen by default. When the AsyncAPI document does declare a
+# content type, that wins over the fallback — see 07.
 #
 # EXPECTED: run **jsonFlow** → sends {kind:"deploy", note:"v2 shipped"}, receives it, completes with
 # note = "v2 shipped".
@@ -20,15 +26,15 @@ workflows:
   - workflowId: jsonFlow
     steps:
       - stepId: emit
-        channelPath: notify#/channels/events
+        channelPath: notify#/channels/untyped
         action: send
         requestBody:
-          payload:                       # no contentType -> defaults to application/json
+          payload:                       # nothing declares a contentType -> application/json
             kind: "deploy"
             note: "v2 shipped"
 
       - stepId: take
-        channelPath: notify#/channels/events
+        channelPath: notify#/channels/untyped
         action: receive
         timeout: 2000
         successCriteria:
