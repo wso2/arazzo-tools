@@ -1,0 +1,50 @@
+# A second AsyncAPI source whose whole point is the DOCUMENT-LEVEL default.
+#
+# `defaultContentType` sits at the document root and applies to every message that does not declare a
+# contentType of its own. AsyncAPI 3.0 makes that a MUST, not a suggestion — Message Object:
+#   "The content type to use when encoding/decoding a message's payload. [...] When omitted, the value
+#    MUST be the one specified on the defaultContentType field."
+#
+# So there are two levels INSIDE this file, before the runtime's own JSON fallback is ever reached:
+#   readings -> declares nothing        -> the document default (text/plain)
+#   events   -> declares application/json -> its own declaration wins over the default
+#
+# Used by example 10.
+
+asyncapi: 3.0.0
+info:
+  title: Telemetry
+  version: 1.0.0
+
+defaultContentType: text/plain
+
+channels:
+  # No `messages` block at all: nothing here declares a content type, so the document default applies.
+  readings:
+    address: telemetry/readings
+  # This one declares its own, which overrides the document default.
+  events:
+    address: telemetry/events
+    messages:
+      event:
+        contentType: application/json
+        payload:
+          type: object
+
+operations:
+  publishReading:
+    action: send
+    channel:
+      $ref: '#/channels/readings'
+  consumeReading:
+    action: receive
+    channel:
+      $ref: '#/channels/readings'
+  publishTelemetryEvent:
+    action: send
+    channel:
+      $ref: '#/channels/events'
+  consumeTelemetryEvent:
+    action: receive
+    channel:
+      $ref: '#/channels/events'
