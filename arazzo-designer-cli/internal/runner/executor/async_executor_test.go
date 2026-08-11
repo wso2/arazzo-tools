@@ -640,3 +640,128 @@ func TestReceiveUsesDeclaredContentTypeForRawBytes(t *testing.T) {
 		t.Errorf("channel declares text/plain, so raw bytes should decode as text; got %v", r.Outputs["got"])
 	}
 }
+
+// ---- $ref'd messages and the operationPath targeting form ----
+
+// refMessageSources declares the channel's message as a $ref into components.messages — the idiomatic
+// way a real AsyncAPI document is written — and adds an operation so all three targeting forms reach
+// the same channel.
+func refMessageSources() map[string]interface{} {
+	return map[string]interface{}{
+		"orderBus": map[string]interface{}{
+			"asyncapi": "3.0.0",
+			"channels": map[string]interface{}{
+				"orders": map[string]interface{}{
+					"address": "orders/new",
+					"messages": map[string]interface{}{
+						"order": map[string]interface{}{"$ref": "#/components/messages/order"},
+					},
+				},
+			},
+			"operations": map[string]interface{}{
+				"placeOrder": map[string]interface{}{
+					"action":  "send",
+					"channel": map[string]interface{}{"$ref": "#/channels/orders"},
+				},
+			},
+			"components": map[string]interface{}{
+				"messages": map[string]interface{}{
+					"order": map[string]interface{}{"contentType": "text/plain"},
+				},
+			},
+		},
+	}
+}
+
+// A contentType behind a $ref is still declared. Reading the channel's message map without following
+// the ref finds only "$ref" and silently falls through to JSON, ignoring the document.
+func TestDeclaredContentTypeFollowsMessageRef(t *testing.T) {
+	se := executorWithSources(refMessageSources())
+	raw := sendRaw(t, se, map[string]interface{}{
+		"stepId": "send", "channelPath": "orderBus#/channels/orders", "action": "send",
+		"requestBody": map[string]interface{}{"payload": "hi"},
+	})
+	if string(raw) != "hi" {
+		t.Errorf("a $ref'd message's contentType should apply; got %q (JSON fallback means the ref was not followed)", raw)
+	}
+}
+
+// All three targeting forms must resolve to the same AsyncAPI target — the LSP navigates and validates
+// each of them, so the runtime has to execute each of them too.
+func TestResolveAsyncTargetAcceptsAllThreeForms(t *testing.T) {
+	se := executorWithSources(refMessageSources())
+	forms := []struct {
+		name string
+		step map[string]interface{}
+	}{
+		{"channelPath", map[string]interface{}{"channelPath": "orderBus#/channels/orders", "action": "send"}},
+		{"operationId", map[string]interface{}{"operationId": "placeOrder"}},
+		{"operationPath", map[string]interface{}{"operationPath": "orderBus#/operations/placeOrder"}},
+	}
+	for _, f := range forms {
+		info, isAsync := se.resolveAsyncTarget(f.step)
+		if !isAsync || info == nil {
+			t.Errorf("%s: should resolve to an AsyncAPI target, got isAsync=%v info=%v", f.name, isAsync, info)
+			continue
+		}
+		if info.ChannelAddress != "orders/new" {
+			t.Errorf("%s: expected channel orders/new, got %q", f.name, info.ChannelAddress)
+		}
+		if got := info.DeclaredContentType(); got != "text/plain" {
+			t.Errorf("%s: expected the channel's declared text/plain, got %q", f.name, got)
+		}
+	}
+}
+
+// An operationPath that addresses an OPENAPI operation must NOT be captured by the async path — REST
+// steps use the same field and have to keep reaching the HTTP executor.
+func TestOperationPathToOpenAPIStaysHTTP(t *testing.T) {
+	se := NewStepExecutor(map[string]interface{}{}, map[string]interface{}{
+		"petstore": map[string]interface{}{
+			"openapi": "3.0.0",
+			"paths": map[string]interface{}{
+				"/pets": map[string]interface{}{
+					"get": map[string]interface{}{"operationId": "listPets"},
+				},
+			},
+		},
+	}, &models.RuntimeParams{}, &telemetry.NoopSink{})
+
+	if info, isAsync := se.resolveAsyncTarget(map[string]interface{}{
+		"operationPath": "petstore#/paths/~1pets/get",
+	}); isAsync {
+		t.Errorf("an OpenAPI operationPath must fall through to the HTTP path, got isAsync=true info=%+v", info)
+	}
+}
+
+// End-to-end: a send and a receive that identify their target only by operationPath.
+func TestOperationPathAsyncRoundTrip(t *testing.T) {
+	sources := refMessageSources()
+	ops := sources["orderBus"].(map[string]interface{})["operations"].(map[string]interface{})
+	ops["consumeOrder"] = map[string]interface{}{
+		"action":  "receive",
+		"channel": map[string]interface{}{"$ref": "#/channels/orders"},
+	}
+
+	se := executorWithSources(sources)
+	state := models.NewExecutionState("wf", nil, nil, nil)
+
+	if r := se.ExecuteStep(map[string]interface{}{
+		"stepId": "emit", "operationPath": "orderBus#/operations/placeOrder",
+		"requestBody": map[string]interface{}{"payload": "ping"},
+	}, nil, state); !r.Success {
+		t.Fatalf("operationPath send failed: %s", r.Error)
+	}
+
+	r := se.ExecuteStep(map[string]interface{}{
+		"stepId": "await", "operationPath": "orderBus#/operations/consumeOrder",
+		"timeout": 500,
+		"outputs": map[string]interface{}{"got": "$message.payload"},
+	}, nil, state)
+	if !r.Success {
+		t.Fatalf("operationPath receive failed: %s", r.Error)
+	}
+	if r.Outputs["got"] != "ping" {
+		t.Errorf("expected the round-tripped text payload, got %v", r.Outputs["got"])
+	}
+}

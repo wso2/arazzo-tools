@@ -18,10 +18,15 @@ import (
 )
 
 // resolveAsyncTarget reports whether a step is an AsyncAPI step and, if so, its resolved target.
-// A step is async when it has a `channelPath`, or an `operationId` that resolves to an AsyncAPI
-// operation (OpenAPI operationIds live under `paths`, not `operations`, so they never match here).
-// For a channelPath the step is always treated as async even if resolution fails (nil info), so a
-// malformed channel hard-fails rather than silently falling through to the HTTP path.
+// A step is async when it has a `channelPath`, or an `operationId`/`operationPath` that resolves to an
+// AsyncAPI operation — all three targeting forms the spec allows, matching what the LSP already
+// navigates and validates.
+//
+// An `operationId`/`operationPath` that does NOT resolve to an AsyncAPI operation falls through to the
+// HTTP path, which is how REST steps using those same fields keep working (OpenAPI operationIds live
+// under `paths` rather than `operations`, and an OpenAPI operation has no `action`). For a channelPath
+// the step is always treated as async even if resolution fails (nil info), so a malformed channel
+// hard-fails rather than silently being executed as HTTP.
 func (se *StepExecutor) resolveAsyncTarget(step map[string]interface{}) (*AsyncInfo, bool) {
 	finder := NewAsyncFinder(se.SourceDescriptions)
 	if cp, _ := step["channelPath"].(string); strings.TrimSpace(cp) != "" {
@@ -29,6 +34,11 @@ func (se *StepExecutor) resolveAsyncTarget(step map[string]interface{}) (*AsyncI
 	}
 	if opID, _ := step["operationId"].(string); strings.TrimSpace(opID) != "" {
 		if info := finder.FindOperationByID(opID); info != nil {
+			return info, true
+		}
+	}
+	if opPath, _ := step["operationPath"].(string); strings.TrimSpace(opPath) != "" {
+		if info := finder.FindOperationByPath(opPath); info != nil {
 			return info, true
 		}
 	}
