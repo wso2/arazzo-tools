@@ -517,11 +517,14 @@ Goal: separate message **shape** (headers/payload the runtime reasons about) fro
   silently miss the declaration) — via the JSON Pointer resolver already used for channels and
   operations, in the runtime and in the LSP indexer alike. The step's value stays authoritative when present — the document is consulted
   only on omission — and a disagreement between the two logs a runtime warning.
-- **Two editor diagnostics for the same rule** (LSP): a send step where **neither** the step nor the
-  AsyncAPI document declares a content type reports, as **information**, that the message will be
-  serialized as JSON — legal, but an assumption nothing in either document states; and a step whose
-  `contentType` **disagrees** with the document's warns that the step's value overrides the AsyncAPI
-  declaration, so the published message
+- **Editor diagnostics for the same rule, in BOTH directions** (LSP). A receive chooses a serializer
+  too, so it faces the same questions — only the advice differs, since it has no `requestBody` to
+  settle anything in. Where **neither** the step nor the AsyncAPI document declares a content type,
+  **information**: the message will be serialized (or decoded) as JSON — legal, but an assumption
+  nothing in either document states. Where the document declares **more than one**, **warning**: which
+  one will be used, plus how to settle it (`contentType` on the step for a send; one format per channel
+  for a receive). And on a send whose `contentType` **disagrees** with the document, a warning that the
+  step's value overrides the AsyncAPI declaration, so the published message
   will not match the format the channel's contract describes. Both need a fact outside the Arazzo text,
   so the validator takes a second injected resolver (`WithStepContentTypeResolver`, alongside Phase 9's
   action resolver — the two are now grouped as `diagnostics.StepResolvers`). Indexing resolves each
@@ -576,7 +579,9 @@ identical either way. Three places now say it explicitly:
   (`as text/plain (9 bytes): "all clear"` vs `as application/json (6 bytes): "\"beta\""`) — the quoting
   is what makes a text `beta` (4 bytes) distinguishable from a JSON `"beta"` (6);
 - **receive log**: `decoded as <content type>`, resolved through the same chain even when the payload
-  arrived pre-decoded and no decode was needed;
+  arrived pre-decoded and no decode was needed — plus a warning when the decoder had to be GUESSED (the
+  transport carried no content type and the channel declares several), which is the case that silently
+  corrupts a payload against a real broker;
 - **the run-log span**: a `messaging.content_type` attribute on both directions, which the visualizer's
   Logs tab renders in the Channel block as **Encoder** (send) or **Decoder** (receive), beside Adapter
   and Correlation ID. `timeout` was dropped from that block — it is a value declared on the step and

@@ -24,12 +24,16 @@
 #   Step sendChosen:  ... as text/plain (5 bytes): "hello"             ← chosen, bare text
 # and the warning above appearing for the guessed steps but not the chosen one.
 #
-# The warning appears ONCE, on `sendGuessed` — the only step that actually had to guess:
+# In the RUN LOG the warning appears ONCE, on `sendGuessed` — the only step that actually had to guess:
 #   - `sendChosen` declared its own contentType, so nothing was ambiguous for it;
-#   - the receives take the content type the message itself carries, so they never consult the
-#     declaration here. (Against a real broker, which carries no content type, a receive WOULD hit the
-#     same ambiguity — and a receive step has no requestBody to settle it in. For a channel like this
-#     the durable fix is to declare one format per channel, or split the messages into two channels.)
+#   - the receives take the content type the message itself carries (the in-memory adapter passes it
+#     along), so they never consult the declaration here. Against a real broker, which carries no
+#     content type, a receive WOULD have to guess the decoder — and it warns then too.
+#
+# In the EDITOR all four steps are flagged, because the ambiguity is a property of the channel and the
+# editor cannot know what a run will carry. A receive has no requestBody to settle it in, so its
+# message points at the document instead: "declare one format per channel so the decoder is
+# unambiguous". Splitting the two message kinds into separate channels is the durable fix.
 
 arazzo: 1.1.0
 
