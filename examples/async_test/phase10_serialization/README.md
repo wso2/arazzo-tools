@@ -91,6 +91,8 @@ extension and look at the step:
 |---|---|---|
 | `02-json-default.arazzo.yaml` | `emit` | **blue/information**: no contentType on the step and none in the document — the message will be serialized as `application/json` |
 | `09-contenttype-mismatch.arazzo.yaml` | `emitJson` | **yellow/warning**: the step's contentType disagrees with the document's; the step's value overrides the AsyncAPI declaration |
+| `13-ambiguous-channel.arazzo.yaml` | `sendGuessed` | **yellow/warning**: the channel declares more than one contentType; which one will be used, and to set it on the step |
+| `13-ambiguous-channel.arazzo.yaml` | `sendChosen` | **nothing** — the step declared its own contentType, so nothing is ambiguous |
 | `12-targeting-forms.arazzo.yaml` | every step | **nothing** — the `$ref`'d declaration resolves through all three targeting forms, so there is nothing to report |
 
 If 09 shows no warning, the source index has not been built for the document — that is the bug fixed

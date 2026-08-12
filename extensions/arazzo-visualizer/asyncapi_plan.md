@@ -527,7 +527,12 @@ Goal: separate message **shape** (headers/payload the runtime reasons about) fro
   action resolver — the two are now grouped as `diagnostics.StepResolvers`). Indexing resolves each
   channel's declared type at parse time (`ChannelInfo.ContentType`) and records the channel an
   operation targets (`OperationInfo.ChannelKey`), so `channelPath`, `operationId` and `operationPath`
-  steps all reach the same declaration. Media types are compared the way the runtime keys on them
+  steps all reach the same declaration. A channel may declare SEVERAL formats (one per message), which
+  the document cannot resolve on its own — both layers keep the whole set (`ChannelInfo.ContentTypes`,
+  `AsyncInfo.DeclaredContentTypes`) rather than one value, so a third diagnostic warns that more than
+  one is declared and names the deterministic pick, and a step naming the channel's SECOND format is
+  correctly NOT reported as a disagreement. Comparison lives in `utils.SameMediaType`, shared by the
+  indexer and the validator (the runner keeps its own copy — the modules cannot import each other). Media types are compared the way the runtime keys on them
   (parameters dropped, `+json` suffix → JSON), so equivalent spellings never report a mismatch.
 
 - **A structured payload is not text.** `TextSerializer` stringified anything it didn't recognise, so
