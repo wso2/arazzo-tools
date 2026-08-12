@@ -8,7 +8,7 @@
 #
 # The message names the two lists SEPARATELY on purpose. Only JSON and text can actually encode
 # anything; Protobuf and Avro are registered so those content types resolve and fail with a clear
-# "needs schema config" message (see 04 and 05) rather than looking like a typo — but calling them
+# "not supported yet" message (see 04 and 05) rather than looking like a typo — but calling them
 # "supported" would send the reader off to try one, straight into a different failure. They are
 # completed alongside the real brokers that need them in Phase 11.
 

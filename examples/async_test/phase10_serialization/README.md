@@ -147,8 +147,11 @@ bytes-only message to exercise the real-broker decode path.
 - A `Serializer` interface (`Serialize`/`Deserialize` + `ContentType`/`Name`) and a
   `SerializerRegistry` that selects one by content type (parameters like `; charset=utf-8` stripped,
   case-insensitive, `+json` structured suffix → JSON).
-- JSON (default) and text/plain fully implemented; Protobuf/Avro registered as clear
-  "needs schema config" stubs (completed with real brokers in Phase 11).
-- The runner **serializes on send** (from `requestBody.contentType`) and **deserializes on receive**
-  when the adapter delivers only bytes — the in-memory adapter still carries the decoded payload, so
-  JSON workflows behave exactly as before.
+- JSON (default) and text/plain fully implemented; Protobuf/Avro registered as stubs that fail with a
+  plain "not supported yet" (completed with real brokers in Phase 11). A structured payload on a
+  text/plain channel is an error, not the runtime's own rendering of a map.
+- The runner **serializes on send** and **deserializes on receive** (when the adapter delivers only
+  bytes) through the precedence table above — not from `requestBody.contentType` alone. The in-memory
+  adapter still carries the decoded payload, so JSON workflows behave exactly as before.
+- Both directions report the serializer they used, and warn when they had to guess it; the editor
+  flags the same cases while authoring.
