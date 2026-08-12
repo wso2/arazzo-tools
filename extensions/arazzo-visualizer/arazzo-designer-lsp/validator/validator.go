@@ -771,33 +771,39 @@ func (v *Validator) validateComponentKeys(doc *parser.ArazzoDocument) []Validati
 	return errors
 }
 
-// validateMessageContentType surfaces how a send step's payload will actually be serialized.
+// validateMessageContentType surfaces which serializer a step's message will actually go through.
 //
 // Arazzo §5.8.14.1 on a Request Body Object's contentType: "The Content-Type for the request content.
 // If omitted then refer to Content-Type specified at the targeted operation to understand
 // serialization requirements." So the step's own value is authoritative and the AsyncAPI document is
-// consulted only in its absence — which produces exactly two things worth telling an author:
+// consulted only in its absence.
 //
-//  1. Neither declares one. Legal, and the runtime serializes as JSON — but that is an assumption
+// The same three questions are asked in BOTH directions, because both end up choosing a serializer:
+//
+//  1. Neither declares one. Legal, and the runtime falls back to JSON — but that is an assumption
 //     nothing in either document states, and it is wrong for a channel that really carries text.
 //     Reported as information: the document is correct, it is just silent.
-//  2. Both declare one and they disagree. The step's value overrides the document's (per the rule
-//     above), so the message goes out
-//     in a format the AsyncAPI document — the contract every other consumer of that channel reads —
-//     does not describe. That is a warning.
+//  2. The document declares MORE THAN ONE. Nothing then says which one this message is, so the runtime
+//     picks the first deterministically. That is a guess, and worth surfacing before it runs.
+//  3. (send only) Both declare one and they disagree. The step wins, so the message goes out in a
+//     format the AsyncAPI document — the contract every other consumer reads — does not describe.
 //
-// Only send steps carry a requestBody, so this never fires on a receive. Everything depends on
-// resolving the target: with no resolver, or a channel that cannot be reached, both checks stay quiet.
+// What differs is only the ADVICE. A send can settle it on the step; a receive has no requestBody, so
+// its only fix is in the AsyncAPI document. Everything depends on resolving the target: with no
+// resolver, or a channel that cannot be reached, every check stays quiet.
 func (v *Validator) validateMessageContentType(step *parser.Step) []ValidationError {
 	if v.resolveStepContentType == nil {
 		return nil
 	}
-	if action, known := v.stepAction(step); !known || action != "send" {
+	action, known := v.stepAction(step)
+	if !known || (action != "send" && action != "receive") {
 		return nil
 	}
+	sending := action == "send"
 
+	// Only a send can carry one: a receive step has no requestBody.
 	stepContentType := ""
-	if step.RequestBody != nil {
+	if sending && step.RequestBody != nil {
 		stepContentType = strings.TrimSpace(step.RequestBody.ContentType)
 	}
 
@@ -809,20 +815,25 @@ func (v *Validator) validateMessageContentType(step *parser.Step) []ValidationEr
 	if stepContentType == "" {
 		switch {
 		case len(declared) == 0:
+			message := fmt.Sprintf("Step '%s': the AsyncAPI document declares no 'contentType' for this channel — an incoming message that carries none itself will be decoded as 'application/json'", step.StepID)
+			if sending {
+				message = fmt.Sprintf("Step '%s': no 'contentType' on the requestBody and the AsyncAPI document declares none for this channel — the message will be serialized as 'application/json'", step.StepID)
+			}
 			return []ValidationError{{
 				Line:     step.LineNumber,
 				Column:   0,
-				Message:  fmt.Sprintf("Step '%s': no 'contentType' on the requestBody and the AsyncAPI document declares none for this channel — the message will be serialized as 'application/json'", step.StepID),
+				Message:  message,
 				Severity: "information",
 			}}
 		case len(declared) > 1:
-			// The document declares several formats for this channel and does not say which one this
-			// step sends, so the runtime picks the first deterministically. That is a guess, and the
-			// step is the place to settle it.
+			message := fmt.Sprintf("Step '%s': the AsyncAPI document declares more than one contentType for this channel (%s) — an incoming message that carries none itself will be decoded as '%s'; declare one format per channel so the decoder is unambiguous", step.StepID, strings.Join(declared, ", "), declared[0])
+			if sending {
+				message = fmt.Sprintf("Step '%s': the AsyncAPI document declares more than one contentType for this channel (%s) — '%s' will be used; set 'contentType' on the requestBody to choose explicitly", step.StepID, strings.Join(declared, ", "), declared[0])
+			}
 			return []ValidationError{{
 				Line:     step.LineNumber,
 				Column:   0,
-				Message:  fmt.Sprintf("Step '%s': the AsyncAPI document declares more than one contentType for this channel (%s) — '%s' will be used; set 'contentType' on the requestBody to choose explicitly", step.StepID, strings.Join(declared, ", "), declared[0]),
+				Message:  message,
 				Severity: "warning",
 			}}
 		}

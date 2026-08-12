@@ -956,18 +956,36 @@ func TestContentTypeMismatchWarns(t *testing.T) {
 	}
 }
 
-// A receive step has no requestBody, so neither check applies to it.
-func TestContentTypeChecksSkipReceiveSteps(t *testing.T) {
-	doc, err := parser.NewParser().Parse(docWith(contentTypeBus,
-		"      - stepId: await\n        channelPath: bus#/channels/orders\n        action: receive\n        correlationId: $inputs.id\n"))
-	if err != nil {
-		t.Fatalf("parse failed: %v", err)
+// A receive chooses a DECODER, so it faces the same two questions a send does — but it has no
+// requestBody, so the wording points at the AsyncAPI document instead of at the step.
+func TestContentTypeChecksOnReceiveSteps(t *testing.T) {
+	step := "      - stepId: await\n        channelPath: bus#/channels/orders\n        action: receive\n        correlationId: $inputs.id\n"
+
+	// Nothing declared -> information, phrased for the decode side.
+	errs := diagnoseWithDeclaredContentTypes(t, docWith(contentTypeBus, step), nil, true, "")
+	if !has(errs, "information", "decoded as 'application/json'") {
+		t.Errorf("a receive on a channel declaring nothing should report the JSON fallback, got:%s", dump(errs))
 	}
-	errs := NewValidator().
-		WithStepContentTypeResolver(func(*parser.Step) ([]string, bool) { return nil, true }).
-		Validate(doc)
-	if has(errs, "information", "serialized as 'application/json'") {
-		t.Errorf("a receive step has no requestBody and must not be asked for a contentType, got:%s", dump(errs))
+	if has(errs, "information", "serialized as") {
+		t.Errorf("a receive must not be described as serializing, got:%s", dump(errs))
+	}
+
+	// Several declared -> warning naming which decoder will be used.
+	errs = diagnoseWithDeclaredContentTypes(t, docWith(contentTypeBus, step), []string{"application/json", "text/plain"}, true, "")
+	if !has(errs, "warning", "declares more than one contentType") {
+		t.Errorf("an ambiguous channel should warn on a receive too, got:%s", dump(errs))
+	}
+	if !has(errs, "warning", "declare one format per channel") {
+		t.Errorf("the receive advice should point at the document, not at the step, got:%s", dump(errs))
+	}
+	if has(errs, "warning", "set 'contentType' on the requestBody") {
+		t.Errorf("a receive has no requestBody, so that advice must not appear, got:%s", dump(errs))
+	}
+
+	// Exactly one declared -> the document answers it; nothing to say.
+	errs = diagnoseWithDeclaredContentTypes(t, docWith(contentTypeBus, step), []string{"text/plain"}, true, "")
+	if has(errs, "warning", "contentType") || has(errs, "information", "decoded as") {
+		t.Errorf("one declared format is unambiguous, got:%s", dump(errs))
 	}
 }
 
