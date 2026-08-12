@@ -2,6 +2,7 @@ package server
 
 import (
 	"os"
+	"slices"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -82,13 +83,13 @@ workflows:
 	steps := doc.Workflows[0].Steps
 
 	want := map[string]struct {
-		contentType string
-		resolved    bool
+		contentTypes []string
+		resolved     bool
 	}{
-		"viaChannel":       {"text/plain", true}, // $ref followed
-		"viaOperationId":   {"text/plain", true}, // operation -> channel -> $ref
-		"viaOperationPath": {"text/plain", true}, // the form the runtime previously could not execute
-		"viaBareChannel":   {"", true},           // channel resolved, declares nothing
+		"viaChannel":       {[]string{"text/plain"}, true}, // $ref followed
+		"viaOperationId":   {[]string{"text/plain"}, true}, // operation -> channel -> $ref
+		"viaOperationPath": {[]string{"text/plain"}, true}, // the form the runtime previously could not execute
+		"viaBareChannel":   {nil, true},                    // channel resolved, declares nothing
 	}
 	for i := range steps {
 		step := steps[i]
@@ -97,8 +98,8 @@ workflows:
 			continue
 		}
 		ct, resolved := s.resolveStepMessageContentType(uri, arazzo, &step)
-		if resolved != w.resolved || ct != w.contentType {
-			t.Errorf("%s: got (%q, %v), want (%q, %v)", step.StepID, ct, resolved, w.contentType, w.resolved)
+		if resolved != w.resolved || !slices.Equal(ct, w.contentTypes) {
+			t.Errorf("%s: got (%v, %v), want (%v, %v)", step.StepID, ct, resolved, w.contentTypes, w.resolved)
 		}
 	}
 }
@@ -148,7 +149,7 @@ workflows:
 		WithStepActionResolver(func(step *parser.Step) (string, bool) {
 			return s.resolveStepAsyncAction(uri, arazzo, step)
 		}).
-		WithStepContentTypeResolver(func(step *parser.Step) (string, bool) {
+		WithStepContentTypeResolver(func(step *parser.Step) ([]string, bool) {
 			return s.resolveStepMessageContentType(uri, arazzo, step)
 		})
 	errs := v.Validate(doc)

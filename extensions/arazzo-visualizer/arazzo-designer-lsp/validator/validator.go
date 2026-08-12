@@ -96,14 +96,16 @@ type Validator struct {
 	// simply stay quiet rather than guessing.
 	resolveStepAction func(step *parser.Step) (action string, ok bool)
 
-	// resolveStepContentType, when set, returns the content type the AsyncAPI document declares for
-	// the channel a step targets, and whether that channel was resolved at all. Same arrangement as
-	// resolveStepAction: the fact lives in another document, so a caller holding the index supplies it.
+	// resolveStepContentType, when set, returns every DISTINCT content type the AsyncAPI document
+	// declares for the channel a step targets, and whether that channel was resolved at all. Same
+	// arrangement as resolveStepAction: the fact lives in another document, so a caller holding the
+	// index supplies it.
 	//
-	// resolved=false means "could not be established" and every content-type check stays quiet;
-	// resolved=true with an empty content type is the meaningful case — the channel exists and declares
-	// no format, so the runtime will fall back to JSON.
-	resolveStepContentType func(step *parser.Step) (contentType string, resolved bool)
+	// resolved=false means "could not be established" and every content-type check stays quiet.
+	// resolved=true with an EMPTY slice is meaningful — the channel exists and declares no format, so
+	// the runtime falls back to JSON. More than one entry is also meaningful: the channel carries
+	// messages of different formats and the document cannot say which one a step sends.
+	resolveStepContentType func(step *parser.Step) (declared []string, resolved bool)
 }
 
 // NewValidator creates a new Validator
@@ -123,7 +125,7 @@ func (v *Validator) WithStepActionResolver(fn func(step *parser.Step) (string, b
 // WithStepContentTypeResolver returns the validator configured to resolve the content type an
 // AsyncAPI document declares for a step's channel through fn. Passing nil restores content-only
 // behaviour.
-func (v *Validator) WithStepContentTypeResolver(fn func(step *parser.Step) (string, bool)) *Validator {
+func (v *Validator) WithStepContentTypeResolver(fn func(step *parser.Step) ([]string, bool)) *Validator {
 	v.resolveStepContentType = fn
 	return v
 }
@@ -803,45 +805,52 @@ func (v *Validator) validateMessageContentType(step *parser.Step) []ValidationEr
 	if !resolved {
 		return nil
 	}
-	declared = strings.TrimSpace(declared)
 
 	if stepContentType == "" {
-		if declared != "" {
-			return nil // the document supplies it; the runtime will use that
+		switch {
+		case len(declared) == 0:
+			return []ValidationError{{
+				Line:     step.LineNumber,
+				Column:   0,
+				Message:  fmt.Sprintf("Step '%s': no 'contentType' on the requestBody and the AsyncAPI document declares none for this channel — the message will be serialized as 'application/json'", step.StepID),
+				Severity: "information",
+			}}
+		case len(declared) > 1:
+			// The document declares several formats for this channel and does not say which one this
+			// step sends, so the runtime picks the first deterministically. That is a guess, and the
+			// step is the place to settle it.
+			return []ValidationError{{
+				Line:     step.LineNumber,
+				Column:   0,
+				Message:  fmt.Sprintf("Step '%s': the AsyncAPI document declares more than one contentType for this channel (%s) — '%s' will be used; set 'contentType' on the requestBody to choose explicitly", step.StepID, strings.Join(declared, ", "), declared[0]),
+				Severity: "warning",
+			}}
 		}
-		return []ValidationError{{
-			Line:     step.LineNumber,
-			Column:   0,
-			Message:  fmt.Sprintf("Step '%s': no 'contentType' on the requestBody and the AsyncAPI document declares none for this channel — the message will be serialized as 'application/json'", step.StepID),
-			Severity: "information",
-		}}
+		return nil // exactly one declared: the document answers the question
 	}
 
-	if declared != "" && normalizeContentType(declared) != normalizeContentType(stepContentType) {
+	// A disagreement is only a disagreement when the step's format is NOT one the document declares.
+	// On a channel carrying several formats, naming the second one is correct, not a contradiction.
+	if len(declared) > 0 && !containsMediaType(declared, stepContentType) {
 		return []ValidationError{{
 			Line:     step.LineNumber,
 			Column:   0,
-			Message:  fmt.Sprintf("Step '%s': requestBody 'contentType' is '%s' but the AsyncAPI document declares '%s' for this channel — the value declared in this step overrides the AsyncAPI declaration, so this message will not match the format the document describes", step.StepID, stepContentType, declared),
+			Message:  fmt.Sprintf("Step '%s': requestBody 'contentType' is '%s' but the AsyncAPI document declares '%s' for this channel — the value declared in this step overrides the AsyncAPI declaration, so this message will not match the format the document describes", step.StepID, stepContentType, strings.Join(declared, ", ")),
 			Severity: "warning",
 		}}
 	}
 	return nil
 }
 
-// normalizeContentType reduces a media type to what the runtime's serializer registry actually keys
-// on, so two spellings the runtime treats identically are never reported as a mismatch: parameters
-// ("; charset=utf-8") are dropped, case is folded, and a `+json` structured suffix resolves to
-// application/json — "application/vnd.order+json" and "application/json" select the same serializer,
-// so they do not disagree about the wire format.
-func normalizeContentType(contentType string) string {
-	ct := strings.TrimSpace(strings.ToLower(contentType))
-	if i := strings.IndexByte(ct, ';'); i >= 0 {
-		ct = strings.TrimSpace(ct[:i])
+// containsMediaType reports whether the document declares this wire format for the channel, comparing
+// the way the runtime's registry keys on it so equivalent spellings never read as a disagreement.
+func containsMediaType(declared []string, contentType string) bool {
+	for _, d := range declared {
+		if utils.SameMediaType(d, contentType) {
+			return true
+		}
 	}
-	if strings.HasSuffix(ct, "+json") {
-		return "application/json"
-	}
-	return ct
+	return false
 }
 
 // validateDependsOn validates step-level dependsOn references (spec §5.8.3).

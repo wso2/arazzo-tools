@@ -27,14 +27,14 @@ func NewDiagnosticsProvider() *DiagnosticsProvider {
 //
 //   - Action — the direction (send/receive) an `operationId`/`operationPath` step targets, which the
 //     Arazzo text only states when the step writes `action:` itself.
-//   - ContentType — the content type the AsyncAPI document declares for the step's channel, plus
+//   - ContentType — every content type the AsyncAPI document declares for the step's channel, plus
 //     whether that channel was resolved at all.
 //
 // These are PER-CALL values rather than provider state: diagnostics for different documents must never
 // share a resolver, or one document's validation could resolve against another's sources.
 type StepResolvers struct {
 	Action      func(step *parser.Step) (action string, ok bool)
-	ContentType func(step *parser.Step) (contentType string, resolved bool)
+	ContentType func(step *parser.Step) (declared []string, resolved bool)
 }
 
 // ProvideDiagnostics generates diagnostics for the given content, using resolvers for the facts that

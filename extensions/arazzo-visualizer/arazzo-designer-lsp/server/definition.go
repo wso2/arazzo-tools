@@ -288,26 +288,27 @@ func (s *Server) resolveStepAsyncAction(uri protocol.DocumentURI, content string
 // The two return values answer different questions, and the validator needs both:
 //   - resolved=false — the target could not be reached (undeclared source, unindexed file, an OpenAPI
 //     operation). Nothing can be said, so the content-type diagnostics stay quiet.
-//   - resolved=true with contentType="" — the channel WAS found and declares no content type, which is
-//     precisely when the runtime silently falls back to JSON.
+//   - resolved=true with an empty slice — the channel WAS found and declares no content type, which
+//     is precisely when the runtime silently falls back to JSON. More than one entry means the channel
+//     carries messages of different formats and the document cannot say which one a step sends.
 //
 // It reaches the channel the same way navigation does: a `channelPath` addresses one directly, while
 // an `operationId`/`operationPath` resolves to an operation whose indexed ChannelKey points at it.
-func (s *Server) resolveStepMessageContentType(uri protocol.DocumentURI, content string, step *parser.Step) (contentType string, resolved bool) {
+func (s *Server) resolveStepMessageContentType(uri protocol.DocumentURI, content string, step *parser.Step) (declared []string, resolved bool) {
 	if step == nil {
-		return "", false
+		return nil, false
 	}
 	sources := s.ensureSourcesIndexed(uri, content) // see resolveStepAsyncAction on why this indexes
 	if len(sources) == 0 {
-		return "", false
+		return nil, false
 	}
 
 	if step.ChannelPath != "" {
 		ch, found := s.lookupChannelInSources(sources, step.ChannelPath)
 		if !found || ch == nil {
-			return "", false
+			return nil, false
 		}
-		return ch.ContentType, true
+		return ch.ContentTypes, true
 	}
 
 	var op *navigation.OperationInfo
@@ -318,16 +319,16 @@ func (s *Server) resolveStepMessageContentType(uri protocol.DocumentURI, content
 	case step.OperationPath != "":
 		op, found = s.lookupOperationByPath(sources, step.OperationPath)
 	default:
-		return "", false
+		return nil, false
 	}
 	if !found || op == nil || op.ChannelKey == "" {
-		return "", false // no channel reference: an OpenAPI operation, or an unresolvable one
+		return nil, false // no channel reference: an OpenAPI operation, or an unresolvable one
 	}
 	ch, ok := s.operationIndex.LookupChannelInFile(op.FileURI, op.ChannelKey)
 	if !ok || ch == nil {
-		return "", false
+		return nil, false
 	}
-	return ch.ContentType, true
+	return ch.ContentTypes, true
 }
 
 // sourceFileURI returns the resolved file URI for the source description with the given name (or "").

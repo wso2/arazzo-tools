@@ -109,14 +109,14 @@ operations:
 	}
 
 	// A message's own contentType wins.
-	if got := byKey["orders"].ContentType; got != "text/plain" {
+	if got := first(byKey["orders"].ContentTypes); got != "text/plain" {
 		t.Errorf("orders: message contentType should win, got %q", got)
 	}
 	// No message declaration -> the document's root defaultContentType applies (AsyncAPI 3.0 MUST).
-	if got := byKey["confirmations"].ContentType; got != "application/json" {
+	if got := first(byKey["confirmations"].ContentTypes); got != "application/json" {
 		t.Errorf("confirmations: should fall back to defaultContentType, got %q", got)
 	}
-	if got := byKey["plain"].ContentType; got != "application/json" {
+	if got := first(byKey["plain"].ContentTypes); got != "application/json" {
 		t.Errorf("plain: should fall back to defaultContentType, got %q", got)
 	}
 
@@ -146,7 +146,7 @@ channels:
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if got := f.Channels[0].ContentType; got != "" {
+	if got := first(f.Channels[0].ContentTypes); got != "" {
 		t.Errorf("a document declaring nothing should resolve to an empty content type, got %q", got)
 	}
 }
@@ -181,7 +181,7 @@ components:
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if got := f.Channels[0].ContentType; got != "text/plain" {
+	if got := first(f.Channels[0].ContentTypes); got != "text/plain" {
 		t.Errorf("a $ref'd message's contentType should resolve, got %q", got)
 	}
 }
@@ -210,7 +210,61 @@ channels:
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if got := f.Channels[0].ContentType; got != "" {
+	if got := first(f.Channels[0].ContentTypes); got != "" {
 		t.Errorf("an unresolvable ref declares nothing, got %q", got)
+	}
+}
+
+// first returns the leading declared content type, which is what the runtime picks.
+func first(types []string) string {
+	if len(types) == 0 {
+		return ""
+	}
+	return types[0]
+}
+
+// A channel whose messages declare DIFFERENT formats keeps both, so the editor can tell an author
+// the document does not answer which one a step sends.
+func TestParseAsyncAPIMultipleContentTypes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mixed.asyncapi.yaml")
+	content := `asyncapi: 3.0.0
+info:
+  title: Mixed
+  version: 1.0.0
+channels:
+  mixed:
+    address: notify/mixed
+    messages:
+      alphaJson:
+        contentType: application/json
+      betaText:
+        contentType: text/plain
+  sameFormatTwice:
+    address: notify/same
+    messages:
+      a:
+        contentType: application/json
+      b:
+        contentType: application/vnd.order+json
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := ParseOpenAPIFile(utils.PathToURI(path))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	byKey := map[string][]string{}
+	for _, ch := range f.Channels {
+		byKey[ch.Key] = ch.ContentTypes
+	}
+
+	if got := byKey["mixed"]; len(got) != 2 || got[0] != "application/json" || got[1] != "text/plain" {
+		t.Errorf("both declared formats should be kept in sorted-message order, got %v", got)
+	}
+	// Two spellings of ONE format are not two formats.
+	if got := byKey["sameFormatTwice"]; len(got) != 1 {
+		t.Errorf("equivalent spellings should collapse to one entry, got %v", got)
 	}
 }

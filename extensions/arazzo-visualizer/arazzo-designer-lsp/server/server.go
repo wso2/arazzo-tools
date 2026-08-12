@@ -354,7 +354,7 @@ func (s *Server) provideDiagnostics(ctx context.Context, uri protocol.DocumentUR
 		Action: func(step *parser.Step) (string, bool) {
 			return s.resolveStepAsyncAction(uri, content, step)
 		},
-		ContentType: func(step *parser.Step) (string, bool) {
+		ContentType: func(step *parser.Step) ([]string, bool) {
 			return s.resolveStepMessageContentType(uri, content, step)
 		},
 	}

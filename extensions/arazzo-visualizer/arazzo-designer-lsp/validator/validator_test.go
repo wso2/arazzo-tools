@@ -869,13 +869,17 @@ func TestExampleFixtures(t *testing.T) {
 // resolved reports whether that channel could be reached at all.
 func diagnoseWithContentType(t *testing.T, content, declared string, resolved bool) []ValidationError {
 	t.Helper()
-	return diagnoseWithContentTypeAction(t, content, declared, resolved, "send")
+	var types []string
+	if declared != "" {
+		types = []string{declared}
+	}
+	return diagnoseWithDeclaredContentTypes(t, content, types, resolved, "send")
 }
 
 // diagnoseWithContentTypeAction is the same with the operation's action spelled out. The action
 // resolver stands in for the LSP's operation index and is deliberately INDEPENDENT of step.Action —
 // it reports what the AsyncAPI document declares, which is the whole point of the hook.
-func diagnoseWithContentTypeAction(t *testing.T, content, declared string, resolved bool, opAction string) []ValidationError {
+func diagnoseWithDeclaredContentTypes(t *testing.T, content string, declared []string, resolved bool, opAction string) []ValidationError {
 	t.Helper()
 	doc, err := parser.NewParser().Parse(content)
 	if err != nil {
@@ -885,7 +889,7 @@ func diagnoseWithContentTypeAction(t *testing.T, content, declared string, resol
 		WithStepActionResolver(func(*parser.Step) (string, bool) {
 			return opAction, opAction != ""
 		}).
-		WithStepContentTypeResolver(func(step *parser.Step) (string, bool) {
+		WithStepContentTypeResolver(func(step *parser.Step) ([]string, bool) {
 			return declared, resolved
 		})
 	return v.Validate(doc)
@@ -960,7 +964,7 @@ func TestContentTypeChecksSkipReceiveSteps(t *testing.T) {
 		t.Fatalf("parse failed: %v", err)
 	}
 	errs := NewValidator().
-		WithStepContentTypeResolver(func(*parser.Step) (string, bool) { return "", true }).
+		WithStepContentTypeResolver(func(*parser.Step) ([]string, bool) { return nil, true }).
 		Validate(doc)
 	if has(errs, "information", "serialized as 'application/json'") {
 		t.Errorf("a receive step has no requestBody and must not be asked for a contentType, got:%s", dump(errs))
@@ -979,14 +983,49 @@ func TestContentTypeChecksFollowTheOperationAction(t *testing.T) {
           payload: "hi"
 `
 
-	errs := diagnoseWithContentTypeAction(t, docWith(contentTypeBus, step), "text/plain", true, "send")
+	errs := diagnoseWithDeclaredContentTypes(t, docWith(contentTypeBus, step), []string{"text/plain"}, true, "send")
 	if !has(errs, "warning", "overrides the AsyncAPI declaration") {
 		t.Errorf("the step runs as a send, so the content-type mismatch must be reported, got:%s", dump(errs))
 	}
 
 	// The reverse: the operation really is a receive, so the send-only checks stay quiet.
-	errs = diagnoseWithContentTypeAction(t, docWith(contentTypeBus, step), "text/plain", true, "receive")
+	errs = diagnoseWithDeclaredContentTypes(t, docWith(contentTypeBus, step), []string{"text/plain"}, true, "receive")
 	if has(errs, "warning", "overrides the AsyncAPI declaration") {
 		t.Errorf("a receive has no requestBody content type to check, got:%s", dump(errs))
+	}
+}
+
+// A channel carrying messages of DIFFERENT formats cannot answer which one a step sends, so a step
+// that declares nothing gets a warning naming both — and the runtime's deterministic pick.
+func TestAmbiguousChannelContentTypeWarns(t *testing.T) {
+	silent := "      - stepId: emit\n        operationId: recordAudit\n        requestBody:\n          payload: \"hi\"\n"
+	declared := []string{"application/json", "text/plain"}
+
+	errs := diagnoseWithDeclaredContentTypes(t, docWith(contentTypeBus, silent), declared, true, "send")
+	if !has(errs, "warning", "declares more than one contentType") {
+		t.Errorf("an ambiguous channel should warn when the step declares nothing, got:%s", dump(errs))
+	}
+	if has(errs, "information", "serialized as 'application/json'") {
+		t.Errorf("the document DOES declare formats, so the JSON-fallback notice must not fire, got:%s", dump(errs))
+	}
+
+	// The step settles it -> silent, whichever of the declared formats it names.
+	for _, chosen := range []string{"text/plain", "application/json"} {
+		step := "      - stepId: emit\n        operationId: recordAudit\n        requestBody:\n          contentType: " + chosen + "\n          payload: \"hi\"\n"
+		errs = diagnoseWithDeclaredContentTypes(t, docWith(contentTypeBus, step), declared, true, "send")
+		if has(errs, "warning", "declares more than one contentType") {
+			t.Errorf("%s: a step that declares its own contentType has settled the ambiguity, got:%s", chosen, dump(errs))
+		}
+		// ...and naming the channel's SECOND format is not a disagreement.
+		if has(errs, "warning", "overrides the AsyncAPI declaration") {
+			t.Errorf("%s: naming a format the channel declares is not a mismatch, got:%s", chosen, dump(errs))
+		}
+	}
+
+	// A format the channel does NOT declare is still a mismatch, and the message names both.
+	step := "      - stepId: emit\n        operationId: recordAudit\n        requestBody:\n          contentType: application/avro\n          payload: \"hi\"\n"
+	errs = diagnoseWithDeclaredContentTypes(t, docWith(contentTypeBus, step), declared, true, "send")
+	if !has(errs, "warning", "overrides the AsyncAPI declaration") {
+		t.Errorf("a format the channel does not declare should warn, got:%s", dump(errs))
 	}
 }
