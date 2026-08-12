@@ -1,6 +1,9 @@
 package executor
 
 import (
+	"bytes"
+	"log"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -837,5 +840,50 @@ func TestSendPublishesResolvedContentType(t *testing.T) {
 		if string(msg.Raw) != c.wantRaw {
 			t.Errorf("%q: raw = %q, want %q", c.declared, msg.Raw, c.wantRaw)
 		}
+	}
+}
+
+// A receive chooses a decoder too. When the transport carries no content type (MQTT 3.1.1, WebSocket)
+// and the channel declares several formats, the decoder is a guess — and a wrong guess corrupts the
+// payload silently, so it must be said out loud. Mirrors the send-side warning.
+func TestReceiveWarnsWhenDecoderIsGuessed(t *testing.T) {
+	mixed := map[string]interface{}{
+		"orderBus": map[string]interface{}{
+			"asyncapi": "3.0.0",
+			"channels": map[string]interface{}{
+				"orders": map[string]interface{}{
+					"address": "orders/new",
+					"messages": map[string]interface{}{
+						"alphaJson": map[string]interface{}{"contentType": "application/json"},
+						"betaText":  map[string]interface{}{"contentType": "text/plain"},
+					},
+				},
+			},
+		},
+	}
+
+	capture := func(seed *Message) string {
+		var buf bytes.Buffer
+		log.SetOutput(&buf)
+		defer log.SetOutput(os.Stderr)
+
+		se := executorWithSources(mixed)
+		_ = se.AsyncAdapter.Send("orders/new", seed)
+		se.ExecuteStep(map[string]interface{}{
+			"stepId": "recv", "channelPath": "orderBus#/channels/orders", "action": "receive", "timeout": 500,
+		}, nil, models.NewExecutionState("wf", nil, nil, nil))
+		return buf.String()
+	}
+
+	// Bytes only, as a real broker delivers: the decoder had to be guessed.
+	got := capture(&Message{Raw: []byte(`{"a":1}`)})
+	if !strings.Contains(got, "declares more than one") {
+		t.Errorf("an unlabelled message on an ambiguous channel should warn, got:\n%s", got)
+	}
+
+	// The transport named the format, so nothing was guessed and there is nothing to warn about.
+	got = capture(&Message{Raw: []byte("plain words"), ContentType: "text/plain"})
+	if strings.Contains(got, "declares more than one") {
+		t.Errorf("a message carrying its own contentType leaves nothing ambiguous, got:\n%s", got)
 	}
 }

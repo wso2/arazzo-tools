@@ -313,7 +313,18 @@ func (se *StepExecutor) executeReceive(step map[string]interface{}, info *AsyncI
 	// still needs to see which decoder governs the channel.
 	contentType := strings.TrimSpace(msg.ContentType)
 	if contentType == "" {
-		contentType = info.DeclaredContentType()
+		// The transport said nothing, so the document decides — and if it declares several formats it
+		// cannot say which one THIS message is. Unlike a send, there is nothing on the step to settle it
+		// with (a receive has no requestBody), so the fix is in the AsyncAPI document. Same shape as the
+		// send-side warning in resolveSendContentType.
+		declared := info.DeclaredContentTypes()
+		if len(declared) > 1 {
+			log.Printf("Warning: step %s: the message carried no contentType and channel %q declares more than one (%s); decoding as %q — declare one format per channel so the decoder is unambiguous",
+				stepID, channel, strings.Join(declared, ", "), declared[0])
+		}
+		if len(declared) > 0 {
+			contentType = declared[0]
+		}
 	}
 	// One lookup, used both to name the format the way the registry does (which also turns "nothing
 	// declared" into the JSON default) and to decode below.
