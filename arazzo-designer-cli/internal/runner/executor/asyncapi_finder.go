@@ -227,17 +227,24 @@ func resolveLocalRef(doc, obj map[string]interface{}) map[string]interface{} {
 // visited in sorted key order so a channel carrying several message definitions resolves the same way
 // on every run (Go randomizes map iteration).
 func (info *AsyncInfo) DeclaredContentType() string {
-	ct, _ := info.declaredContentType()
-	return ct
+	if types := info.DeclaredContentTypes(); len(types) > 0 {
+		return types[0]
+	}
+	return ""
 }
 
-// declaredContentType is DeclaredContentType plus whether the answer had to be guessed: true when the
-// channel's messages declare more than one DIFFERENT format, so nothing in the document says which one
-// a given step sends. Kept separate from the warning itself, because whether that guess MATTERS
-// depends on the caller — a step that declares its own contentType is unaffected by the ambiguity.
-func (info *AsyncInfo) declaredContentType() (contentType string, ambiguous bool) {
+// DeclaredContentTypes returns every DISTINCT format the AsyncAPI document declares for this target's
+// channel, in sorted-message-key order. Usually one; more than one means the channel carries messages
+// of different formats and the document alone cannot say which one a given step sends.
+//
+// A channel's messages may be written inline or as `$ref`s into `components.messages` — the idiomatic
+// form in a real document — so each is dereferenced before its contentType is read. When no message
+// declares one, the document's root `defaultContentType` applies ("When omitted, the value MUST be the
+// one specified on the defaultContentType field", AsyncAPI 3.0 Message Object) and is returned as the
+// single entry. Empty when the document declares nothing at all.
+func (info *AsyncInfo) DeclaredContentTypes() []string {
 	if info == nil {
-		return "", false
+		return nil
 	}
 	messages := toMap(info.Channel["messages"])
 	names := make([]string, 0, len(messages))
@@ -246,27 +253,35 @@ func (info *AsyncInfo) declaredContentType() (contentType string, ambiguous bool
 	}
 	sort.Strings(names)
 
-	first := ""
+	var types []string
 	for _, name := range names {
 		message := resolveLocalRef(info.Doc, toMap(messages[name]))
 		ct, ok := message["contentType"].(string)
 		ct = strings.TrimSpace(ct)
-		if !ok || ct == "" {
+		if !ok || ct == "" || containsMediaType(types, ct) {
 			continue
 		}
-		if first == "" {
-			first = ct
-			continue
-		}
-		if !sameMediaType(first, ct) {
-			ambiguous = true
+		types = append(types, ct)
+	}
+	if len(types) > 0 {
+		return types
+	}
+	if defaultContentType, _ := info.Doc["defaultContentType"].(string); strings.TrimSpace(defaultContentType) != "" {
+		return []string{strings.TrimSpace(defaultContentType)}
+	}
+	return nil
+}
+
+// containsMediaType reports whether types already holds this wire format. Compared with sameMediaType
+// so two spellings of one format ("application/json" and "application/vnd.order+json") count once —
+// they select the same serializer, so the channel is not carrying two formats.
+func containsMediaType(types []string, contentType string) bool {
+	for _, t := range types {
+		if sameMediaType(t, contentType) {
+			return true
 		}
 	}
-	if first != "" {
-		return first, ambiguous
-	}
-	defaultContentType, _ := info.Doc["defaultContentType"].(string)
-	return strings.TrimSpace(defaultContentType), false
+	return false
 }
 
 // ActionMismatch reports whether a step's declared `action` contradicts the resolved operation's

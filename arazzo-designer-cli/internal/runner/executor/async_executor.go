@@ -227,21 +227,40 @@ func (se *StepExecutor) executeSend(step map[string]interface{}, info *AsyncInfo
 // above. It is worth a warning though, because the AsyncAPI document is the contract other consumers
 // of the channel read, and publishing a format it doesn't describe is usually a mistake.
 func resolveSendContentType(stepContentType string, info *AsyncInfo, stepID, channel string) string {
-	declared, ambiguous := info.declaredContentType()
+	declared := info.DeclaredContentTypes()
+
 	if strings.TrimSpace(stepContentType) == "" {
-		// A channel may define several messages declaring DIFFERENT formats, and nothing then says which
-		// one this step sends — the value above is a deterministic guess. Only worth saying when the step
-		// did NOT declare its own contentType: a step that did has already settled it, and telling it to
-		// "set contentType" would be advice it has followed.
-		if ambiguous {
-			log.Printf("Warning: step %s: channel %q declares messages with different contentTypes; using %q — set 'contentType' on the step's requestBody to choose explicitly", stepID, channel, declared)
+		if len(declared) == 0 {
+			return "" // nothing declared anywhere: the registry's default (JSON) applies
 		}
-		return declared
+		// More than one declared format means the channel carries messages of different kinds and the
+		// document does not say which one THIS step sends — the first is a deterministic pick, not an
+		// answer. Only worth saying when the step declared nothing itself: a step that did has already
+		// settled it, and telling it to "set contentType" would be advice it has followed.
+		if len(declared) > 1 {
+			log.Printf("Warning: step %s: channel %q declares more than one contentType (%s); using %q — set 'contentType' on the step's requestBody to choose explicitly",
+				stepID, channel, strings.Join(declared, ", "), declared[0])
+		}
+		return declared[0]
 	}
-	if declared != "" && !sameMediaType(declared, stepContentType) {
-		log.Printf("Warning: step %s: requestBody contentType %q differs from the %q declared by the AsyncAPI document for channel %q; the value declared in this step overrides the AsyncAPI declaration", stepID, stepContentType, declared, channel)
+
+	// A disagreement is only a disagreement when the step's format is NOT one the document declares.
+	// Comparing against a single pick would falsely flag a step that correctly named the channel's
+	// SECOND message format.
+	if len(declared) > 0 && !containsMediaType(declared, stepContentType) {
+		log.Printf("Warning: step %s: requestBody contentType %q differs from the %s declared by the AsyncAPI document for channel %q; the value declared in this step overrides the AsyncAPI declaration",
+			stepID, stepContentType, strings.Join(quoteAll(declared), " / "), channel)
 	}
 	return stepContentType
+}
+
+// quoteAll renders content types for a message, each in quotes.
+func quoteAll(types []string) []string {
+	out := make([]string, len(types))
+	for i, t := range types {
+		out[i] = fmt.Sprintf("%q", t)
+	}
+	return out
 }
 
 // executeReceive waits for a (optionally correlated) message on the channel, exposes it as $message,
