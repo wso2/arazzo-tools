@@ -10,8 +10,9 @@
 # the first message in sorted key order (`alphaJson` → application/json) so a run is repeatable, and
 # it says out loud that it guessed:
 #
-#   Warning: step sendGuessed: channel "notify/mixed" declares messages with different contentTypes;
-#   using "application/json" — set 'contentType' on the step's requestBody to choose explicitly
+#   Warning: step sendGuessed: channel "notify/mixed" declares more than one contentType
+#   (application/json, text/plain); using "application/json" — set 'contentType' on the step's
+#   requestBody to choose explicitly
 #
 # The second step does exactly that and the warning disappears for it — the step's own contentType
 # always wins over the document (Arazzo §5.8.14.1), so declaring it removes the ambiguity entirely.
