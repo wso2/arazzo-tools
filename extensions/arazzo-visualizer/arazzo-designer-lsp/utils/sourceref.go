@@ -105,3 +105,24 @@ func SplitJSONPointer(pointer string) []string {
 	}
 	return tokens
 }
+
+// SameMediaType reports whether two content types resolve to the same wire format. Parameters are
+// dropped and a `+json` structured suffix counts as JSON, so "application/vnd.order+json",
+// "application/json" and "application/json; charset=utf-8" all compare equal — the runner's serializer
+// registry selects one serializer for all three, so nothing disagrees about the format.
+//
+// Mirrors sameMediaType in the runner's executor package. The two modules cannot import each other, so
+// the rule is stated once per module rather than in each package that needs it.
+func SameMediaType(a, b string) bool {
+	fold := func(ct string) string {
+		ct = strings.TrimSpace(strings.ToLower(ct))
+		if i := strings.IndexByte(ct, ';'); i >= 0 {
+			ct = strings.TrimSpace(ct[:i])
+		}
+		if strings.HasSuffix(ct, "+json") {
+			return "application/json"
+		}
+		return ct
+	}
+	return fold(a) == fold(b)
+}
