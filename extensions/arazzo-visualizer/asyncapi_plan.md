@@ -1098,12 +1098,14 @@ server's greeting banner.
 | receive timeout when the step declares `<= 0` | 30s |
 
 **Tests** ([adapter_phase11_test.go](../../arazzo-designer-cli/internal/runner/executor/adapter_phase11_test.go)) —
-11 tests, all runnable with no network: buffer raw-byte correlation; WS round trip, connect failure,
+10 tests, all runnable with no network: buffer raw-byte correlation; WS round trip, connect failure,
 and a **full `ExecuteStep` end-to-end against a real local WebSocket echo server** (`httptest`); MQTT
 subscribe-before-publish, round trip, timeout and broker-URL mapping through the fake client; adapter
 selection incl. kafka/unknown errors, in-memory fallback and per-broker caching. Plus an **opt-in real
 broker integration test** gated on `ARAZZO_TEST_MQTT_BROKER` (verified green against
-broker.hivemq.com), so CI never depends on public infrastructure.
+broker.hivemq.com), so CI never depends on public infrastructure. Correlation locations and
+pre-subscription add 13 and 6 more (`correlation_location_test.go`, `prewarm_test.go`), plus 2 driving
+the real LSP server — 31 across both modules, all offline.
 
 **Examples** — [examples/async_test/phase11/phase11_common/](../../examples/async_test/phase11/phase11_common). Unusually, the network
 ones run against the **real public internet**; all ten were re-verified after the Phase-10 restack.
@@ -1142,9 +1144,8 @@ the transport carried no content type. Phase 10 had independently built a fuller
 problem — `AsyncInfo.DeclaredContentTypes()`, which follows `$ref`s, honours `defaultContentType`, and
 warns on ambiguity — so **`channelMessageContentType` was dropped from the call path in favour of it**.
 Example 06 is the proof, since MQTT carries no content-type field: it logs `decoded as text/plain` and
-returns a bare string rather than failing a JSON parse. **`channelMessageContentType` in
-`adapter_select.go` is now dead code** — no production callers, only its own unit test — and should be
-deleted along with `TestChannelMessageContentType`.
+returns a bare string rather than failing a JSON parse. `channelMessageContentType` and its unit test
+were removed once nothing called them.
 
 **Pre-subscription — the lazy-subscription window, now closed.** `ensureSubscribed` (MQTT) /
 `ensureConn` (WS) used to be reached only from `Send` and `Receive`, i.e. by the first step that
