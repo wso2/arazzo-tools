@@ -71,6 +71,15 @@ func (a *WSAdapter) Send(channel string, msg *Message) error {
 	return nil
 }
 
+// Subscribe dials the channel's connection and starts its reader goroutine early. A WebSocket has no
+// subscribe step — the connection IS the subscription, and the server can push a frame the moment it
+// is open — so connecting up front is exactly what stops an early frame being missed. It also means a
+// server that greets on connect is greeted at workflow start rather than at the receive step.
+func (a *WSAdapter) Subscribe(channel string) error {
+	_, err := a.ensureConn(channel)
+	return err
+}
+
 // Receive waits for a message on the channel. The connection's reader goroutine feeds everything the
 // server pushes into the buffer; this consumes the first match (FIFO or by correlation id).
 func (a *WSAdapter) Receive(channel string, corr Correlation, timeout time.Duration) (*Message, error) {

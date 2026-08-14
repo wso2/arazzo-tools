@@ -87,6 +87,11 @@ func (a *MQTTAdapter) Send(channel string, msg *Message) error {
 	return nil
 }
 
+// Subscribe connects and subscribes to the topic without publishing anything, so messages that arrive
+// before the receive step is reached are already being captured. This is the same call Send and
+// Receive make lazily; doing it up front is the only difference.
+func (a *MQTTAdapter) Subscribe(channel string) error { return a.ensureSubscribed(channel) }
+
 // Receive waits for a message on the topic; the subscription callback feeds the shared buffer and
 // this consumes the first match (FIFO or by correlation id).
 func (a *MQTTAdapter) Receive(channel string, corr Correlation, timeout time.Duration) (*Message, error) {
