@@ -274,6 +274,11 @@ func (r *ArazzoRunner) ExecuteWorkflow(workflowID string, inputs map[string]inte
 		}
 	}
 
+	// Start listening on every channel this workflow will receive on BEFORE running step 1. A broker
+	// does not replay messages that arrived while nobody was subscribed, so a channel first touched
+	// halfway through the run would silently miss anything published before that point.
+	r.StepExecutor.PrewarmAsyncChannels(steps)
+
 	// Execute steps sequentially
 	stepIndex := 0
 	retryCount := map[string]int{}
