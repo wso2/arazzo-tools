@@ -31,6 +31,11 @@ func (a *InMemoryAdapter) Send(channel string, msg *Message) error {
 	return nil
 }
 
+// Subscribe is a no-op: there is no broker to register with, and the channel's queue already exists
+// (and is written to) from the moment anything sends on it. Nothing can be missed here, so nothing
+// needs warming up.
+func (a *InMemoryAdapter) Subscribe(string) error { return nil }
+
 // Receive returns (and consumes) the first matching un-consumed message on the channel, polling until
 // one is available or the timeout elapses. An empty corr.ID matches the next message (FIFO).
 func (a *InMemoryAdapter) Receive(channel string, corr Correlation, timeout time.Duration) (*Message, error) {

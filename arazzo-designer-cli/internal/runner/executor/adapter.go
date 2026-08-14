@@ -48,6 +48,15 @@ type Adapter interface {
 	Name() string
 	// Send publishes msg on the given channel (broker topic/queue/address).
 	Send(channel string, msg *Message) error
+	// Subscribe starts capturing messages on channel into the adapter's buffer, so they are held
+	// until some Receive consumes them. Called once per channel before the workflow's first step, so
+	// a message published between the run starting and the receive step being reached is not lost —
+	// a broker does not replay what arrived while nobody was listening.
+	//
+	// What it means depends on the transport: MQTT subscribes to the topic, WebSocket dials the
+	// channel's connection and starts its reader, and the in-memory adapter has nothing to do (its
+	// queues exist from the start). Calling it more than once for a channel is harmless.
+	Subscribe(channel string) error
 	// Receive waits up to timeout for a message on channel matching corr; with an empty
 	// corr.ID it returns the next available message (FIFO).
 	// It returns ErrReceiveTimeout if none arrives in time.
