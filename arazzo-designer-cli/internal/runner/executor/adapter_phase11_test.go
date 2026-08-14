@@ -149,6 +149,9 @@ type fakeMQTTClient struct {
 	mu        sync.Mutex
 	connected bool
 	subs      map[string]mqtt.MessageHandler
+	// subscribeCalls counts Subscribe calls, so a test can tell "subscribed once" from "subscribed
+	// once per step that mentions the channel".
+	subscribeCalls int
 }
 
 func newFakeMQTTClient() *fakeMQTTClient {
@@ -172,6 +175,7 @@ func (c *fakeMQTTClient) Subscribe(topic string, _ byte, cb mqtt.MessageHandler)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.subs[topic] = cb
+	c.subscribeCalls++
 	return &fakeToken{}
 }
 
