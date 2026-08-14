@@ -284,6 +284,60 @@ func containsMediaType(types []string, contentType string) bool {
 	return false
 }
 
+// DeclaredCorrelationLocations returns every DISTINCT place the AsyncAPI document says this channel's
+// correlation id lives, in sorted-message-key order.
+//
+// AsyncAPI 3.0 lets a Message Object carry a Correlation ID Object naming that place as a runtime
+// expression — `correlationId: {location: "$message.header#/correlationId"}`. That declaration is the
+// contract between publisher and subscriber, and honouring it is what stops a receive from matching an
+// id that merely happens to appear somewhere unrelated in another message (an id of "42" otherwise
+// matches a body containing "see ticket 42").
+//
+// BOTH the message and the Correlation ID Object may be `$ref`s (`#/components/messages/x`,
+// `#/components/correlationIds/y`) — the idiomatic form in a real document — so each is dereferenced
+// before `location` is read. A channel carrying several message kinds may declare several locations,
+// each kind knowing where its own id lives; all are returned, because an arriving message is one of
+// those kinds and the matcher must check wherever that kind keeps it.
+//
+// Empty when the document declares nothing, which is the caller's signal to fall back to searching the
+// whole message.
+func (info *AsyncInfo) DeclaredCorrelationLocations() []string {
+	if info == nil {
+		return nil
+	}
+	messages := toMap(info.Channel["messages"])
+	names := make([]string, 0, len(messages))
+	for name := range messages {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var locations []string
+	for _, name := range names {
+		message := resolveLocalRef(info.Doc, toMap(messages[name]))
+		correlation := resolveLocalRef(info.Doc, toMap(message["correlationId"]))
+		location, _ := correlation["location"].(string)
+		location = strings.TrimSpace(location)
+		if location == "" || containsExact(locations, location) {
+			continue
+		}
+		locations = append(locations, location)
+	}
+	return locations
+}
+
+// containsExact reports whether values already holds s. Unlike containsMediaType there is no
+// normalization: a correlation location is a JSON Pointer expression, where every character is
+// significant and two spellings are two different places.
+func containsExact(values []string, s string) bool {
+	for _, v := range values {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
 // ActionMismatch reports whether a step's declared `action` contradicts the resolved operation's
 // action. Returns ("", false) when there's nothing to compare (no operation action or no step
 // action). When both are present and differ, it returns the operation's action (which WINS per the
