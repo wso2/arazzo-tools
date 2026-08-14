@@ -32,7 +32,7 @@ func (a *InMemoryAdapter) Send(channel string, msg *Message) error {
 }
 
 // Receive returns (and consumes) the first matching un-consumed message on the channel, polling until
-// one is available or the timeout elapses. An empty correlationID matches the next message (FIFO).
-func (a *InMemoryAdapter) Receive(channel, correlationID string, timeout time.Duration) (*Message, error) {
-	return a.buffer.receive(channel, correlationID, timeout)
+// one is available or the timeout elapses. An empty corr.ID matches the next message (FIFO).
+func (a *InMemoryAdapter) Receive(channel string, corr Correlation, timeout time.Duration) (*Message, error) {
+	return a.buffer.receive(channel, corr, timeout)
 }

@@ -89,11 +89,11 @@ func (a *MQTTAdapter) Send(channel string, msg *Message) error {
 
 // Receive waits for a message on the topic; the subscription callback feeds the shared buffer and
 // this consumes the first match (FIFO or by correlation id).
-func (a *MQTTAdapter) Receive(channel, correlationID string, timeout time.Duration) (*Message, error) {
+func (a *MQTTAdapter) Receive(channel string, corr Correlation, timeout time.Duration) (*Message, error) {
 	if err := a.ensureSubscribed(channel); err != nil {
 		return nil, err
 	}
-	return a.buffer.receive(channel, correlationID, timeout)
+	return a.buffer.receive(channel, corr, timeout)
 }
 
 // ensureSubscribed connects on first use and subscribes to the topic once; incoming publications are

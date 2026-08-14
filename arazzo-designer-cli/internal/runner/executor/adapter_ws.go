@@ -73,11 +73,11 @@ func (a *WSAdapter) Send(channel string, msg *Message) error {
 
 // Receive waits for a message on the channel. The connection's reader goroutine feeds everything the
 // server pushes into the buffer; this consumes the first match (FIFO or by correlation id).
-func (a *WSAdapter) Receive(channel, correlationID string, timeout time.Duration) (*Message, error) {
+func (a *WSAdapter) Receive(channel string, corr Correlation, timeout time.Duration) (*Message, error) {
 	if _, err := a.ensureConn(channel); err != nil {
 		return nil, err
 	}
-	return a.buffer.receive(channel, correlationID, timeout)
+	return a.buffer.receive(channel, corr, timeout)
 }
 
 // ensureConn returns the channel's live connection, dialing (and starting its reader) if needed.
