@@ -1134,6 +1134,55 @@ returns a bare string rather than failing a JSON parse. **`channelMessageContent
 `adapter_select.go` is now dead code** — no production callers, only its own unit test — and should be
 deleted along with `TestChannelMessageContentType`.
 
+**Pre-subscription — the lazy-subscription window, now closed.** `ensureSubscribed` (MQTT) /
+`ensureConn` (WS) used to be reached only from `Send` and `Receive`, i.e. by the first step that
+touched a channel. In `send→A, receive←A, receive←B`, channel B was not subscribed until the third step
+ran, and anything a peer published to B before that moment was lost permanently — a broker does not
+replay to a late subscriber (MQTT does that only for `retained` messages, and we publish with
+`retained: false`). The `messageBuffer` never covered this: it queues what a subscription delivered, so
+it only ever spanned "arrived after subscribing, before the receive step ran".
+
+`ArazzoRunner.ExecuteWorkflow` now calls `StepExecutor.PrewarmAsyncChannels(steps)` before the step
+loop, shrinking the window to the workflow's own start — as early as this layer can reach.
+
+- **Only channels a step RECEIVES on are warmed.** Subscribing fills a buffer and only a receive
+  drains it, so a send-only channel would accumulate every message published there for the whole run
+  with nothing consuming them — unbounded growth on a busy topic, in exchange for nothing, since
+  pre-subscription exists to catch messages arriving before a receive step. Sends are unaffected: a
+  send still subscribes immediately before publishing (Phase 11's subscribe-before-publish), and a
+  channel used in both directions has a receive step and is warmed anyway.
+- **All three targeting forms resolve**, via `resolveAsyncTarget` — a channel reached by `operationId`
+  or `operationPath` is not written on the step, and those are the spec-preferred forms. Direction
+  comes from `asyncDirection`, a quiet twin of `resolveAsyncAction`: prewarm inspects every step before
+  any runs, so it must not pre-empt or duplicate the warnings a step emits when it executes.
+- **One subscription per channel**, however many steps name it.
+- **`Adapter.Subscribe(channel)` joins the interface.** MQTT subscribes to the topic; WebSocket
+  **dials** and starts its reader (a WS connection *is* the subscription — the server can push the
+  moment it is open, so connecting early is exactly what stops an early frame being missed, at the cost
+  of a greeting frame arriving at workflow start); the in-memory adapter is a no-op, its queues having
+  existed all along.
+- **A failure is a WARNING, never fatal**, naming the channel, adapter and step. Pre-subscription is an
+  optimisation and must not sink a workflow that would otherwise have run — a channel can sit behind a
+  branch the run never takes. The step that needs it retries and fails with its own precise error, so
+  the failure belongs to the step. It runs before any span exists, so it is a plain log line and never
+  becomes step telemetry.
+- **A successful warm-up is visible**, so it can be tested rather than merely assumed:
+  `Listening on 2 channel(s) before the first step: "orders/new", "orders/replies"`, emitted before any
+  step output.
+
+**Tests:** `prewarm_test.go` drives the fake MQTT broker (which, like a real one, drops messages with
+no subscriber) and asserts BOTH halves — a message published before the receive step is lost without
+pre-subscription and captured with it — plus send-only exclusion, every targeting form, per-channel
+de-duplication, and that a refusing adapter is survived rather than fatal. Four of the five fail when
+the feature is disabled, so they are not vacuous.
+**Examples:** [examples/async_test/phase11_prewarm/](../../examples/async_test/phase11_prewarm) — 01
+channels listed before step 1 (one not touched until the last step), 02 a send-only channel skipped
+even though step 1 publishes to it, 03 all three targeting forms collapsing to one subscription, 04 an
+unreachable broker warning first and the step failing second. All in-memory, so all offline — and note
+what they cannot show: in-memory pre-subscription is a no-op, so the message-capture benefit itself is
+only demonstrable against a broker that discards messages for absent subscribers, which is what the
+unit test does.
+
 **Correlation ID locations — Phase 11's own deferred item, now closed.** AsyncAPI 3.0 lets a Message
 Object declare where its correlation id lives (`correlationId: {location: "$message.header#/correlationId"}`),
 and that declaration is the contract between publisher and subscriber. Until now nothing read it: the
@@ -1206,20 +1255,9 @@ configuration.
 - **MQTT send is self-echoing by design.** Because `Send` subscribes first, the sender's own message
   comes back to it — which is what makes single-workflow round trips work, but means a receive step
   cannot distinguish "my own message" from "a peer's" except via `correlationId`.
-- **Subscription is LAZY, so there is a window in which messages are missed.** `ensureSubscribed`
-  (MQTT) / `ensureConn` (WS) are called only from `Send` and `Receive`, i.e. by **the first step that
-  touches a channel** — there is no workflow-start hook. In `send→A, receive←A, receive←B`, channel B
-  is not subscribed until the third step runs, and anything a peer published to B before that moment is
-  lost permanently (MQTT does not replay to late subscribers; we publish with `retained: false`). Note
-  that `Send` subscribing first is not a decision about where subscription belongs — it exists so the
-  broker echoes our own publication back — so channel A being covered early is incidental.
-  **The `messageBuffer` does NOT close this gap**: it queues what a subscription delivered, so it only
-  covers "arrived after subscribing but before the receive step ran". The fix is to resolve every
-  step's target up front and **subscribe to all channels the workflow will use before step 1 runs**,
-  shrinking the window to the workflow's own start. That needs `resolveAsyncTarget` per step before
-  executing any (a channel reached by `operationId`/`operationPath` is not literal on the step), moves
-  connection errors to workflow start rather than the offending step, and for WebSocket means dialing —
-  and therefore receiving the server's greeting frame — earlier.
+- Subscription is no longer lazy — every channel a step receives on is subscribed to before step 1
+  (see the block below). A **send-only** channel is still subscribed to only by the send itself, and
+  the window between a run starting and its own first step remains, being outside this layer.
 - Correlation now honours the AsyncAPI **Correlation ID Object** where one is declared (see the block
   below); where one is not, the whole-message scan and its false positives remain.
 - **No QoS, retain, consumer-group or keepalive configuration** — all fixed constants. No WebSocket
