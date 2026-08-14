@@ -22,11 +22,11 @@ func TestMessageBuffer_RawBytesCorrelation(t *testing.T) {
 	b.push("ch", &Message{Raw: []byte(`{"orderId":"A"}`)})
 	b.push("ch", &Message{Raw: []byte(`{"orderId":"B"}`)})
 
-	m, err := b.receive("ch", "B", time.Second)
+	m, err := b.receive("ch", Correlation{ID: "B"}, time.Second)
 	if err != nil || !strings.Contains(string(m.Raw), "B") {
 		t.Fatalf("raw correlation should match the B message, got %v / %v", m, err)
 	}
-	m2, _ := b.receive("ch", "", time.Second)
+	m2, _ := b.receive("ch", Correlation{}, time.Second)
 	if !strings.Contains(string(m2.Raw), "A") {
 		t.Errorf("the A message should remain queued, got %s", m2.Raw)
 	}
@@ -64,7 +64,7 @@ func TestWSAdapter_EchoRoundTrip(t *testing.T) {
 	if err := a.Send("echo", &Message{Raw: []byte(`{"ping":"pong"}`)}); err != nil {
 		t.Fatalf("send: %v", err)
 	}
-	msg, err := a.Receive("echo", "", 2*time.Second)
+	msg, err := a.Receive("echo", Correlation{}, 2*time.Second)
 	if err != nil {
 		t.Fatalf("receive: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestMQTTAdapter_SendSubscribesFirstAndRoundTrips(t *testing.T) {
 	if !subscribed {
 		t.Fatal("Send should subscribe to the topic before publishing")
 	}
-	msg, err := a.Receive("orders/new", "", time.Second)
+	msg, err := a.Receive("orders/new", Correlation{}, time.Second)
 	if err != nil {
 		t.Fatalf("receive: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestMQTTAdapter_SendSubscribesFirstAndRoundTrips(t *testing.T) {
 
 func TestMQTTAdapter_ReceiveTimeout(t *testing.T) {
 	a, _ := newFakeMQTTAdapter()
-	if _, err := a.Receive("quiet/topic", "", 60*time.Millisecond); err != ErrReceiveTimeout {
+	if _, err := a.Receive("quiet/topic", Correlation{}, 60*time.Millisecond); err != ErrReceiveTimeout {
 		t.Fatalf("expected ErrReceiveTimeout, got %v", err)
 	}
 }
@@ -246,7 +246,7 @@ func TestMQTTAdapter_RealBroker(t *testing.T) {
 	if err := a.Send(topic, &Message{Raw: []byte(`{"it":"works"}`)}); err != nil {
 		t.Fatalf("send: %v", err)
 	}
-	msg, err := a.Receive(topic, "", 10*time.Second)
+	msg, err := a.Receive(topic, Correlation{}, 10*time.Second)
 	if err != nil {
 		t.Fatalf("receive: %v", err)
 	}
