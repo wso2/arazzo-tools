@@ -52,8 +52,10 @@ test_runner examples/async_test/phase11/10-inmemory-fallback.arazzo.yaml localFl
 ```
 
 Notes:
-- **`correlationId` is a runtime expression** (e.g. `$inputs.token`), not a literal — a bare string
-  evaluates to empty and the receive becomes unfiltered (FIFO). The examples pass the token via input.
+- **`correlationId` must actually MATCH an arriving message, or the step times out.** A bare literal
+  works as an id; only an *absent* `correlationId` makes the receive unfiltered (FIFO). The examples
+  pass the token via `$inputs` so you can vary it — but run one with the wrong value and every message
+  is skipped, and the timeout looks exactly like a dead channel rather than a filter miss.
 - **The MQTT topic is public** (`arazzo/phase11/readings` on `broker.hivemq.com`) — anyone can
   publish there. The receive uses `correlationId: $inputs.token` (the sent payload carries the same
   token) so it matches OUR message and ignores strangers'. Pick a fresh token if a stale one lingers.
