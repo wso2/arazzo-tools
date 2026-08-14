@@ -1134,9 +1134,63 @@ returns a bare string rather than failing a JSON parse. **`channelMessageContent
 `adapter_select.go` is now dead code** — no production callers, only its own unit test — and should be
 deleted along with `TestChannelMessageContentType`.
 
+**Correlation ID locations — Phase 11's own deferred item, now closed.** AsyncAPI 3.0 lets a Message
+Object declare where its correlation id lives (`correlationId: {location: "$message.header#/correlationId"}`),
+and that declaration is the contract between publisher and subscriber. Until now nothing read it: the
+receive searched the entire message, which matches a message that merely CARRIES the same value
+somewhere unrelated — the workflow then proceeds on the wrong message and reports success.
+
+- **The declaration is authoritative, with no fall-through.** `AsyncInfo.DeclaredCorrelationLocations()`
+  reads every location the channel's messages declare, dereferencing **both** the message and the
+  Correlation ID Object (each is commonly a `$ref` into `components.messages` / `components.correlationIds`).
+  When any location is declared the id is read from exactly those places and a message not carrying it
+  there simply does not match. Falling back to the scan on a miss would reintroduce the precise failure
+  the declaration exists to prevent, so it does not happen.
+- **All declared locations are checked**, not the sorted-first one (deliberately unlike Phase 10's
+  contentType single-pick): a channel carrying several message kinds has each kind knowing where its
+  own id lives, an arriving message is one of those kinds, and checking N locations is cheap. Picking
+  one would fail to match the channel's other kinds outright.
+- **Locations are compared verbatim** — a JSON Pointer expression has no equivalent spellings the way a
+  media type does, so `containsExact` replaces `containsMediaType` here.
+- **`Adapter.Receive` now takes a `Correlation`** (`{ID, Locations, Decode}`) instead of a bare id
+  string — the matcher needs to know *where* to look, and adapters are cached and shared, so it cannot
+  be adapter state. `Decode` is supplied by the executor from the format the document declares for the
+  channel, and exists only so a `$message.payload#/…` location is readable on a **bytes-only** message
+  (every real-broker message); without a decoder such a location is a MISS, never a scan of the raw
+  bytes. Only `$message.header#/…` and `$message.payload#/…` are recognised — anything else is a clean
+  miss rather than a match against some other part of the message.
+- **Placing the id on send stays the AUTHOR's job**, by design: Arazzo scopes `correlationId` to
+  `receive` steps, so a send has no such field and the runtime has no value it could inject; inventing
+  one would contradict the spec. A publisher places it with a header parameter or a payload field. The
+  cost is that an id put somewhere the document does not name produces a receive timeout, which reads
+  like a dead channel.
+- **Both layers say when precision is unavailable.** The runtime warns once per receive that had to
+  fall back; the editor reports the same as an **information** diagnostic on that step, naming the
+  source description to edit (`resolveStepCorrelationLocation` → `WithStepCorrelationLocationResolver`
+  → `StepResolvers.CorrelationLocation`, resolving through `ensureSourcesIndexed` — the Phase-10
+  indexing race applies here identically). It fires only on a receive that actually declares a
+  `correlationId`: without one the receive is unfiltered and there is nothing to locate (that case has
+  its own warning), and a send matches nothing.
+
+**The fallback's two distinct failure modes** (worth keeping straight, and now pinned by tests): with a
+DECODED payload the scan compares scalars for **equality**, so an unrelated field holding the same
+value matches; with a BYTES-ONLY message it is a **substring** search, so `42` matches a body reading
+`"see ticket 42"` — a strictly wider net, and the one every real broker takes.
+
+**Tests:** `correlation_location_test.go` — every declaration shape (inline, `$ref`'d message, `$ref`'d
+Correlation ID Object, several per channel, absent), location parsing incl. malformed forms, the decoy
+that a declared location rejects, both fallback false positives, a declared location NOT falling back,
+and a payload location decoding raw bytes (plus missing-decoder). LSP: `server/correlation_test.go`
+drives the real server resolvers end-to-end across every targeting form and both `$ref` shapes, and the
+diagnostic was verified to FAIL when the check is disabled rather than passing vacuously.
+**Examples:** [examples/async_test/phase11_correlation/](../../examples/async_test/phase11_correlation) —
+01 declared location (`matched = "42"`, the real order), **02 the byte-for-byte same workflow on a
+channel declaring nothing, which returns `"99"` — the decoy**, and 03 a location two `$ref`s away
+pointing into the payload. All in-memory: no broker, no network.
+
 **Deferred (TODO in adapter_select.go):** Kafka adapter + real Avro/Protobuf codecs with
 schema-registry config (they belong together, see above); MQTT credentials and custom TLS
-configuration; correlation from schema-declared locations.
+configuration.
 
 **Known gaps / limits (not blocking):**
 - **Adapters are never closed.** There is no shutdown path — no `Close`, no `Disconnect`, no
@@ -1166,18 +1220,8 @@ configuration; correlation from schema-declared locations.
   executing any (a channel reached by `operationId`/`operationPath` is not literal on the step), moves
   connection errors to workflow start rather than the offending step, and for WebSocket means dialing —
   and therefore receiving the server's greeting frame — earlier.
-- **The AsyncAPI Correlation ID Object is never read.** AsyncAPI 3.0 lets a message declare where the
-  id lives (`correlationId.location`, e.g. `$message.header#/correlationId`), which is the contract
-  publishers and subscribers are supposed to share. Nothing in the runtime reads it: `asyncapi_finder.go`
-  does not mention `correlationId` at all. Consequently the **send** side puts the id nowhere in
-  particular (the examples just happen to include a `token` field), the **receive** side searches the
-  whole message, and **nothing validates** that a sent message carries a correlatable value at all — a
-  mismatch only surfaces as a receive timeout. Combined with the raw-bytes substring fallback this can
-  match the wrong message outright: with id `42`, the body `{"orderId":"99","note":"see ticket 42"}`
-  matches. Implementing it properly means reading the Correlation ID Object (through `$ref`), evaluating
-  its `location` against the arriving message, **and** using it on the send side to place the id
-  automatically. Phase 9's example `02-correlation` already predicted this would land in Phase 11; it
-  did not.
+- Correlation now honours the AsyncAPI **Correlation ID Object** where one is declared (see the block
+  below); where one is not, the whole-message scan and its false positives remain.
 - **No QoS, retain, consumer-group or keepalive configuration** — all fixed constants. No WebSocket
   ping/pong keepalive or reconnect backoff either.
 - **The networked examples depend on public infrastructure** (broker.hivemq.com, echo.websocket.org)
