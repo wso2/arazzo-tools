@@ -1263,6 +1263,25 @@ schema-registry config (they belong together, see above); MQTT credentials and c
 configuration.
 
 **Known gaps / limits (not blocking):**
+- **A dropped-and-restored MQTT connection silently stops delivering.** VERIFIED on both halves, not
+  inferred. paho reconnects on its own (`AutoReconnect` defaults true), but with `CleanSession: true` —
+  which `newPahoClient` sets — its reconnect path runs `c.persist.Reset()` instead of `c.resume(...)`
+  (`client.go:290-294`), and `ResumeSubs` defaults false, so **no subscription is restored**. Meanwhile
+  `ensureSubscribed` sees `IsConnected()` true, skips the connect branch, finds `a.subscribed[channel]`
+  still true and returns without re-subscribing. A probe against the fake client confirms it:
+  `connectCalls` goes 1→2 while `subscribeCalls` stays at 1.
+  The result is the worst shape a bug can take — the adapter believes it is subscribed, the broker has
+  no subscription, and the channel simply goes quiet. No error, no warning; a receive just times out as
+  though the channel were dead, and pre-subscription cannot help because it already ran. The window is
+  narrow (a connection has to drop mid-run) but it is silent and would be very hard to diagnose in the
+  field. Only the FAILED-connect path is handled today, by dropping the client and clearing
+  `subscribed` — the succeeded-after-a-drop path is not. Candidate fixes: clear `subscribed` from a
+  `SetOnConnectHandler` (it fires on reconnects too), or track a connection generation and re-subscribe
+  when it changes, or switch to `CleanSession(false)` + `ResumeSubs(true)` and let the broker keep the
+  session — the last changes session semantics and deserves its own decision.
+  **WebSocket does NOT have this gap:** `readLoop` calls `dropConn` when the connection errors, so the
+  connection is forgotten entirely and the next use redials AND starts a fresh reader — there is no
+  stale "already subscribed" flag to go wrong.
 - **Adapters are never closed.** There is no shutdown path — no `Close`, no `Disconnect`, no
   `Unsubscribe`. MQTT connections and WebSocket connections live until the process exits (a WS
   connection is dropped only when it errors). Fine for a CLI run, a leak for a long-lived server.
