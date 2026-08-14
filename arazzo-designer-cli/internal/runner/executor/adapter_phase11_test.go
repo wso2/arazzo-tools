@@ -348,20 +348,3 @@ func TestAdapterFor_CachesPerBroker(t *testing.T) {
 }
 
 // ---- receive-side contentType fallback from the AsyncAPI channel declaration ----
-
-func TestChannelMessageContentType(t *testing.T) {
-	info := &AsyncInfo{Channel: map[string]interface{}{
-		"messages": map[string]interface{}{
-			"alert": map[string]interface{}{"contentType": "text/plain"},
-		},
-	}}
-	if ct := channelMessageContentType(info); ct != "text/plain" {
-		t.Errorf("expected declared text/plain, got %q", ct)
-	}
-	if ct := channelMessageContentType(&AsyncInfo{Channel: map[string]interface{}{}}); ct != "" {
-		t.Errorf("no declaration should be empty, got %q", ct)
-	}
-	if ct := channelMessageContentType(nil); ct != "" {
-		t.Errorf("nil info should be empty, got %q", ct)
-	}
-}

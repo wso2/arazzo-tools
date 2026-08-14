@@ -74,24 +74,3 @@ func firstServer(spec map[string]interface{}) (protocol, host string) {
 	}
 	return "", ""
 }
-
-// channelMessageContentType returns the contentType declared on the channel's messages (first by
-// sorted message name), used on receive when the transport didn't carry one — real brokers deliver
-// bytes with no format label, and the AsyncAPI document is where that label lives.
-func channelMessageContentType(info *AsyncInfo) string {
-	if info == nil {
-		return ""
-	}
-	messages := toMap(info.Channel["messages"])
-	names := make([]string, 0, len(messages))
-	for name := range messages {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		if ct, ok := toMap(messages[name])["contentType"].(string); ok && strings.TrimSpace(ct) != "" {
-			return strings.TrimSpace(ct)
-		}
-	}
-	return ""
-}
