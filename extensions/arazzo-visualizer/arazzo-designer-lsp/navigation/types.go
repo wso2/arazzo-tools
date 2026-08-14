@@ -31,6 +31,12 @@ type ChannelInfo struct {
 	// tell an author that the runtime will fall back to JSON. More than one entry means the channel
 	// carries messages of different formats, so the document alone cannot say which one a step sends.
 	ContentTypes []string
+
+	// CorrelationLocations are the DISTINCT places this channel's messages say their correlation id
+	// lives, from each message's AsyncAPI Correlation ID Object (`correlationId.location`). Empty when
+	// the document declares none — which is what lets the editor tell an author that a receive will
+	// have to search the whole message and can therefore match the wrong one.
+	CorrelationLocations []string
 }
 
 // OperationInfo contains information about an OpenAPI operation
