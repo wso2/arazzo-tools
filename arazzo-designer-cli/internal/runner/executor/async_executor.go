@@ -282,16 +282,22 @@ func (se *StepExecutor) executeReceive(step map[string]interface{}, adapter Adap
 	}
 
 	timeout := receiveTimeout(step)
+	correlation := se.resolveCorrelation(correlationID, info, stepID, channel)
 
 	// What we are waiting FOR is the request-side detail of this span (the analogue of the HTTP
 	// request); the message that actually arrives is added on the end event below.
 	waitAttrs := map[string]string{"messaging.timeout_ms": fmt.Sprintf("%d", timeout.Milliseconds())}
 	if correlationID != "" {
 		waitAttrs["messaging.correlation_id"] = correlationID
+		// Which places were consulted is as much a part of "how this message was chosen" as the id
+		// itself, and it is the difference between a precise match and a whole-message scan.
+		if len(correlation.Locations) > 0 {
+			waitAttrs["messaging.correlation_location"] = strings.Join(correlation.Locations, ", ")
+		}
 	}
 	span := se.startMessagingSpan(state.TraceID, parentSpanID, "receive", channel, adapter.Name(), waitAttrs)
 
-	msg, err := adapter.Receive(channel, correlationID, timeout)
+	msg, err := adapter.Receive(channel, correlation, timeout)
 	if err != nil {
 		reason := fmt.Sprintf("receive on channel %q failed: %v", channel, err)
 		if errors.Is(err, ErrReceiveTimeout) {
@@ -445,6 +451,45 @@ func (se *StepExecutor) resolveCorrelationID(step map[string]interface{}, state 
 	}
 
 	return corrExpr, ""
+}
+
+// resolveCorrelation pairs the id a step is waiting for with the places the AsyncAPI document says
+// that id lives, producing the whole instruction the adapter needs to pick a message.
+//
+// A declared location turns matching from a guess into a lookup. Without one the matcher has to search
+// the entire message — metadata, headers, every scalar in the payload, and finally the raw bytes as a
+// substring — which can match a message that merely MENTIONS the id: waiting for "42" against a body
+// reading {"orderId":"99","note":"see ticket 42"} succeeds, and the workflow proceeds on the wrong
+// message while reporting success. That is exactly what the AsyncAPI Correlation ID Object exists to
+// prevent, so when the document declares one it is used exclusively, and when it does not the receive
+// says so rather than leaving the imprecision invisible (the editor reports the same thing).
+func (se *StepExecutor) resolveCorrelation(correlationID string, info *AsyncInfo, stepID, channel string) Correlation {
+	if correlationID == "" {
+		return Correlation{} // unfiltered; resolveCorrelationID has already warned
+	}
+
+	locations := info.DeclaredCorrelationLocations()
+	if len(locations) == 0 {
+		log.Printf("Warning: step %s: the AsyncAPI document declares no correlationId location for channel %q, so the whole message is searched for %q — a message that merely contains that value elsewhere can match; declare 'correlationId.location' on the channel's message to match precisely",
+			stepID, channel, correlationID)
+		return Correlation{ID: correlationID}
+	}
+
+	return Correlation{
+		ID:        correlationID,
+		Locations: locations,
+		// Only needed for a `$message.payload#/…` location on a bytes-only message (a real broker).
+		// The transport carries no content type there, so the document's declaration is what decides
+		// the format — the same chain the decode below uses, resolved independently because matching
+		// happens before a message has been chosen.
+		Decode: func(raw []byte) (interface{}, error) {
+			serializer, err := se.serializerRegistry().For(info.DeclaredContentType())
+			if err != nil {
+				return nil, err
+			}
+			return serializer.Deserialize(raw)
+		},
+	}
 }
 
 // serializerRegistry returns the executor's serializer registry, defaulting to the standard set if a
