@@ -1,0 +1,66 @@
+# Phase 11 (correlation) — Scenario 3: THE LOCATION IS TWO $refs AWAY, AND POINTS INTO THE PAYLOAD.
+#
+# This is how a real AsyncAPI document is written. On the `audits` channel:
+#
+#   channels.audits.messages.audit      -> $ref '#/components/messages/audit'
+#   components.messages.audit.correlationId -> $ref '#/components/correlationIds/byAuditId'
+#   components.correlationIds.byAuditId.location -> $message.payload#/auditId
+#
+# Both pointers are followed, and the location names a PAYLOAD field rather than a header — so this
+# also covers the branch that has to decode a message body before it can read the id (against a real
+# broker, where a message arrives as bytes with no decoded payload, that decode is what makes a
+# payload location readable at all).
+#
+# Again a decoy goes first, carrying the wanted value in `detail` instead of `auditId`. Only the
+# message whose `auditId` matches may be returned.
+#
+# EXPECTED: run **auditTrail** with input {"want":"AUD-7"} → completes with
+#   detail = "user login"     (NOT the decoy's "password reset")
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 11 - correlation location behind two $refs"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: orderBus
+    url: ./orders.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: auditTrail
+    inputs:
+      type: object
+      properties:
+        want:
+          type: string
+    steps:
+      # Right value, wrong field: `detail` is not where the document says the id lives.
+      - stepId: emitDecoy
+        channelPath: orderBus#/channels/audits
+        action: send
+        requestBody:
+          payload:
+            auditId: "AUD-1"
+            detail: $inputs.want
+
+      - stepId: emitReal
+        channelPath: orderBus#/channels/audits
+        action: send
+        requestBody:
+          payload:
+            auditId: $inputs.want
+            detail: "user login"
+
+      - stepId: read
+        channelPath: orderBus#/channels/audits
+        action: receive
+        correlationId: $inputs.want
+        timeout: 2000
+        successCriteria:
+          - condition: '$message.payload.detail == "user login"'
+        outputs:
+          detail: $message.payload.detail
+    outputs:
+      detail: $steps.read.outputs.detail
