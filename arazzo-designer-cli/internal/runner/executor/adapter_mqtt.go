@@ -111,6 +111,17 @@ func (a *MQTTAdapter) ensureSubscribed(channel string) error {
 	}
 	if !a.client.IsConnected() {
 		if err := waitToken(a.client.Connect(), "connect to "+a.brokerURL); err != nil {
+			// A failed or timed-out Connect leaves the paho client in a state it cannot leave: a second
+			// Connect on the same instance returns "status can only transition to connecting from
+			// disconnected", masking whatever actually went wrong. Since pre-subscription added a first
+			// attempt before the step's own, that masking is now reachable — so drop the client and let
+			// the next attempt build a fresh one and report the real reason.
+			//
+			// Its subscriptions go with it: they belonged to that connection and do not survive it.
+			// Keeping them would make a later ensureSubscribed believe a topic was already subscribed
+			// on a client that no longer exists, and silently receive nothing.
+			a.client = nil
+			a.subscribed = map[string]bool{}
 			return err
 		}
 	}
