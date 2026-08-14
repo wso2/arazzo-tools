@@ -37,9 +37,55 @@ channels:
       audit:
         $ref: '#/components/messages/audit'
 
+  # TWO message kinds, each keeping its id somewhere different. Every declared location is checked,
+  # so whichever kind arrives is matched — picking just one would miss the other outright.
+  mixed:
+    address: orders/mixed
+    messages:
+      alpha:
+        contentType: application/json
+        correlationId:
+          location: $message.header#/traceId
+        payload:
+          type: object
+      beta:
+        contentType: application/json
+        correlationId:
+          location: $message.payload#/meta/id
+        payload:
+          type: object
+
+  # Declares a location the runtime does not support: only `$message.header#/…` and
+  # `$message.payload#/…` are recognised. An unrecognised root is a clean MISS, never a match against
+  # some other part of the message.
+  mistyped:
+    address: orders/mistyped
+    messages:
+      order:
+        contentType: application/json
+        correlationId:
+          location: $message.metadata#/id
+        payload:
+          type: object
+
+  # Declares a PAYLOAD location, so headers are not consulted at all — even one named `correlationId`.
+  payloadOnly:
+    address: orders/payload-only
+    messages:
+      order:
+        contentType: application/json
+        correlationId:
+          location: $message.payload#/orderId
+        payload:
+          type: object
+
 operations:
   onLocated:
     action: receive
+    channel:
+      $ref: '#/channels/located'
+  publishLocated:
+    action: send
     channel:
       $ref: '#/channels/located'
 

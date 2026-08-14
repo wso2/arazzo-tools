@@ -1,0 +1,86 @@
+# Phase 11 (correlation) — Scenario 4: A CHANNEL WHOSE MESSAGE KINDS KEEP THE ID IN DIFFERENT PLACES.
+#
+# The `mixed` channel declares two messages:
+#
+#   alpha -> correlationId.location: $message.header#/traceId
+#   beta  -> correlationId.location: $message.payload#/meta/id
+#
+# Both are legal, and an arriving message is one kind or the other. So the receive checks EVERY
+# declared location and matches whichever one holds the id — unlike Phase 10's contentType handling,
+# which has to pick a single format because only one serializer can run. Picking one location here
+# would silently fail to match the channel's other kind.
+#
+# Two messages are published, one of each kind, each carrying a DIFFERENT token. Each receive finds
+# its own — proving both locations are live at once.
+#
+# EXPECTED: run **bothKinds** with input {"a":"TRACE-1","b":"META-2"} → completes with
+#   viaHeader  = "alpha-order"
+#   viaPayload = "beta-order"
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 11 - every declared location is checked"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: orderBus
+    url: ./orders.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: bothKinds
+    inputs:
+      type: object
+      properties:
+        a:
+          type: string
+        b:
+          type: string
+    steps:
+      # Kind "alpha": id in the header.
+      - stepId: emitAlpha
+        channelPath: orderBus#/channels/mixed
+        action: send
+        parameters:
+          - name: traceId
+            in: header
+            value: $inputs.a
+        requestBody:
+          payload:
+            orderId: "alpha-order"
+
+      # Kind "beta": id nested in the payload.
+      - stepId: emitBeta
+        channelPath: orderBus#/channels/mixed
+        action: send
+        requestBody:
+          payload:
+            orderId: "beta-order"
+            meta:
+              id: $inputs.b
+
+      # Matches on the HEADER location.
+      - stepId: takeAlpha
+        channelPath: orderBus#/channels/mixed
+        action: receive
+        correlationId: $inputs.a
+        timeout: 2000
+        successCriteria:
+          - condition: '$message.payload.orderId == "alpha-order"'
+        outputs:
+          viaHeader: $message.payload.orderId
+
+      # Matches on the PAYLOAD location.
+      - stepId: takeBeta
+        channelPath: orderBus#/channels/mixed
+        action: receive
+        correlationId: $inputs.b
+        timeout: 2000
+        successCriteria:
+          - condition: '$message.payload.orderId == "beta-order"'
+        outputs:
+          viaPayload: $message.payload.orderId
+    outputs:
+      viaHeader: $steps.takeAlpha.outputs.viaHeader
+      viaPayload: $steps.takeBeta.outputs.viaPayload
