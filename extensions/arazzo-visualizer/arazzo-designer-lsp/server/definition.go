@@ -331,6 +331,69 @@ func (s *Server) resolveStepMessageContentType(uri protocol.DocumentURI, content
 	return ch.ContentTypes, true
 }
 
+// resolveStepCorrelationLocation reports where the AsyncAPI document says the correlation id lives for
+// the channel a step targets, plus the name to point the author at. Resolution follows exactly the same
+// path as resolveStepMessageContentType — including ensureSourcesIndexed, without which this races the
+// background indexer and stays silently quiet on a freshly opened document.
+func (s *Server) resolveStepCorrelationLocation(uri protocol.DocumentURI, content string, step *parser.Step) (locations []string, source string, resolved bool) {
+	if step == nil {
+		return nil, "", false
+	}
+	sources := s.ensureSourcesIndexed(uri, content)
+	if len(sources) == 0 {
+		return nil, "", false
+	}
+
+	if step.ChannelPath != "" {
+		ch, found := s.lookupChannelInSources(sources, step.ChannelPath)
+		if !found || ch == nil {
+			return nil, "", false
+		}
+		return ch.CorrelationLocations, stepSourceName(step, ch.FileName), true
+	}
+
+	var op *navigation.OperationInfo
+	var found bool
+	switch {
+	case step.OperationID != "":
+		op, found = s.lookupOperationInSources(sources, step.OperationID)
+	case step.OperationPath != "":
+		op, found = s.lookupOperationByPath(sources, step.OperationPath)
+	default:
+		return nil, "", false
+	}
+	if !found || op == nil || op.ChannelKey == "" {
+		return nil, "", false // no channel reference: an OpenAPI operation, or an unresolvable one
+	}
+	ch, ok := s.operationIndex.LookupChannelInFile(op.FileURI, op.ChannelKey)
+	if !ok || ch == nil {
+		return nil, "", false
+	}
+	return ch.CorrelationLocations, stepSourceName(step, ch.FileName), true
+}
+
+// stepSourceName names the source description a step targets, so advice can point at the document the
+// author has to edit. Prefers the name they actually wrote (both spellings of a source reference are
+// accepted, as everywhere else), falling back to the resolved file name — a bare `operationId` names no
+// source at all, and a file name is still more useful than saying nothing.
+func stepSourceName(step *parser.Step, fileName string) string {
+	switch {
+	case step.ChannelPath != "":
+		if name, _, ok := utils.SplitSourceRefAndPointer(step.ChannelPath); ok {
+			return name
+		}
+	case step.OperationPath != "":
+		if name, _, ok := utils.SplitSourceRefAndPointer(step.OperationPath); ok {
+			return name
+		}
+	case step.OperationID != "":
+		if name, _, ok := utils.ParseScopedOperationID(step.OperationID); ok {
+			return name
+		}
+	}
+	return fileName
+}
+
 // sourceFileURI returns the resolved file URI for the source description with the given name (or "").
 func sourceFileURI(sources []resolvedSource, name string) string {
 	for _, s := range sources {
