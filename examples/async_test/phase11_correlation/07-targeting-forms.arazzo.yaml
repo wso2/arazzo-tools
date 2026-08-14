@@ -1,0 +1,114 @@
+# Phase 11 (correlation) — Scenario 7: THE SAME DECLARED LOCATION REACHED BY ALL THREE TARGETING FORMS.
+#
+# A step can name its target three ways, and the correlation location must resolve identically through
+# each — the location lives on the CHANNEL's message, and all three forms end up at the same channel:
+#
+#   channelPath:   orderBus#/channels/located
+#   operationId:   onLocated              -> operation -> channel $ref -> located
+#   operationPath: orderBus#/operations/onLocated
+#
+# The send uses `publishLocated` (an operationId), so this also covers a send resolving its channel the
+# same way. Each receive matches on the header the document names; a decoy carrying the value in the
+# payload is ignored by all three.
+#
+# This is the regression guard for correlation-location resolution across targeting forms — the
+# equivalent of Phase 10's example 12 for content types.
+#
+# EXPECTED: run **everyForm** with input {"a":"C-1","b":"C-2","c":"C-3"} → completes with
+#   byChannel = "ch"   byOperationId = "op"   byOperationPath = "path"
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 11 - correlation location via every targeting form"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: orderBus
+    url: ./orders.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: everyForm
+    inputs:
+      type: object
+      properties:
+        a:
+          type: string
+        b:
+          type: string
+        c:
+          type: string
+    steps:
+      # A decoy first: the values are all present, but in the payload rather than the declared header.
+      - stepId: emitDecoy
+        channelPath: orderBus#/channels/located
+        action: send
+        parameters:
+          - name: correlationId
+            in: header
+            value: "NOISE"
+        requestBody:
+          payload:
+            orderId: "decoy"
+            seen: $inputs.a
+
+      - stepId: emitCh
+        channelPath: orderBus#/channels/located
+        action: send
+        parameters:
+          - name: correlationId
+            in: header
+            value: $inputs.a
+        requestBody:
+          payload:
+            orderId: "ch"
+
+      # A send targeted by operationId — the channel (and its declared location) comes from the operation.
+      - stepId: emitOp
+        operationId: publishLocated
+        parameters:
+          - name: correlationId
+            in: header
+            value: $inputs.b
+        requestBody:
+          payload:
+            orderId: "op"
+
+      - stepId: emitPath
+        channelPath: orderBus#/channels/located
+        action: send
+        parameters:
+          - name: correlationId
+            in: header
+            value: $inputs.c
+        requestBody:
+          payload:
+            orderId: "path"
+
+      - stepId: takeByChannel
+        channelPath: orderBus#/channels/located
+        action: receive
+        correlationId: $inputs.a
+        timeout: 2000
+        outputs:
+          byChannel: $message.payload.orderId
+
+      # Direction comes from the operation's own `action: receive`.
+      - stepId: takeByOperationId
+        operationId: onLocated
+        correlationId: $inputs.b
+        timeout: 2000
+        outputs:
+          byOperationId: $message.payload.orderId
+
+      - stepId: takeByOperationPath
+        operationPath: orderBus#/operations/onLocated
+        correlationId: $inputs.c
+        timeout: 2000
+        outputs:
+          byOperationPath: $message.payload.orderId
+    outputs:
+      byChannel: $steps.takeByChannel.outputs.byChannel
+      byOperationId: $steps.takeByOperationId.outputs.byOperationId
+      byOperationPath: $steps.takeByOperationPath.outputs.byOperationPath
