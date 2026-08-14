@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -152,18 +153,42 @@ type fakeMQTTClient struct {
 	// subscribeCalls counts Subscribe calls, so a test can tell "subscribed once" from "subscribed
 	// once per step that mentions the channel".
 	subscribeCalls int
+	// failNextConnect makes the next Connect fail, standing in for a broker that is briefly
+	// unreachable — the case where a first attempt fails and a later one must still succeed.
+	failNextConnect bool
+	// poisoned mirrors paho: once a Connect has failed, this instance can never connect again.
+	poisoned     bool
+	connectCalls int
 }
 
 func newFakeMQTTClient() *fakeMQTTClient {
 	return &fakeMQTTClient{subs: map[string]mqtt.MessageHandler{}}
 }
 
+// Connect models paho's real behaviour on failure: an instance whose Connect failed is POISONED and
+// every later Connect on it returns a state error, whatever the broker is doing. Without that, a test
+// for "retry after a failed connect" passes even when the adapter reuses the dead client — which is
+// exactly the bug it is supposed to catch.
 func (c *fakeMQTTClient) Connect() mqtt.Token {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.connectCalls++
+	if c.poisoned {
+		return &fakeToken{err: errFakePoisoned}
+	}
+	if c.failNextConnect {
+		c.failNextConnect = false
+		c.poisoned = true
+		return &fakeToken{err: errFakeConnect}
+	}
 	c.connected = true
 	return &fakeToken{}
 }
+
+var (
+	errFakeConnect  = errors.New("connection refused")
+	errFakePoisoned = errors.New("status can only transition to connecting from disconnected")
+)
 
 func (c *fakeMQTTClient) IsConnected() bool {
 	c.mu.Lock()

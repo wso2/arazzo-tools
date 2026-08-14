@@ -144,6 +144,50 @@ func TestPrewarmSurvivesASubscribeFailure(t *testing.T) {
 	se.PrewarmAsyncChannels([]interface{}{receiveStep("await", "orders")})
 }
 
+// A failed Connect must not poison the adapter. Pre-subscription added a FIRST connect attempt before
+// the step's own, so a broker that is briefly unreachable now produces two attempts — and paho refuses
+// to reconnect a client whose Connect already failed ("status can only transition to connecting from
+// disconnected"), which would replace the step's real error with an artifact of the earlier one.
+func TestMQTTRetriesCleanlyAfterAFailedConnect(t *testing.T) {
+	// The factory hands out a DISTINCT client each time, so the test can tell whether the adapter
+	// built a fresh one or went back to the poisoned one.
+	first, second := newFakeMQTTClient(), newFakeMQTTClient()
+	first.failNextConnect = true
+
+	var built []*fakeMQTTClient
+	adapter := NewMQTTAdapter("mqtt", "fake-broker")
+	adapter.newClient = func(string) mqttClient {
+		c := second
+		if len(built) == 0 {
+			c = first
+		}
+		built = append(built, c)
+		return c
+	}
+
+	// First attempt — what prewarm does. It fails, and that is fine.
+	if err := adapter.Subscribe("orders/new"); err == nil {
+		t.Fatal("the first connect was set to fail")
+	}
+
+	// Second attempt — what the step itself does. Reusing the poisoned client would surface paho's
+	// state error instead of a real reconnect, so this must build a new one.
+	if err := adapter.Subscribe("orders/new"); err != nil {
+		t.Fatalf("a later attempt must start from a clean client, got %v", err)
+	}
+
+	if len(built) != 2 {
+		t.Fatalf("expected a fresh client for the retry, %d built", len(built))
+	}
+	// The subscription must exist on the NEW client: a stale "already subscribed" flag carried over
+	// from the dead one would skip Subscribe and leave the channel silently receiving nothing.
+	second.mu.Lock()
+	defer second.mu.Unlock()
+	if _, subscribed := second.subs["orders/new"]; !subscribed {
+		t.Error("the topic must be subscribed on the new client, not assumed from the dead one")
+	}
+}
+
 // failingAdapter refuses every subscription, standing in for an unreachable broker.
 type failingAdapter struct{}
 
