@@ -930,7 +930,19 @@ still reach the HTTP executor untouched.
 **Deferred:** real Protobuf/Avro/CloudEvents codecs + schema-registry config (Phase 11 alongside the
 brokers that need them); binary passthrough is not yet a distinct serializer (add when a broker needs it).
 
-**Known gaps (end-cleanup batch, not blocking):** REST steps encode through
+**Known gaps (end-cleanup batch, not blocking):** **Only LOCAL `$ref`s are followed.**
+`resolveLocalRef` (runtime) and its LSP twin resolve `#/components/messages/x` and return anything else
+— `./messages.yaml#/UserSignedUp`, `../shared/msgs.yaml#/Order`, `https://example.com/m.yaml#/Order` —
+**unchanged**, i.e. as the bare `{$ref: …}` map. Everything read through a message object is therefore
+invisible behind an external reference: its `contentType` (so the channel looks undeclared and the
+JSON last resort applies) and its `correlationId.location` (so correlation falls back to scanning the
+whole message, Phase 11). Both fallbacks announce themselves — an `information` diagnostic and a
+runtime warning respectively — so the behaviour is not silent, but neither says the *cause* was an
+unresolvable external ref, which is the confusing part: the document plainly declares the thing the
+tooling reports as missing. Splitting AsyncAPI definitions across files is ordinary practice, so this
+is worth closing; it needs the loader's `$self`-aware resolution (Phase 3) reused for `$ref` targets in
+both modules, plus a diagnostic naming the unresolved reference rather than reporting a false absence.
+REST steps encode through
 `httpexec.buildRequestBody`, a separate encoder that never consults the registry and whose rules are
 looser (substring `"json"` match; an unknown content type is silently stringified rather than erroring;
 form-encoding exists only there) — so the same `contentType` value can behave differently on a REST and
@@ -1161,11 +1173,18 @@ loop, shrinking the window to the workflow's own start — as early as this laye
   moment it is open, so connecting early is exactly what stops an early frame being missed, at the cost
   of a greeting frame arriving at workflow start); the in-memory adapter is a no-op, its queues having
   existed all along.
-- **A failure is a WARNING, never fatal**, naming the channel, adapter and step. Pre-subscription is an
-  optimisation and must not sink a workflow that would otherwise have run — a channel can sit behind a
-  branch the run never takes. The step that needs it retries and fails with its own precise error, so
-  the failure belongs to the step. It runs before any span exists, so it is a plain log line and never
-  becomes step telemetry.
+- **A failure is a WARNING, never fatal**, naming the channel, adapter and step. It runs before any
+  span exists, so it is a plain log line and never becomes step telemetry.
+
+  **Failure ownership is the rule to remember here.** Pre-subscription is a safety layer, not a
+  gatekeeper: it must never sink a workflow that would otherwise have run, because a channel can sit
+  behind a branch the run never takes. So a connection problem produces exactly two things — a warning
+  at warm-up saying the channel could not be listened to early, and, later, a real failure on **the
+  step that actually needs it**, which retries the connection itself and reports its own precise error.
+  The warm-up never decides a workflow's fate; the step does. Today that step failure fails the whole
+  workflow, because execution is sequential; under **Phase 14** the same failure would be recorded on
+  the step while the workflow carried on, and would only become a workflow failure where a later step
+  `dependsOn` it (Phase 14 decision 10). The ownership does not change — only what a failed step costs.
 - **A successful warm-up is visible**, so it can be tested rather than merely assumed:
   `Listening on 2 channel(s) before the first step: "orders/new", "orders/replies"`, emitted before any
   step output.
@@ -1191,7 +1210,9 @@ somewhere unrelated — the workflow then proceeds on the wrong message and repo
 
 - **The declaration is authoritative, with no fall-through.** `AsyncInfo.DeclaredCorrelationLocations()`
   reads every location the channel's messages declare, dereferencing **both** the message and the
-  Correlation ID Object (each is commonly a `$ref` into `components.messages` / `components.correlationIds`).
+  Correlation ID Object (each is commonly a `$ref` into `components.messages` / `components.correlationIds`
+  — **local refs only**, so a definition in another file or at a URL stays invisible and falls back to
+  the scan; see Phase 10's known gaps).
   When any location is declared the id is read from exactly those places and a message not carrying it
   there simply does not match. Falling back to the scan on a miss would reintroduce the precise failure
   the declaration exists to prevent, so it does not happen.
