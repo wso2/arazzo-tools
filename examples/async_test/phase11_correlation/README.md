@@ -33,14 +33,28 @@ The fallback fails in two different ways worth keeping straight:
 
 ## Scenarios
 
+Every one of them plants a **decoy** — a message carrying the wanted value somewhere the document does
+not name. Whether the decoy is matched is the whole subject.
+
 | file | what it shows | run it with | expected |
 |---|---|---|---|
 | `01-declared-location` | the id is read from the declared header; a decoy carrying the value in `payload.customerId` is ignored | `{"want":"42"}` | ✅ `matched = "42"` |
 | `02-no-location` | **the same workflow** on a channel declaring nothing — the decoy wins | `{"want":"42"}` | ⚠️ `matched = "99"` (the decoy) |
 | `03-refd-location` | the location is two `$ref`s away and points into the **payload** | `{"want":"AUD-7"}` | ✅ `detail = "user login"` |
+| `04-multiple-locations` | two message kinds keeping the id in different places — **both** locations are live | `{"a":"TRACE-1","b":"META-2"}` | ✅ `viaHeader = "alpha-order"`, `viaPayload = "beta-order"` |
+| `05-published-to-wrong-place` | the publisher puts the id somewhere the document does not name | `{"want":"42"}` | ❌ times out — no fall-through |
+| `06-unsupported-location` | the document names a location the runtime cannot read (`$message.metadata#/…`) | `{"want":"42"}` | ❌ times out — a clean miss, not a scan |
+| `07-targeting-forms` | the same declared location reached by `channelPath`, `operationId` **and** `operationPath` | `{"a":"C-1","b":"C-2","c":"C-3"}` | ✅ `ch` / `op` / `path` |
+| `08-payload-only-ignores-header` | a declared **payload** location means even a header named `correlationId` is not read | `{"want":"42"}` | ✅ `matched = "42"` |
 
-Read 01 and 02 as a pair — they are byte-for-byte the same workflow apart from the channel, and they
-return different orders. That difference *is* the feature.
+Read **01 and 02 as a pair** — byte-for-byte the same workflow apart from the channel, returning
+different orders. That difference *is* the feature.
+
+Read **05 and 06 as the price of it**. Both publish a message a whole-message scan would have matched,
+and both time out. A declared location that is not honoured — by the publisher (05) or because it
+cannot be read (06) — matches nothing rather than quietly falling back, because falling back would
+reintroduce exactly the imprecision the declaration removes. The failure looks like a dead channel even
+though a message is sitting right there.
 
 ```bash
 test_runner examples/async_test/phase11_correlation/01-declared-location.arazzo.yaml preciseMatch '{"want":"42"}'
@@ -52,6 +66,32 @@ test_runner examples/async_test/phase11_correlation/02-no-location.arazzo.yaml i
 
 ```bash
 test_runner examples/async_test/phase11_correlation/03-refd-location.arazzo.yaml auditTrail '{"want":"AUD-7"}'
+```
+
+```bash
+test_runner examples/async_test/phase11_correlation/04-multiple-locations.arazzo.yaml bothKinds '{"a":"TRACE-1","b":"META-2"}'
+```
+
+```bash
+test_runner examples/async_test/phase11_correlation/05-published-to-wrong-place.arazzo.yaml wrongPlace '{"want":"42"}'
+```
+
+```bash
+test_runner examples/async_test/phase11_correlation/06-unsupported-location.arazzo.yaml badLocation '{"want":"42"}'
+```
+
+```bash
+test_runner examples/async_test/phase11_correlation/07-targeting-forms.arazzo.yaml everyForm '{"a":"C-1","b":"C-2","c":"C-3"}'
+```
+
+```bash
+test_runner examples/async_test/phase11_correlation/08-payload-only-ignores-header.arazzo.yaml payloadWins '{"want":"42"}'
+```
+
+Both intentional failures report the same shape, naming the id that found nothing:
+
+```
+receive on channel "orders/located" timed out after 2s: no message matching correlationId "42" arrived
 ```
 
 ## What to look for
