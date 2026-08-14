@@ -1335,37 +1335,165 @@ end-to-end sample for the chosen broker.
 
 ### Phase 12: CLI, MCP, Documentation, And Samples — ❌ NOT STARTED (partial samples exist)
 
-Goal: make the feature usable and explainable.
+Goal: make the feature usable and explainable. Everything the async work added is currently visible
+only to someone reading the run log — the CLI's own workflow description, the MCP responses and the
+docs still describe a REST-only tool.
 
-Changes:
-- CLI workflow details: Arazzo version, `$self`, source types, async channel/action metadata,
-  adapter-config status.
-- MCP responses: include async metadata; surface unsupported-adapter and timeout/correlation
-  errors clearly.
-- Examples: minimal v1.1.0 OpenAPI-only; v1.1.0 AsyncAPI send/receive on in-memory adapter;
-  selector-object examples; JSONPath/XPath replacement examples; a real-broker example once one
-  exists. (Note: `examples/async_test` already holds Phase-1 *parsing* fixtures — extend rather
-  than duplicate.)
-- Docs: REST vs AsyncAPI; `send`/`receive`; channels; broker vs adapter; serializer.
+**Read this first if you are picking the phase up:** Phases 8–11 are done and are what you are
+surfacing. The three facts that shape the work are (a) an async step can be targeted three ways
+(`channelPath`, `operationId`, `operationPath`) so nothing may assume `channelPath` is present,
+(b) direction comes from the *operation* when there is one and only otherwise from the step's
+`action`, and (c) which adapter a step runs on is decided by the AsyncAPI document's `servers`, not
+by anything in the Arazzo file.
 
-Tests: CLI still lists/runs old workflows; CLI reports async adapter errors clearly; MCP output
-stable for old workflows; new examples parse and validate.
+---
+
+#### Step 1 — CLI workflow details
+
+**File:** [runner.go](../../arazzo-designer-cli/internal/runner/runner.go), `GetWorkflowDetails`.
+
+It builds a map with `workflowId`, `summary`, `description`, `parameters`, `steps` (only `stepId`,
+`operationId`, `operationPath`, `workflowId`, `description`) and `dependsOn`. Everything v1.1.0 added
+is missing.
+
+1. **Document level** — add `arazzoVersion` (the doc's `arazzo`), `self` (`$self`), and
+   `sourceDescriptions` as `[{name, url, type}]`. The runner already holds these; `$self` and the
+   source objects are on `ExecutionState` (`Self`, `SourceDescriptionObjects`) and the raw doc is on
+   the runner.
+2. **Step level** — add `channelPath`, `action`, `correlationId`, `timeout` and per-step `dependsOn`.
+   Straight passthrough from the step map; omit empty keys so REST steps are unchanged.
+3. **Derived `stepType`** — `asyncapi` / `openapi` / `workflow`. Do NOT re-derive it by hand: resolve
+   through `executor.NewAsyncFinder(sourceDescriptions)` and the same three targeting forms
+   `resolveAsyncTarget` uses, so the CLI cannot disagree with what will actually execute. A step whose
+   `operationId` resolves to an AsyncAPI operation is async even with no `channelPath`.
+4. **Derived `adapter`** — for each async step report the transport that would carry it
+   (`in-memory` / `mqtt` / `websocket`) or the reason it cannot run (`kafka not yet supported`,
+   `unsupported protocol "amqp"`). Reuse `firstServer`/`adapterFor`'s mapping rather than
+   reimplementing the protocol switch; if that means exporting a small helper from `executor`, export
+   one — a second copy of the protocol table WILL drift.
+5. **Resolved `contentType` and `correlationIdLocation`** (optional but cheap): `AsyncInfo` already
+   exposes `DeclaredContentTypes()` and `DeclaredCorrelationLocations()`. Surfacing them here is what
+   lets a user see the JSON fallback and the whole-message scan before running anything.
+
+**Additive only.** Existing keys keep their names and types; new keys are omitted when empty.
+
+#### Step 2 — MCP responses
+
+**File:** [server.go](../../arazzo-designer-cli/internal/mcpserver/server.go).
+
+- `detailsTool` (~line 312) delegates to `GetWorkflowDetails`, so **it inherits Step 1 for free** —
+  verify rather than duplicate.
+- `listTool` (~line 294): add each workflow's source types so a client can tell REST-only from
+  event-driven without a second call.
+- `handleRun` (~line 375) / `handleLastResult` (~line 474): async failures currently arrive as bare
+  strings. Keep the string, and add a structured field distinguishing the classes a client would act
+  on differently: `adapter_unsupported`, `connect_failed`, `receive_timeout`, `correlation_unresolved`,
+  `serialize_failed`. The runtime already produces distinct messages for each.
+- `server_run_test.go` exists — extend it to assert the old shape is untouched.
+
+#### Step 3 — Examples
+
+`examples/async_test/` already holds Phase 1–11 fixtures. **Extend, do not duplicate.** Missing:
+a minimal v1.1.0 **OpenAPI-only** workflow (proving v1.1.0 costs a REST user nothing), and a
+**selector-object** example set (Phase 4 has `phase4_selectors/`; check coverage before adding).
+XPath examples must wait for the deferred XPath engine.
+
+Each example carries its expected outcome in a header comment and is listed in a `README.md` — follow
+the Phase 10/11 sets, whose headers quote runtime messages verbatim. **That verbatim quoting is a
+maintenance trap:** changing a runtime message staleifies every header quoting it. Grep the examples
+for the old text whenever you change a message.
+
+#### Step 4 — Documentation
+
+A real page, not bullet points: REST vs AsyncAPI steps; `send` vs `receive` and where direction comes
+from; channels vs operations vs topics; **broker vs adapter** (the runner implements adapters, brokers
+are external); the serializer layer and content-type resolution; correlation and why a declared
+location matters. The Phase 10/11 sections of this plan are the source material.
+
+#### Tests / acceptance
+
+- Existing OpenAPI-only workflows list, describe and run **byte-identically** — this is the phase's
+  main risk, since it touches shared code paths.
+- `GetWorkflowDetails` reports the right `stepType` and adapter for all three targeting forms,
+  including an `operationId` that resolves to an AsyncAPI operation with no `channelPath`.
+- A kafka/unknown-protocol step reports its reason in details **without running**.
+- MCP output for an old workflow is unchanged; new fields appear only for async steps.
+- New examples parse, validate, and run to their documented outcome.
 
 ### Phase 13: Visualizer UI Enhancements — ❌ NOT STARTED (⚠️ needs TEAM CONFIRMATION first)
 
 Goal: the graph-appearance changes deliberately pulled OUT of Phase 8. Do these LAST, and only after
-the UI direction is confirmed with the team — until then, async steps render as normal steps.
+the UI direction is confirmed with the team — until then async steps render as normal steps.
 
-Changes (all visual):
-- Source-type badges (OpenAPI / AsyncAPI / Arazzo) and `$self` in the overview.
-- Render `send`/`receive` steps distinctly (icons/styling direction TBD with the team).
-- Draw **step-level** `dependsOn` edges (workflow-level `dependsOn` edges: also confirm — none exist
-  today). Must not break existing success/failure/goto edges. Note: no reordering exists at runtime
-  (Phase 7 gate), so the execution highlight stays sequential and needs no change; a step blocked by
-  its `dependsOn` gate could show an error/blocked state.
+> **⚠️ GATE — do not start without a decision.** Every step below depends on the visual direction:
+> the icon/colour language for `send` vs `receive`, whether source-type badges sit on nodes or only in
+> the overview, and how a `dependsOn` edge is drawn so it is not mistaken for control flow. Implementing
+> first and restyling later means redoing the graph work. **Get sign-off, then start.**
 
-Tests: dependency edges render without breaking success/failure/goto edges; old workflows render
-unchanged; badges/styling match the confirmed design.
+**What already exists (do not rebuild it):**
+- **`arazzo/getSourceInfo`** — [server.go:447](arazzo-designer-lsp/server/server.go), backed by the
+  per-document registry in [source_registry.go](arazzo-designer-lsp/server/source_registry.go). It
+  returns `{sources, async, rest}` with each source's declared type, the type the file **actually** is,
+  and a `TypeMismatch()` flag. It was built in Phase 8 and **nothing consumes it** — it is the data
+  source for badges, already done.
+- **`traceState`** — [BaseNodeWidget.tsx:46](arazzo-designer-visualizer/src/views/WorkflowView/../../components/nodes/BaseNode/BaseNodeWidget.tsx)
+  renders `'running' | 'passed' | 'failed'` (running = `ThemeColors.PRIMARY`). Status colouring needs
+  no work, here or in Phase 14.
+- **The properties panel** already shows Step Type, the AsyncAPI section and Depends On (Phase 8).
+
+---
+
+#### Step 1 — Consume `arazzo/getSourceInfo`
+
+Add the LSP request to the visualizer's client and hold the result alongside the workflow model.
+The method is additive and `arazzo/getModel` is unchanged, so nothing existing is affected. Refresh on
+the same events that re-index (open, change, save) or badges go stale when a `sourceDescription` is
+added.
+
+#### Step 2 — Source-type badges + `$self` in the overview
+
+Render OpenAPI / AsyncAPI / Arazzo per source, and `$self` where the document identity belongs.
+**Surface `TypeMismatch()`** — a source declared `asyncapi` whose file is actually OpenAPI is a real
+authoring bug the registry already detects and nothing reports today.
+
+#### Step 3 — Distinguish `send` / `receive` steps
+
+**File:** `components/nodes/BaseNode/BaseNodeWidget.tsx` (styling) and
+[graphBuilder.ts](arazzo-designer-visualizer/src/views/WorkflowView/graphBuilder.ts)
+(`buildGraphFromWorkflow`, the single entry point that turns a workflow into nodes and edges).
+
+Direction must come from the same resolution the runtime uses — **the operation's `action` wins over
+the step's** — so a step whose `operationId` targets a `receive` operation renders as a receive even
+if it wrote `action: send`. The step text alone is not enough; use the resolved value the LSP already
+computes (`resolveStepAsyncAction`) rather than reading `step.action`.
+
+#### Step 4 — Step-level `dependsOn` edges
+
+Also in `buildGraphFromWorkflow`. The hard requirement: **must not disturb the existing
+success/failure/goto edges**, which carry execution flow.
+
+The subtlety worth stating in the UI itself: a `dependsOn` edge is **not** control flow. Phase 7
+established `dependsOn` is a completion *gate* with no reordering — execution stays in document order.
+Drawing it like a flow edge will read as "this runs next", which is wrong. Style it distinctly
+(dashed, different colour, an explicit label).
+
+Workflow-level `dependsOn` edges: confirm with the team whether to draw them at all — none exist in
+any current example.
+
+#### Step 5 — Blocked / gate-failed state
+
+A step whose `dependsOn` gate fails currently just fails. Give it a distinct state so "I could not run
+because a prerequisite did not succeed" is visibly different from "I ran and failed". The runtime
+already produces a distinct message (`dependsOn '<x>', which has not completed successfully`).
+
+#### Tests / acceptance
+
+- **Old workflows render byte-identically** when no async steps and no `dependsOn` are present.
+- `dependsOn` edges appear without breaking success/failure/goto edges — check a workflow that has both.
+- Badges match the declared types, and a deliberate type mismatch is surfaced.
+- A `send`/`receive` step targeted by `operationId` (no `action` on the step) renders with the
+  operation's direction.
+- Execution highlight is unchanged (still sequential — Phase 7 added no reordering).
 
 ### Phase 14 (FINAL): Non-Blocking Async Steps — ❌ NOT STARTED
 
@@ -1449,6 +1577,69 @@ correctness requirement, not an optimization.
 **Sequencing.** Do this LAST, after Phase 11. It is only *meaningful* against a real broker: on the
 in-memory adapter a receive can only ever return a message the workflow itself sent, so there is
 nothing genuinely in-flight to overlap with. It also pairs naturally with Phase 13's status rendering.
+
+**Implementation steps — in this order.** The ordering is not cosmetic: step 1 must land before any
+goroutine exists, or every step after it is racy and the race is a fatal crash rather than a wrong
+answer.
+
+**1. Guard `ExecutionState` FIRST, with no concurrency yet.**
+[models.go](../../arazzo-designer-cli/internal/models/models.go) — `StepsData`, `StepsStatus`,
+`WorkflowOutputs` and the dependency maps are written today with no synchronization because the runner
+is single-threaded. Pick one of two shapes and apply it consistently:
+- a mutex on `ExecutionState` with accessor methods (`SetStepStatus`, `RecordStepData`, …), making
+  every write go through one place; or
+- a results channel the main loop drains, so only the main goroutine ever writes.
+
+The channel version is harder to retrofit (every writer must be reachable from the loop) but removes
+the class of bug entirely. Either way, land it as its own commit with `go test -race` green **while
+still sequential** — a clean baseline before the behaviour changes.
+
+**2. Spawn only `receive`.**
+[step_executor.go](../../arazzo-designer-cli/internal/runner/executor/step_executor.go) / `async_executor.go`
+— `executeReceive` moves into a goroutine; `ExecuteStep` returns a "started" result immediately and the
+step is `StepStatusRunning` (decision 1: the status already exists). `executeSend` stays inline
+(decision 7). Everything the goroutine settles goes through the step-1 accessors.
+
+**3. Turn the gate into a join.**
+[runner.go](../../arazzo-designer-cli/internal/runner/runner.go) `checkStepDependencies` currently
+reads a status. It must now: if the dependency is `Running`, block until that goroutine settles
+(bounded by that step's own `timeout`), then apply the existing Phase-7 rule unchanged — success
+proceeds, failure/timeout is a hard error. Keep the three reference forms working (local `stepId`,
+`$workflows.…`, and the cross-document form that still errors as unsupported).
+
+**4. Drain before the workflow completes.**
+`ExecuteWorkflow` must wait for every spawned goroutine to settle before returning (decision 4), so a
+never-joined receive cannot outlive the run. A `sync.WaitGroup` alongside the state guard is enough.
+
+**5. Cancellation, one direction only.**
+A workflow failure cancels in-flight goroutines; a goroutine failure does **not** fail the workflow
+(decision 10). Thread a `context.Context` from `ExecuteWorkflow` into the receive goroutine — which
+means `Adapter.Receive` needs cancellation. Today it blocks on `messageBuffer.receive`'s polling loop
+until its deadline. Either add a `context` parameter to `Receive` (an interface change across all
+three adapters, the same shape as the `Correlation` change in Phase 11) or give the buffer a cancel
+channel it selects on. **Prefer the context**: it is idiomatic and the adapters already take a timeout,
+so the signature is already about lifetime.
+
+**6. Warn on an unjoined output reference.**
+A step reading `$steps.<asyncStep>.outputs.x` while that step is `Running` must warn naming both steps
+and telling the author to declare `dependsOn` — it must NOT implicitly wait (decision 8). The value
+resolves as it does today (nil), so behaviour is unchanged; only the diagnosis is new. Hook it where
+`$steps` resolves in [evaluator.go](../../arazzo-designer-cli/internal/evaluator/evaluator.go), which
+needs access to the step statuses.
+
+**7. Verify telemetry under overlap.**
+Step spans will now overlap in wall-clock time. Parent/child links are set explicitly from
+`state.WorkflowSpanID` rather than derived from emission order, so they *should* be unaffected —
+verify rather than assume, with a test asserting parentage on interleaved spans.
+
+**8. Re-check the Phase 11 reconnect gap.**
+The high-priority MQTT gap above ("a reconnected client silently stops receiving") gets materially
+more likely here: a receive now stays in flight for its whole timeout instead of a few seconds inside
+one step, so the exposure window grows a lot. **Fix that first, not after.**
+
+**Watch for:** `serializerRegistry()` lazily assigns `se.Serializers` without a lock, and
+`StepExecutor.asyncAdapters` is written unguarded — both are harmless while sequential and both become
+races here. They are listed in the Phase 10/11 gaps; fold them into step 1.
 
 Tests: an async step followed by unrelated REST steps does not delay them; a later `dependsOn` step
 waits for the in-flight step and then runs; a timed-out async step fails its dependents; a timed-out
