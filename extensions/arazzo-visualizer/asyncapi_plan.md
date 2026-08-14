@@ -1262,7 +1262,10 @@ pointing into the payload. All in-memory: no broker, no network.
 schema-registry config (they belong together, see above); MQTT credentials and custom TLS
 configuration.
 
-**Known gaps / limits (not blocking):**
+**⚠️ HIGH PRIORITY GAP — fix before this is used against a broker that matters.** Everything else in
+this phase fails loudly. This one does not: it produces a correct-looking run that quietly stops
+receiving. It is listed first deliberately, ahead of the minor limits below.
+
 - **A dropped-and-restored MQTT connection silently stops delivering.** VERIFIED on both halves, not
   inferred. paho reconnects on its own (`AutoReconnect` defaults true), but with `CleanSession: true` —
   which `newPahoClient` sets — its reconnect path runs `c.persist.Reset()` instead of `c.resume(...)`
@@ -1282,6 +1285,15 @@ configuration.
   **WebSocket does NOT have this gap:** `readLoop` calls `dropConn` when the connection errors, so the
   connection is forgotten entirely and the next use redials AND starts a fresh reader — there is no
   stale "already subscribed" flag to go wrong.
+
+  **How likely is it?** Not an everyday case — it needs a connection to actually drop mid-run. A short
+  CLI run against a healthy broker will never see it. It becomes plausible with long workflows, long
+  receive timeouts, flaky networks, a broker restart mid-run, or public brokers (HiveMQ drops idle
+  connections and rate-limits). **Phase 14 widens the window considerably**: once receives run as
+  goroutines they stay in flight for their whole timeout while the workflow does other things, so the
+  listening period — the exposure — gets much longer. Worth fixing before then rather than after.
+
+**Known gaps / limits (minor, not blocking):**
 - **Adapters are never closed.** There is no shutdown path — no `Close`, no `Disconnect`, no
   `Unsubscribe`. MQTT connections and WebSocket connections live until the process exits (a WS
   connection is dropped only when it errors). Fine for a CLI run, a leak for a long-lived server.
@@ -1483,6 +1495,18 @@ it only becomes meaningful once Phase 11 provides a real broker to wait on.
 
 > **End-of-project cleanup batch.** None of these are v1.1.0 phase work. Best tackled together at the
 > very end, after Phases 1–12, in one final pass: (1) the final XPath push (XPath selectors + `targetSelectorType: xpath`, see Phases 4/6), (2) the server-stop UI bug below, (3) executable `type: arazzo` source descriptions below, and (4) the two remaining LSP validation blind spots below (goto target existence; $steps refs outside parameters).
+
+### BUG (HIGH PRIORITY): a reconnected MQTT client silently stops receiving
+
+Not part of the end-of-project batch above — this one should be fixed **before Phase 14**, which
+widens its window considerably.
+
+If an MQTT connection drops mid-run, paho reconnects by itself, but `CleanSession: true` means the
+broker discards the session and restores no subscriptions. `ensureSubscribed` then sees a healthy
+connection and a still-true `subscribed[channel]` flag, so it never re-subscribes. The adapter believes
+it is listening, the broker has no subscription, and the channel goes quiet with **no error anywhere** —
+a receive just times out as though nothing were ever sent. Verified on both halves; full detail,
+likelihood and candidate fixes are in Phase 11's limits above. WebSocket is unaffected.
 
 ### BUG: stopping the Arazzo server doesn't reset the "server running" UI state
 **Not related to v1.1.0** — a pre-existing extension lifecycle bug; tracked here so it isn't lost.
