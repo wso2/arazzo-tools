@@ -85,6 +85,89 @@ func (se *StepExecutor) executeAsyncStep(step map[string]interface{}, info *Asyn
 	}
 }
 
+// PrewarmAsyncChannels subscribes, BEFORE the workflow's first step runs, to every channel that some
+// step will receive on.
+//
+// Subscription is otherwise lazy — it happens inside the first Send or Receive that touches a channel.
+// That leaves a window: a message a peer publishes to a channel between the run starting and the step
+// that reads it being reached is gone, because a broker does not replay what arrived while nobody was
+// listening. Walking the steps up front closes the window to the workflow's own start, which is as
+// early as this layer can get.
+//
+// Only channels a step RECEIVES on are warmed. Subscribing fills a channel's buffer, and the only
+// thing that drains it is a receive; a send-only channel would accumulate every message published
+// there for the whole run with nothing ever reading them. Sends are unaffected — Send still subscribes
+// before it publishes (so a same-workflow round trip works), and any channel in a send/receive pair
+// has a receive step and is therefore warmed anyway.
+//
+// Failures are WARNINGS, never fatal. A channel that cannot be reached now will be retried by the step
+// that needs it, which fails with its own precise error; and a channel behind a branch the run never
+// takes must not sink a workflow that would otherwise have succeeded. This runs before any span
+// exists, so it is a plain log line and never becomes step telemetry.
+func (se *StepExecutor) PrewarmAsyncChannels(steps []interface{}) {
+	warmed := map[string]bool{}
+	var listening []string
+
+	for _, raw := range steps {
+		step := toMap(raw)
+		if step == nil {
+			continue
+		}
+		info, isAsync := se.resolveAsyncTarget(step)
+		if !isAsync || info == nil {
+			continue
+		}
+		if asyncDirection(step, info) != "receive" {
+			continue
+		}
+
+		channel := info.ChannelAddress
+		if channel == "" {
+			channel = info.ChannelKey
+		}
+		if channel == "" {
+			continue // no resolvable channel; the step will report this properly when it runs
+		}
+
+		stepID, _ := step["stepId"].(string)
+		adapter, err := se.adapterFor(info)
+		if err != nil || adapter == nil {
+			continue // unsupported protocol or no adapter — the step itself reports it
+		}
+		// One subscription per adapter+channel: several steps commonly read the same channel.
+		key := adapter.Name() + "\x00" + channel
+		if warmed[key] {
+			continue
+		}
+		warmed[key] = true
+
+		if err := adapter.Subscribe(channel); err != nil {
+			log.Printf("Warning: could not subscribe to channel %q via the %s adapter before the workflow started (needed by step %s): %v — the step will try again when it runs, and messages published in the meantime are lost",
+				channel, adapter.Name(), stepID, err)
+			continue
+		}
+		listening = append(listening, channel)
+	}
+
+	// Say what is being listened to, so a successful prewarm is visible rather than merely implied.
+	// Named channels only: which adapter carries each is already on every step's own log line.
+	if len(listening) > 0 {
+		log.Printf("Listening on %d channel(s) before the first step: %s", len(listening), strings.Join(quoteAll(listening), ", "))
+	}
+}
+
+// asyncDirection reports the direction a step will run with, WITHOUT the validation and warnings
+// resolveAsyncAction emits. Prewarm inspects every step before any of them execute, so it must not
+// pre-empt or duplicate the diagnostics a step produces when it actually runs. Mirrors the same
+// precedence: a targeted operation's declared action wins over the step's own.
+func asyncDirection(step map[string]interface{}, info *AsyncInfo) string {
+	if info != nil && info.Action != "" {
+		return info.Action
+	}
+	action, _ := step["action"].(string)
+	return strings.TrimSpace(action)
+}
+
 // resolveAsyncAction determines the direction (send/receive) of an async step. When the step targets
 // an operation, the operation's declared action wins (spec/Phase-8 decision) and a contradicting step
 // `action` only produces a warning. When the step targets a channel (which has no direction), the step
