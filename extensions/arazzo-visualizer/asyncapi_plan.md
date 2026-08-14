@@ -1105,7 +1105,7 @@ selection incl. kafka/unknown errors, in-memory fallback and per-broker caching.
 broker integration test** gated on `ARAZZO_TEST_MQTT_BROKER` (verified green against
 broker.hivemq.com), so CI never depends on public infrastructure.
 
-**Examples** — [examples/async_test/phase11/](../../examples/async_test/phase11). Unusually, the network
+**Examples** — [examples/async_test/phase11/phase11_common/](../../examples/async_test/phase11/phase11_common). Unusually, the network
 ones run against the **real public internet**; all ten were re-verified after the Phase-10 restack.
 
 | file | shows | expected |
@@ -1194,7 +1194,7 @@ no subscriber) and asserts BOTH halves — a message published before the receiv
 pre-subscription and captured with it — plus send-only exclusion, every targeting form, per-channel
 de-duplication, and that a refusing adapter is survived rather than fatal. Four of the five fail when
 the feature is disabled, so they are not vacuous.
-**Examples:** [examples/async_test/phase11_prewarm/](../../examples/async_test/phase11_prewarm) — 01
+**Examples:** [examples/async_test/phase11/phase11_prewarm/](../../examples/async_test/phase11/phase11_prewarm) — 01
 channels listed before step 1 (one not touched until the last step), 02 a send-only channel skipped
 even though step 1 publishes to it, 03 all three targeting forms collapsing to one subscription, 04 an
 unreachable broker warning first and the step failing second. All in-memory, so all offline — and note
@@ -1253,7 +1253,7 @@ that a declared location rejects, both fallback false positives, a declared loca
 and a payload location decoding raw bytes (plus missing-decoder). LSP: `server/correlation_test.go`
 drives the real server resolvers end-to-end across every targeting form and both `$ref` shapes, and the
 diagnostic was verified to FAIL when the check is disabled rather than passing vacuously.
-**Examples:** [examples/async_test/phase11_correlation/](../../examples/async_test/phase11_correlation) —
+**Examples:** [examples/async_test/phase11/phase11_correlation/](../../examples/async_test/phase11/phase11_correlation) —
 01 declared location (`matched = "42"`, the real order), **02 the byte-for-byte same workflow on a
 channel declaring nothing, which returns `"99"` — the decoy**, and 03 a location two `$ref`s away
 pointing into the payload. All in-memory: no broker, no network.

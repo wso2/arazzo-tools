@@ -5,12 +5,12 @@ decides which adapter a step runs on:
 
 | `servers.<name>.protocol` | adapter | connects to |
 |---|---|---|
-| `ws` / `wss` | WebSocket ([adapter_ws.go](../../../arazzo-designer-cli/internal/runner/executor/adapter_ws.go)) | `ws(s)://<host>/<channel address>` |
-| `mqtt` / `mqtts` | MQTT ([adapter_mqtt.go](../../../arazzo-designer-cli/internal/runner/executor/adapter_mqtt.go)) | `tcp://<host>:1883` / `ssl://<host>:8883` (channel address = topic) |
+| `ws` / `wss` | WebSocket ([adapter_ws.go](../../../../arazzo-designer-cli/internal/runner/executor/adapter_ws.go)) | `ws(s)://<host>/<channel address>` |
+| `mqtt` / `mqtts` | MQTT ([adapter_mqtt.go](../../../../arazzo-designer-cli/internal/runner/executor/adapter_mqtt.go)) | `tcp://<host>:1883` / `ssl://<host>:8883` (channel address = topic) |
 | *(no `servers` section)* | in-memory (Phase 9) | nothing — in-process queues, for tests/local runs |
 | `kafka` | — | **clear "not yet supported" error** (future phase, with Avro/Protobuf) |
 
-Selection lives in [adapter_select.go](../../../arazzo-designer-cli/internal/runner/executor/adapter_select.go);
+Selection lives in [adapter_select.go](../../../../arazzo-designer-cli/internal/runner/executor/adapter_select.go);
 adapters are cached per `protocol://host` so all steps against one broker share a connection. On
 receive, bytes are decoded using the channel's declared message `contentType` (transports don't
 carry one), defaulting to JSON — the Phase 10 serializer layer doing its real job.
