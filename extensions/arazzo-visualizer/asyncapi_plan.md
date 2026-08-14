@@ -113,16 +113,44 @@ the gaps it found were fixed:
 
 Goal: the repo understands the v1.1.0 document shape without changing execution behavior.
 
+**Why "three model layers" matters.** The same Arazzo document is parsed independently by three
+codebases that cannot import each other: the **TS visualizer** (`src/types`), the **Go LSP**
+(`arazzo-designer-lsp/parser`), and the **Go CLI runner** (`internal/models`). A field added to one
+and missed in another does not fail loudly — it is silently dropped, so a step renders in the graph
+but does not execute, or validates in the editor but is ignored at runtime. Keeping the three
+structurally aligned is therefore a standing invariant of this project, not a one-off task.
+
 **Already implemented** (see audit above): all three model layers accept `1.1.0`, carry
 `$self`, `asyncapi`, `channelPath`, `timeout`, `correlationId`, `action`, step `dependsOn`,
 `querystring`, action `parameters`, `ExpressionTypeObject`, `SelectorObject`,
 `PayloadReplacementObject.targetSelectorType`, and widened `outputs`/`value` types.
 
+**Rules established here (enforced by the LSP, see Phase 2):**
+
+| rule | outcome |
+|---|---|
+| `arazzo` version not one of `1.0.0`, `1.0.1`, `1.1.0` | error — *Invalid arazzo version* |
+| a step declares **none** of `operationId` / `operationPath` / `channelPath` / `workflowId` | error — *Must have one of …* |
+| a step declares **more than one** of those four | error — *Can only have one of …* |
+| `sourceDescriptions[].type` not `openapi` / `asyncapi` / `arazzo` | error |
+| a v1.0.x document | parses and runs **exactly as before** — v1.1.0 support is additive |
+
+**The one intentional divergence, still live.** The CLI models Selector Objects and Expression Type
+Objects as `interface{}` rather than typed structs. That is fine for parsing and round-tripping, but
+it means the CLI cannot type-check them — which is why Phase 4 had to add a *decode helper*
+(`IsSelectorObject` / `ResolveExpressionType`) instead of relying on the model, and why the LSP
+validates Expression Type Objects only where they appear in a typed position (criterion `type`), not
+inside untyped maps like outputs and payloads. Documented rather than fixed, deliberately: typing them
+in the CLI would ripple through every `map[string]interface{}` the executor passes around.
+
+**Limits:**
+- Version acceptance is an exact string match against three known values, not a semver range — a
+  future `1.1.1` would be rejected until added explicitly.
+- Nothing validates the *referenced* OpenAPI/AsyncAPI documents against their own schemas; the tooling
+  only reads the parts it needs (channels, operations, message content types).
+
 Verification tasks (no new modeling expected):
-- Confirm the three model layers stay structurally aligned (TS ↔ LSP ↔ CLI). The one
-  intentional divergence to keep in mind: the CLI models Selector/Expression-Type objects
-  as `interface{}` rather than typed structs — fine for parsing, but Phase 4/5 will need a
-  typed shape or a decode helper.
+- Confirm the three model layers stay structurally aligned (TS <-> LSP <-> CLI).
 - Confirm `1.0.0`/`1.0.1` fixtures still parse and the `invalid-v110` fixture still fails.
 - Confirm a step with two of `operationId`/`operationPath`/`channelPath`/`workflowId` is rejected.
 
@@ -140,6 +168,44 @@ Remaining small tasks — **completed in the 2026-06-13 verification pass** (see
 above): `main.go` banner updated; completion/validation gaps closed; unknown-field detection
 added; unit tests added. The only deliberately-deferred item is tightening
 `validateRuntimeExpressions` for the new expression roots, which belongs with Phase 5.
+
+**The severity policy** ([validator.go](arazzo-designer-lsp/validator/validator.go) — 66 diagnostics
+as of Phase 10). It is applied consistently and is worth stating because it decides how every later
+phase reports a problem:
+- **error** — the document violates the spec, or names something that does not exist. It cannot run
+  correctly as written.
+- **warning** — legal per the spec, but very likely not what the author meant, or a place where the
+  runtime will silently pick something for them (an unfiltered receive, a step value overriding the
+  AsyncAPI declaration, a reference to an unknown *source description* — which may simply be
+  unresolvable from the editor).
+- **information** (added in Phase 10) — nothing is wrong; the runtime will apply a default that
+  neither document states, and the author may want to state it.
+
+A check that depends on a fact **outside the Arazzo text** (an operation's `action`, a channel's
+declared content type) must stay **quiet when it cannot resolve that fact** rather than guess — see
+the injected-resolver pattern in Phases 9 and 10.
+
+**Diagnostic inventory by area** (message text lives in the validator; this is the map):
+
+| area | checks |
+|---|---|
+| document | `arazzo` present + version valid; `info.title`; `info.version`; at least one `sourceDescriptions`; at least one `workflows` |
+| sourceDescriptions | `name` and `url` required; `type` enum; `$self` must not contain a fragment (spec §5.8.1.1) |
+| workflows | `workflowId` required + unique; at least one step |
+| steps | `stepId` required + unique; exactly one target field; `action` enum + AsyncAPI-only; `timeout` non-negative; `correlationId` only on AsyncAPI receives; non-empty `successCriteria` when present |
+| targeting | `channelPath` / `operationPath` format, unknown source, source-type rules; scoped `operationId` expression form |
+| `dependsOn` | reference forms (3), existence, self-reference, step-level cycles, workflow-level cycles |
+| components | key charset `[a-zA-Z0-9.\-_]+`; `$components.<section>.<key>` reference resolution |
+| actions | `type` required + enum; `stepId`/`workflowId` mutually exclusive; action `parameters` only with `workflowId`; `in` forbidden on action parameters |
+| expressions | Expression Type Object `type` enum + required/valid `version`; parameter `in` enum |
+| references | forward-reference warning (a step referencing one declared after it) |
+
+**Limits:**
+- `validateRuntimeExpressions` only special-cases `$steps` / `$workflows` roots; there is no default
+  branch, so an unknown or misspelled root is **not** flagged. This is deliberate — it is what let the
+  Phase-5 roots land without the LSP rejecting them — but it means `$stpes.foo` passes validation.
+- Two known blind spots remain, tracked under Known Issues below ("two remaining LSP validation blind
+  spots"). Both are missed detections, not false alarms.
 
 Verification tests (most already exist under `examples/async_test`): bad `$self` (fragment),
 bad `action`, negative `timeout`, invalid source `type`, duplicate target selectors,
@@ -160,26 +226,47 @@ so **v1.0.x behavior is byte-for-byte preserved**. Tests: [resolve_test.go](../.
 source-location cases) + [loader_test.go](../../arazzo-designer-cli/internal/loader/loader_test.go) (local, relative-`$self`, remote-`$self` via httptest,
 dedup, absolute-remote-source) — all green; full CLI suite green.
 
-The other two layers named below need no change: the LSP parses the whole document before use
-and discovers OpenAPI files by directory scan (it never resolves `sourceDescriptions.url`), and
-the RPC client does no URL resolution. Spec §5.5.1 (full parse before resolution) already holds
-in the CLI (`LoadArazzoDoc` parses everything before `LoadSourceDescriptions` runs).
+**Base-URI determination** (spec §5.5, RFC3986 §5.1.1–5.1.4). `retrievalPath` is where the Arazzo
+document itself was loaded from:
 
-**Scope note / deferred:** the deep form of §5.5.2 identity matching — loading an *external Arazzo
-document* and matching a cross-document workflow reference against the *target's* declared `$self`
-— is not wired up, because the runner does not yet execute workflows in external Arazzo documents.
-That belongs with cross-document workflow execution (overlaps Phase 7's cross-document `dependsOn`)
-and should be implemented there. The loader-level base-URI resolution and same-location dedup that
-Phase 3 needs are done.
+| `$self` | base URI becomes | effect |
+|---|---|---|
+| absent | the retrieval URI (the document's own directory) | **v1.0.x behaviour, unchanged** |
+| absolute (`https://ex.com/flows/a.yaml`) | `$self` itself | relative sources become **remote URLs and are fetched** |
+| relative (`./flows/a.yaml`) | `$self` resolved against the retrieval URI | the resolved absolute URI is the base |
+
+**Source-location resolution:** a `sourceDescriptions.url` that is itself absolute — remote or an
+absolute local path — **always wins over the base URI** and is used as-is. Only relative URLs are
+resolved against the base.
+
+**Dedup is by resolved location, not by declared name.** Two source descriptions with different names
+that resolve to the same file are loaded **once**. That is the shallow half of the spec's
+identity-over-location rule; the deep half is deferred (below).
+
+**Why only the CLI changed.** The other two layers need no change and it is worth recording why, so a
+future reader does not "fix" them: the **LSP** parses the whole document before use and (at this
+point) discovered OpenAPI files by directory scan, never resolving `sourceDescriptions.url` at all —
+*this was later revisited in Phase 8*, which replaced the scan with `$self`-aware resolution of the
+declared sources so navigation resolves exactly as execution does. The **RPC client** does no URL
+resolution. Spec §5.5.1 (full parse before resolution) already held in the CLI, since `LoadArazzoDoc`
+parses everything before `LoadSourceDescriptions` runs.
+
+**Limits / deferred:**
+- The **deep form of §5.5.2 identity matching** — loading an *external Arazzo document* and matching a
+  cross-document workflow reference against the *target's* declared `$self` — is not wired up, because
+  the runner does not execute workflows in external Arazzo documents at all. That belongs with
+  cross-document workflow execution (it overlaps Phase 7's cross-document `dependsOn`) and is tracked
+  in the end-cleanup batch under Known Issues.
+- Remote sources are fetched with no caching, auth, or retry.
+- The LSP keeps a **standalone copy** of this resolution logic ([resolve.go](arazzo-designer-lsp/server/resolve.go),
+  added in Phase 8) because the two Go modules cannot import each other. The two copies must be kept
+  in step by hand — the same constraint that later forced `utils.SameMediaType` to be duplicated in
+  Phase 10.
 
 Original spec-derived requirements (for reference):
 - Enforce full-document parse before any reference resolution (spec §5.5.1) in the LSP loader,
   CLI loader, and RPC client.
-- Establish the base URI per RFC3986 §5.1.1–5.1.4 priority:
-  - `$self` absolute → use directly as base URI.
-  - `$self` relative → resolve against the next base source (retrieval URI / encapsulating
-    entity / application default), then use the resulting absolute URI.
-  - `$self` absent → use the retrieval URI (file path or HTTP URL) as base URI.
+- Establish the base URI per RFC3986 §5.1.1–5.1.4 priority (see the table above).
 - Resolve relative `sourceDescriptions.url` against that base URI.
 - Identity-based matching for external Arazzo refs: if the target has `$self`, the reference
   MUST match the `$self` URI, not just the retrieval location (spec §5.5.2). See spec
@@ -192,137 +279,258 @@ treated as one; full parse before resolution; existing examples still load.
 
 ### Phase 4: Selector Objects And Expression Types — ✅ DONE except XPath (2026-06-17)
 
+Goal: support the new structured-extraction model. **Before this phase Selector Objects were preserved
+verbatim and never evaluated.**
+
 **Implemented.** New shared selector-evaluation service [internal/evaluator/selector.go](../../arazzo-designer-cli/internal/evaluator/selector.go):
 `IsSelectorObject` (detects a `{context, selector, type}` map), `EvaluateSelectorObject`
 (resolves the `context` expression, then routes by dialect), `resolveExpressionType` (handles
 bare-string or Expression Type Object `type`, applies default versions, rejects unknown
 dialects/versions), and `EvaluateJSONPathValue` (value-returning JSONPath, complementing the
-existing bool criterion engine). Wired into all permitted spots: step outputs
-([output_extractor.go](../../arazzo-designer-cli/internal/runner/executor/output_extractor.go)), workflow outputs ([runner.go](../../arazzo-designer-cli/internal/runner/runner.go) `resolveWorkflowOutputs`),
-parameter values + request-body payloads (nested) + payload replacement values
-([parameter_processor.go](../../arazzo-designer-cli/internal/runner/executor/parameter_processor.go)), and the central `processValue` recursion. `jsonpointer` reuses
-`ResolveJSONPointer` (RFC 6901); `jsonpath` reuses the `ojg` engine (RFC 9535). **XPath returns
-a clear "not yet supported" error** (deferred to the next step). LSP: `validateExpressionType`
-([validator.go](arazzo-designer-lsp/validator/validator.go)) validates Expression Type Objects on criterion `type` (version required + valid per
-type). Plain string expressions are untouched. Tests: `evaluator/selector_test.go`,
-`executor/output_extractor_test.go`, `executor/parameter_processor_test.go`, and an LSP
-`TestExpressionType` — all green; full CLI + LSP suites green.
+existing bool criterion engine). `jsonpointer` reuses `ResolveJSONPointer` (RFC 6901); `jsonpath`
+reuses the `ojg` engine (RFC 9535). **XPath returns a clear "not yet supported" error.**
 
-**Remaining for the XPath follow-up (do near the end, together with Phase 6's `targetSelectorType`):**
-add an XML/XPath engine and route `xpath` selectors to it (currently they error). The **same XPath
-engine also unblocks Phase 6's XPath replacement targets**, and `targetSelectorType` (JSONPath/XPath
-replacement targets) is likewise deferred there — so XPath-selectors (this phase) and the replacement
-target side (Phase 6) are best done as one final XPath/`targetSelectorType` push. Also a possible
-tightening: LSP validation of Expression Type Objects on Selector Objects / `targetSelectorType`
-inside outputs/payloads (currently runtime-validated only, since those are untyped maps in the LSP).
+**What a Selector Object is, and how it is recognised.** A three-key map — `context` (a runtime
+expression naming what to select *from*), `selector` (the query), and optional `type` (the dialect).
+Detection is structural (`IsSelectorObject`), not schema-driven, because the CLI models these as
+`interface{}` (the Phase-1 divergence). Evaluation is always two steps: resolve `context` through the
+normal expression evaluator, then run `selector` against the result in the chosen dialect.
 
-Original spec-derived requirements (for reference):
+**Dialect / version matrix** (spec §5.8.12). The **defaults are *tooling* defaults, applied only when
+the Expression Type Object is absent entirely** — the object itself always requires BOTH `type` and
+`version`, and omitting `version` inside it is an error rather than a fallback:
 
-Goal: support the new structured-extraction model. **Currently Selector Objects are preserved
-verbatim and never evaluated.**
+| `type` | allowed `version` values | tooling default when the object is absent |
+|---|---|---|
+| `jsonpath` | `rfc9535`, `draft-goessner-dispatch-jsonpath-00` | `rfc9535` |
+| `xpath` | `xpath-31`, `xpath-30`, `xpath-20`, `xpath-10` | `xpath-31` |
+| `jsonpointer` | `rfc6901` | `rfc6901` |
 
-Changes:
-- Add a typed `SelectorObject` decode (`context`, `selector`, `type`) on the CLI side (today
-  it is `interface{}`), plus an `ExpressionTypeObject` decode (`type` REQUIRED, `version`
-  REQUIRED — reject the object if `version` is omitted).
-  - Allowed `version` per `type`: `jsonpath` → `rfc9535` | `draft-goessner-dispatch-jsonpath-00`;
-    `xpath` → `xpath-31` | `xpath-30` | `xpath-20` | `xpath-10`; `jsonpointer` → `rfc6901`.
-  - When the Expression-Type Object is **absent**, tooling applies defaults
-    (`jsonpath`→`rfc9535`, `xpath`→`xpath-31`, `jsonpointer`→`rfc6901`). These are *tooling*
-    defaults, not object defaults — the object itself always requires both fields.
-- Build a **shared selector-evaluation service** used by all runner components:
-  - `jsonpointer` → RFC6901 (reuse existing `ResolveJSONPointer`).
-  - `jsonpath` → reuse the existing `ojg` RFC9535 JSONPath ([jsonpath.go](../../arazzo-designer-cli/internal/evaluator/jsonpath.go)).
-  - `xpath` → add XML/XPath support behind the same service.
-  - Unsupported type/version → clear validation/runtime error.
-- Wire Selector Objects everywhere v1.1.0 permits: workflow outputs, step outputs, parameter
-  values, request-body payload values, payload replacement values (replacing the current
-  "preserve as-is" path in `output_extractor.go`).
-- Keep existing string runtime-expression behavior intact.
+Unknown dialect, or a version not in the row, is a clear error at both layers — never a silent
+fallback to a default engine.
 
-Tests: selector from `$response.body`; from `$message.payload`; JSON Pointer; JSONPath; XPath
-on XML; unsupported type/version fails clearly.
+**Where Selector Objects are honoured** — every position v1.1.0 permits, all routed through one
+service so they cannot diverge:
+
+| position | wired in |
+|---|---|
+| step `outputs` | [output_extractor.go](../../arazzo-designer-cli/internal/runner/executor/output_extractor.go) |
+| workflow `outputs` | [runner.go](../../arazzo-designer-cli/internal/runner/runner.go) `resolveWorkflowOutputs` |
+| parameter `value` | [parameter_processor.go](../../arazzo-designer-cli/internal/runner/executor/parameter_processor.go) |
+| `requestBody.payload` values (nested) | same, via the central `processValue` recursion |
+| payload replacement `value` | same (this is Phase 6's value side) |
+
+**Rules — what fails, what is skipped, what is silent:**
+
+| condition | outcome |
+|---|---|
+| unknown `type`, or a `version` not allowed for it | **error** (runtime), **error** diagnostic on a criterion `type` (LSP) |
+| Expression Type Object present but `version` omitted | **error** — the object requires both fields |
+| `type: xpath` anywhere | **error**: not yet supported |
+| a selector evaluates but resolves to **nil** in an output | **warning**, and the output is **not extracted** (rather than emitting a null) |
+| a selector fails in a parameter / payload / replacement | **warning**, and the value is **left unreplaced** rather than injecting garbage |
+| a plain string runtime expression | untouched — this phase adds a path, it does not change the existing one |
+
+**Limits:**
+- **XPath is unimplemented** and errors. The same missing XML/XPath engine also blocks Phase 6's
+  `xpath` replacement targets, so the two are deliberately deferred as **one final XPath push**
+  together with `targetSelectorType`'s XML default (see the end-cleanup batch under Known Issues).
+- The **LSP validates Expression Type Objects only on criterion `type`**, a typed position. Inside
+  outputs, payloads and `targetSelectorType` they live in untyped maps, so they are runtime-validated
+  only — an author gets the error on run, not while typing. Tightening this is optional follow-up.
+- Selector evaluation resolves `context` through the evaluator, so a Selector Object is only as
+  reachable as its context expression: `$message.payload` selectors do nothing until an async runtime
+  populates `$message` (Phase 9).
+
+Tests: `evaluator/selector_test.go`, `executor/output_extractor_test.go`,
+`executor/parameter_processor_test.go`, and an LSP `TestExpressionType` — all green; full CLI + LSP
+suites green. Examples: `phase4_selectors/`.
 
 ### Phase 5: Runtime Expression Upgrade — ✅ DONE (branch `asyncV1-phase5`)
 
-Implemented in `internal/evaluator/evaluator.go` (+ `internal/models/models.go`, `internal/runner/runner.go`):
-- **New expression roots (spec §5.9):** `$self`; `$message.header.*` / `$message.payload[#/…]` (AsyncAPI,
-  resolves from the evaluation context — nil until an async runtime populates it); `$components.<type>.<name>`;
-  `$workflows.<id>.<field>`; `$url` / `$method` (from context).
-- **`$sourceDescriptions.<name>.<ref>` with the §5.9.2 two-step priority:** match `<ref>` against an
-  `operationId` (OpenAPI/AsyncAPI) or `workflowId` (Arazzo) in the referenced doc first; only on no match,
-  treat `<ref>` as a Source Description Object field (e.g. `url`, `type`). Source kind comes from the SD
-  Object's `type` (fallback: the spec's marker key). NOTE: this is the **general expression** form; the
-  operation-targeting forms in `operationId` / `operationPath` were already handled by `operation_finder.go`.
-- **Compound boolean criteria:** `EvaluateSimpleCondition` is now a quote-aware recursive-descent evaluator
-  supporting `!`, `&&`, `||`, parentheses, plus the existing comparisons / property-deref / array-indexing
-  (operands run through the full expression evaluator). Signature unchanged, so all callers are untouched.
-- **Embedded `{$…}` serialization:** primitives embed as text; objects/arrays embed as JSON; unresolved
-  placeholders are left in place with a context-aware warning.
-- **State threading:** `ExecutionState` gains `Self`, `Components`, `SourceDescriptionObjects`, `WorkflowsByID`,
-  populated by the runner from the Arazzo document.
-- **LSP:** no change needed — `validateRuntimeExpressions` only special-cases `steps`/`workflows` (no default
-  branch), so the new roots are not flagged.
-- **Tests:** `internal/evaluator/evaluator_phase5_test.go` (all roots, §5.9.2 priority, compound/grouped
-  conditions, embedded JSON). Build + vet + full suites green on both modules.
-- **Deferred / not done:** case-insensitive string comparison (no clear spec requirement located; left
-  case-sensitive — revisit if the spec mandates it for a specific operator).
+Goal: bring the evaluator to v1.1.0. **Previously the evaluator lacked
+`$message`/`$self`/`$sourceDescriptions`(general)/`$components` and compound boolean criteria.**
 
-Goal (original): bring the evaluator to v1.1.0. **Previously the evaluator lacked `$message`/`$self`/`$sourceDescriptions`(general)/`$components` and compound boolean criteria.**
+Implemented in `internal/evaluator/evaluator.go` (+ `internal/models/models.go`, `internal/runner/runner.go`).
 
-Changes:
-- Add expression roots to [evaluator.go](../../arazzo-designer-cli/internal/evaluator/evaluator.go):
-  - `$message.header.*`, `$message.payload`, `$message.payload#/…`
-  - `$self`
-  - `$sourceDescriptions.<name>.<id>` — implement the two-step priority of spec §5.9.2:
-    (1) match `<id>` against an `operationId`/`workflowId` in the named source; (2) only if no
-    match, treat `<id>` as a field of the Source Description Object (e.g. `url`). Implement the
-    priority explicitly; do not allow ambiguous resolution.
-  - `$components.successActions.*`, `$components.failureActions.*`
-  - (also fill the already-stubbed `$workflows`/`$url`/`$method` noted at `evaluator.go:112`)
-- Embedded-expression serialization: primitives embed as strings; objects/arrays serialize
-  consistently (normally JSON); unresolved expressions produce useful, context-aware warnings.
-- Replace the simple comparison parser with a real expression evaluator supporting
-  `!`, `&&`, `||`, parentheses, property dereference, array indexing, numeric & string
-  comparison, and case-insensitive comparison where the spec requires it.
+**Expression roots, complete** (spec §5.9) — the pre-existing ones are listed too, because "what
+resolves" is the reference an author actually needs:
 
-Tests: `$message.payload.status == "confirmed"`; `$message.header.correlationId`; `$self`
-resolves; `$sourceDescriptions.petstore.url` resolves; object/array embedded serialization;
-compound criteria with `&&`/`||`/`!`/parentheses/indexing.
+| root | resolves from | added here |
+|---|---|---|
+| `$statusCode`, `$response`, `$response.header.*`, `$response.body[#/…]` | the HTTP response | no |
+| `$inputs`, `$inputs.*` | workflow inputs | no |
+| `$steps.<id>.*` | recorded step data | no |
+| `$dependencies.<wfId>.*` | outputs of a workflow-level `dependsOn` | no |
+| `$self` | the document's `$self` field | **yes** |
+| `$message`, `$message.header.*`, `$message.payload[#/…]` | the async evaluation context — **nil until Phase 9 populates it** | **yes** |
+| `$components.<type>.<name>` | the document's `components` | **yes** |
+| `$workflows.<id>.<field>` | the document's workflows | **yes** |
+| `$url`, `$method` | the execution context | **yes** |
+| `$sourceDescriptions.<name>.<ref>` | see the two-step rule below | **yes** |
+
+**`$sourceDescriptions.<name>.<ref>` — the §5.9.2 two-step priority.** `<ref>` is matched **first**
+against an `operationId` (OpenAPI/AsyncAPI) or `workflowId` (Arazzo) *inside the referenced document*;
+**only when there is no match** is it treated as a field of the Source Description Object itself
+(`url`, `type`, …). The order is implemented explicitly so resolution can never be ambiguous. Source
+kind comes from the SD Object's declared `type`, falling back to the spec's marker key.
+
+> Not to be confused with the **operation-targeting** forms in a step's `operationId` /
+> `operationPath`, which `operation_finder.go` already handled. This root is the *general expression*
+> form usable anywhere an expression is allowed.
+
+**Compound boolean criteria.** `EvaluateSimpleCondition` became a quote-aware recursive-descent
+evaluator. The signature is unchanged, so every existing caller was untouched.
+
+| supported | detail |
+|---|---|
+| logical | `!`, `&&`, `\|\|`, parentheses (with precedence) |
+| comparison | `==`, `!=`, `>`, `<`, `>=`, `<=` |
+| access | property dereference, array indexing |
+| operands | run through the **full** expression evaluator, so any root above works inside a condition |
+| malformed input | **warning** — *malformed condition … (unparsed input or unbalanced parentheses); treating as false* — the condition evaluates **false** rather than erroring the step |
+
+**Embedded `{$…}` serialization** (`resolveTemplateString` / `embedValue`):
+
+| value | embedded as |
+|---|---|
+| string | as-is |
+| object / array | **JSON** — not Go's `map[k:v]` rendering |
+| other primitives | default formatting |
+| unresolved (nil) | the **placeholder is left in place**, with a context-aware warning naming the expression and the template |
+
+Leaving an unresolved placeholder rather than substituting an empty string is deliberate: an empty
+substitution produces a plausible-looking but wrong request, while a surviving `{$inputs.missing}` is
+visibly broken in the output and in the log.
+
+**State threading:** `ExecutionState` gained `Self`, `Components`, `SourceDescriptionObjects` and
+`WorkflowsByID`, populated by the runner from the Arazzo document.
+
+**LSP:** no change was needed — `validateRuntimeExpressions` only special-cases `steps`/`workflows`
+and has no default branch, so the new roots are not flagged. The flip side is recorded under Phase 2's
+limits: an unknown root is not flagged either.
+
+**Limits / deferred:**
+- **Case-insensitive string comparison is not implemented** — comparisons are case-sensitive. No clear
+  spec requirement was located mandating otherwise; revisit if one is found for a specific operator.
+- A malformed condition degrades to `false` rather than failing the step. That keeps a typo from
+  aborting a run, but it means a criterion can silently never match — the warning is the only signal.
+- `$message` resolves to nil outside an async step, so a criterion referencing it in a REST step is
+  quietly false rather than an error.
+
+**Tests:** `internal/evaluator/evaluator_phase5_test.go` (all roots, §5.9.2 priority, compound/grouped
+conditions, embedded JSON). Build + vet + full suites green on both modules.
 
 ### Phase 6: Payload Replacement Upgrade — ✅ DONE except XPath (deferred to the end-of-project XPath push)
 
+Goal: bring Payload Replacement Objects to v1.1.0 on **both** sides — the value being written and the
+target it is written to.
+
 Status:
 - **Value side — ✅ done (Phase 4):** a replacement `value` can be a literal, a runtime expression,
-  or a Selector Object; `applyReplacements` evaluates it.
-- **Target side — ✅ done for JSON Pointer + JSONPath:** `applyReplacements` now reads
-  `targetSelectorType` (string or Expression Type Object, via `evaluator.ResolveExpressionType`) and
-  routes the `target` accordingly — **JSON Pointer** (`setJSONPointer`, the default when omitted) and
-  **JSONPath** (`evaluator.SetJSONPath`, backed by `ojg`'s `Set`). **JSON Pointer targets support array
-  indices** (e.g. `/items/0/product_id`, mirroring the read side) and a failed/nil replacement value
-  is skipped rather than injecting garbage. Tests: `evaluator.TestSetJSONPath`,
-  `executor.TestApplyReplacements_JSONPathTarget`, `executor.TestApplyReplacements_JSONPointerArrayIndex`;
-  examples `phase4_selectors/07-jsonpath-replacement-target` and `08-jsonpointer-array-target`.
+  or a Selector Object; `applyReplacements` evaluates it through the shared service.
+- **Target side — ✅ done for JSON Pointer + JSONPath:** `applyReplacements` reads `targetSelectorType`
+  (a bare string or an Expression Type Object, via `evaluator.ResolveExpressionType`) and routes the
+  `target` accordingly.
 - **Target side — ❌ XPath only:** an `xpath` `targetSelectorType` logs a clear "not yet supported"
-  warning. This is the **only** remaining replacement gap and it **depends on the XPath engine that
-  Phase 4 also deferred** — so finish it together with the Phase 4 XPath selectors as one final XPath
-  push (see the "End-of-project cleanup batch" note under Known Issues / Bugs).
+  warning.
 
-**Remaining for the XPath follow-up:**
-- Add the XML/XPath engine and route `xpath` replacement targets (and `xpath` selectors from Phase 4) to it.
-- Apply the XML default: when `targetSelectorType` is omitted and the payload is XML, treat the target as XPath.
-  (JSON default — JSON Pointer — is already in place.)
-- Optional: LSP validation of `targetSelectorType` as an Expression Type Object (version required + valid per type).
+**Target dialects:**
+
+| `targetSelectorType` | engine | notes |
+|---|---|---|
+| omitted | **JSON Pointer** (`setJSONPointer`) | the default for JSON payloads |
+| `jsonpointer` | `setJSONPointer` | **array indices supported** (`/items/0/product_id`), mirroring the read side |
+| `jsonpath` | `evaluator.SetJSONPath` (ojg `Set`) | |
+| `xpath` | — | warning, replacement skipped; blocked on the same missing engine as Phase 4 |
+
+**Rules — every failure mode skips the replacement rather than corrupting the payload.** This is the
+governing design decision of the phase: a replacement that cannot be applied leaves the payload as it
+was, and says so. It never writes a partial path, a null, or a stringified error.
+
+| condition | outcome (all warnings; the payload is left untouched) |
+|---|---|
+| `targetSelectorType` invalid | *replacement 'targetSelectorType' invalid: …* |
+| JSON Pointer target not starting with `/` | *JSON Pointer replacement target … must start with '/'* |
+| JSONPath target fails to apply | *JSONPath replacement target failed: …* |
+| `xpath` target | *XPath replacement targets are not yet supported* |
+| pointer names a missing object key | *… not applied: missing object key …* |
+| pointer names an out-of-range or non-numeric array index | *… not applied: invalid array index … (array length N)* |
+| pointer descends into a scalar | *… not applied: cannot descend into segment … (node is neither object nor array)* |
+| the replacement **value** resolves to nil (literal, expression, or selector) | *… resolved to nil …; skipping replacement* |
+
+**Limits / remaining for the XPath follow-up:**
+- Add the XML/XPath engine and route `xpath` replacement targets (and Phase 4's `xpath` selectors) to it.
+- Apply the **XML default**: when `targetSelectorType` is omitted and the payload is XML, the target
+  should be treated as XPath. Only the JSON default (JSON Pointer) is in place today, so an XML payload
+  with an omitted type is currently interpreted as a JSON Pointer.
+- Optional: LSP validation of `targetSelectorType` as an Expression Type Object (version required +
+  valid per type) — today it is runtime-validated only, since it sits in an untyped map.
+- Because every failure is a **warning, not an error**, a workflow with a mistyped target still
+  reports success. The run log is the only place the skip is visible.
+
+Tests: `evaluator.TestSetJSONPath`, `executor.TestApplyReplacements_JSONPathTarget`,
+`executor.TestApplyReplacements_JSONPointerArrayIndex`; examples
+`phase4_selectors/07-jsonpath-replacement-target` and `08-jsonpointer-array-target`.
 
 ### Phase 7: Step Dependencies (`dependsOn`) — ✅ DONE
 
-**Implemented (matches the design below):**
-- **Runtime step gate** ([runner.go](../../arazzo-designer-cli/internal/runner/runner.go) `checkStepDependencies`) — checked before each step; no reordering, no triggering; hard error on an unmet prerequisite (spec §5.8.5.1). Reference forms: local `stepId`; `$workflows.<wf>.steps.<s>`; `$sourceDescriptions.<name>.<wf>.steps.<s>` (form-validated, execution deferred).
-- **Cross-workflow step granularity** — the gate verifies the **specific** referenced step reached success (not just that the workflow ran). The runner now surfaces each dependency workflow's per-step status (`WorkflowExecutionResult.StepsStatus` → `ExecutionState.DependencyStepStatus`), so a step skipped via `goto` in a dependency correctly fails the gate.
+**The governing design decision (spec §5.8.5.1): `dependsOn` is a completion GATE, not a reordering
+directive and not a trigger.** The spec says *"A list of steps that MUST be completed before this step
+can be executed. `dependsOn` only establishes a prerequisite relationship … and does not trigger
+execution of the referenced steps."* So the runner keeps executing in the existing order (document
+order plus `goto`/`onSuccess`/`onFailure`/`retry`, all unchanged) and only adds a **check before each
+step**. Topological scheduling was explicitly rejected as non-spec.
+
+**"Completed" means the prerequisite step RAN and reached terminal SUCCESS.** A prerequisite that ran
+and failed does not satisfy the gate; neither does one that was skipped.
+
+**Implemented:**
+- **Runtime step gate** ([runner.go](../../arazzo-designer-cli/internal/runner/runner.go) `checkStepDependencies`) — checked before each step; no reordering, no triggering; hard error on an unmet prerequisite.
+- **Cross-workflow step granularity** — the gate verifies the **specific** referenced step reached success, not merely that the workflow ran. The runner surfaces each dependency workflow's per-step statuses (`WorkflowExecutionResult.StepsStatus` → `ExecutionState.DependencyStepStatus`), so a step skipped via `goto` inside a dependency correctly fails the gate.
 - **Workflow-level `dependsOn` cycle guard** ([runner.go](../../arazzo-designer-cli/internal/runner/runner.go) `executeDependencies` `depStack`) — a circular workflow dep now errors clearly instead of stack-overflowing (trigger behavior kept).
 - **LSP static validation** ([validator.go](arazzo-designer-lsp/validator/validator.go)) — `dependsOn` reference forms + existence + self-reference, plus **cycle detection** for both **step-level** (`validateDependsOnCycles`) and **workflow-level** (`validateWorkflowDependsOnCycles`) `dependsOn`.
-- **Examples**: [examples/async_test/phase7/](../../examples/async_test/phase7) 01–08 (gate satisfied/unmet, workflow dep, step & workflow cycles, cross-workflow dep, cross-workflow specific-step-ran vs step-skipped-by-goto). Unit tests: `runner_phase7_test.go`, `validator_test.go`.
-- **Deferred (unchanged):** async wait-with-timeout (Phases 8–11); cross-**document** `dependsOn` execution (end-of-project batch); the **visualization** of `dependsOn` edges / blocked-step state (Phase 13, needs team sign-off).
+
+**Reference forms and what each does at runtime:**
+
+| form | runtime behaviour |
+|---|---|
+| bare `stepId` (same workflow) | full gate — the step must be `StepStatusSuccess` |
+| `$workflows.<wfId>.steps.<stepId>` | the workflow must have run **as a dependency** (its per-step statuses recorded) **and** that specific step must have succeeded |
+| `$sourceDescriptions.<name>.<wfId>.steps.<stepId>` | **form-validated only** — hard error at runtime: *cross-document step dependencies are not yet supported* |
+
+**Rules — every unmet gate is a HARD ERROR, never a wait and never a skip:**
+
+| condition | outcome |
+|---|---|
+| local prerequisite did not reach success | error: *step 'X' dependsOn 'Y', which has not completed successfully* |
+| referenced workflow never ran as a dependency | error: *… but workflow 'W' has not run as a dependency* |
+| referenced cross-workflow step did not succeed | error: *… but step 'S' in workflow 'W' did not complete successfully* |
+| malformed `$workflows.…` reference | error: *has a malformed dependsOn reference* |
+| any `$sourceDescriptions.…` step reference | error: *cross-document step dependencies are not yet supported* |
+| circular `dependsOn` (step level, or workflow level) | LSP **error** at authoring time; workflow-level cycles also guarded at runtime instead of crashing |
+
+**Step-level vs workflow-level `dependsOn` behave DIFFERENTLY, on purpose.** Step `dependsOn` is a
+pure gate (the spec's "does not trigger" clause). Workflow `dependsOn` (§5.8.4.1) has no such clause —
+a workflow is a separate entry point that must be run to complete — so it **does trigger** the
+referenced workflows, collects their outputs into `$dependencies.<wfId>.*`, and fails clearly on a
+failed or unknown dependency. Both were kept as-is; only the missing cycle guard was added.
+
+**Examples**: [examples/async_test/phase7/](../../examples/async_test/phase7) 01–08 (gate satisfied/unmet, workflow dep, step & workflow cycles, cross-workflow dep, cross-workflow specific-step-ran vs step-skipped-by-goto). Unit tests: `runner_phase7_test.go`, `validator_test.go`.
+
+**Limits / deferred:**
+- **The async wait branch is designed but not wired.** The intent is that if a prerequisite *started
+  but has not reported completion*, an async step waits up to a timeout rather than failing
+  immediately. Nothing uses it, because the blocking model chosen in Phase 9 means a receive completes
+  inline — so a prerequisite is always either done or not. It becomes real only with **Phase 14**
+  (non-blocking async steps).
+- **Cross-document `dependsOn` execution** is a hard error, pending executable `type: arazzo` sources
+  (end-cleanup batch, and it needs Phase 3's deferred §5.5.2 identity matching).
+- The LSP's "dependency cannot have completed by document/flow order" check is only partly there — a
+  forward reference produces a **warning** (*declared after this step … unless a 'goto' runs it
+  first*), not a full reachability analysis.
+- **Visualization of `dependsOn` edges and blocked-step state is not done** — it needs a distinct graph
+  edge and a blocked state on the gated step. Parked in Phase 13 (needs team sign-off).
 
 <details><summary>Original design (as implemented) — kept for reference</summary>
 
@@ -390,26 +598,68 @@ Goal: understand AsyncAPI sources (resolve + navigate + surface info) before rea
 **NO visual/UI changes to the graph in this phase** — node appearance, badges, icons, and edges stay
 exactly as they are (UI changes need team confirmation; they are parked in the final UI phase below).
 
+**The three targeting forms, and the exact pointer shapes** — this is the reference the rest of the
+async phases build on. A step targets an operation or a channel in one of three ways:
+
+| form | shape | resolves to |
+|---|---|---|
+| `operationId` (bare) | `publishEvent` | an operation of that id in any declared source |
+| `operationId` (scoped) | `$sourceDescriptions.<name>.<operationId>` | that operation in that source only |
+| `channelPath` | `<source>#/channels/<key>` | an AsyncAPI channel (direction comes from the step's `action`) |
+| `operationPath` | `<source>#/operations/<id>` (AsyncAPI) or `<source>#/paths/~1products/get` (OpenAPI) | an operation by JSON Pointer — `~1` = `/`, `~0` = `~` |
+
+**Both source-reference spellings are accepted everywhere.** The spec REQUIRES a runtime expression
+(`{$sourceDescriptions.<name>.url}#…`) in `channelPath`/`operationPath`, while a bare source name is
+the common shorthand. One shared helper ([utils/sourceref.go](arazzo-designer-lsp/utils/sourceref.go):
+`NormalizeSourceRef`, `SplitSourceRefAndPointer`, `ParseScopedOperationID`, `SplitJSONPointer` incl.
+`~1`/`~0` unescaping) is used by navigation, hover **and** validation, so the three cannot disagree.
+**Fixed here:** the validator previously reported the spec-mandated expression form as an "unknown
+source description".
+
 **Status by part:**
-- **Part 1 — CLI resolver ✅ DONE.** [asyncapi_finder.go](../../arazzo-designer-cli/internal/runner/executor/asyncapi_finder.go) (+ `asyncapi_finder_test.go`): `FindChannelByPath` (`source#/channels/x` via JSON Pointer), `FindOperationByID` (bare + scoped `$sourceDescriptions.<name>.<op>`, follows the operation's channel `$ref`), `ActionMismatch` detection. It **resolves/identifies** async targets only — it is **not** wired into step execution (no `Send`/`Receive`); that is Phase 9 (marked with a `TODO(phase9)` in the file).
+- **Part 1 — CLI resolver ✅ DONE.** [asyncapi_finder.go](../../arazzo-designer-cli/internal/runner/executor/asyncapi_finder.go) (+ `asyncapi_finder_test.go`): `FindChannelByPath` (`source#/channels/x` via JSON Pointer), `FindOperationByID` (bare + scoped, follows the operation's channel `$ref`), `ActionMismatch` detection. It **resolves/identifies** async targets only — it is **not** wired into step execution (no `Send`/`Receive`); that is Phase 9. *(`FindOperationByPath` — the third form at runtime — was missing here and only added in Phase 10; see that phase's "Phase 9 gap closed here".)*
 - **Part 2 — LSP indexing + navigation + validation ✅ DONE.**
   - Indexing: [parser.go](arazzo-designer-lsp/navigation/parser.go) / [types.go](arazzo-designer-lsp/navigation/types.go) index AsyncAPI channels + operations (`extractChannels`, `ChannelInfo`, `AddChannel`/`LookupChannel`).
-  - Navigation: [definition.go](arazzo-designer-lsp/server/definition.go) + [position_utils.go](arazzo-designer-lsp/server/position_utils.go) — go-to-definition for `channelPath` (→ channel location), OpenAPI + AsyncAPI operations, and the scoped `$sourceDescriptions.<name>.<op>` form. Hardened during testing:
-    - **Scoped to the document's declared `sourceDescriptions`** (not a workspace/directory scan) — a reference resolves only inside the specs this Arazzo doc declares, never into an unrelated same-named op elsewhere. Per-file lookups (`LookupOperationInFile`/`LookupChannelInFile`) bypass the global deduped map.
+  - Navigation: [definition.go](arazzo-designer-lsp/server/definition.go) + [position_utils.go](arazzo-designer-lsp/server/position_utils.go) — go-to-definition for all three forms. Hardened during testing:
+    - **Scoped to the document's declared `sourceDescriptions`**, not a workspace/directory scan — a reference resolves only inside the specs this Arazzo doc declares, never into an unrelated same-named op elsewhere. Per-file lookups (`LookupOperationInFile`/`LookupChannelInFile`) bypass the global deduped map. This is the phase's second big design decision: **name resolution is document-scoped**, because a source name means nothing outside the document that declared it.
     - **On open/change, only the declared sources are parsed/indexed** ([server.go](arazzo-designer-lsp/server/server.go) `indexDeclaredSources`) — the old directory-scan path (`BuildIndex`/`DiscoverOpenAPIFiles`) is now dead (marked `// NOT USED`).
-    - **`$self`-aware source resolution** ([resolve.go](arazzo-designer-lsp/server/resolve.go)) mirrors the runner (spec §5.5), so navigation resolves relative source URLs exactly as execution does (standalone copy — no CLI-module import).
-    - **Hover uses the same scoped resolver as Go-to-Definition** (`lookupOperationInSources`), so the hover popup can't disagree with the click target. Hover now also covers `channelPath` (channel key + broker address) and `operationPath`.
-    - **All THREE targeting forms navigate**: `operationId` (bare + scoped), `channelPath`, and **`operationPath`** (JSON-Pointer based — `#/paths/~1products/get` for OpenAPI, `#/operations/<id>` for AsyncAPI; `LookupOperationByPointerInFile`). `operationPath` navigation is new — it had never existed in any version.
-    - **Both source-reference spellings are accepted everywhere.** The spec REQUIRES a runtime expression (`{$sourceDescriptions.<name>.url}#…`) in `channelPath`/`operationPath`, while a bare source name is the common shorthand. One shared helper ([utils/sourceref.go](arazzo-designer-lsp/utils/sourceref.go): `NormalizeSourceRef`, `SplitSourceRefAndPointer`, `ParseScopedOperationID`, `SplitJSONPointer` incl. `~1`/`~0` unescaping) is used by navigation, hover AND validation, so they can't disagree. **Fixed:** the validator previously reported the spec-mandated expression form as an "unknown source description".
+    - **`$self`-aware source resolution** ([resolve.go](arazzo-designer-lsp/server/resolve.go)) mirrors the runner (spec §5.5), so navigation resolves relative source URLs exactly as execution does (standalone copy — the two Go modules cannot import each other; see Phase 3's limits).
+    - **Hover uses the same scoped resolver as Go-to-Definition** (`lookupOperationInSources`), so the popup cannot disagree with the click target. Hover also covers `channelPath` (channel key + broker address) and `operationPath`.
+    - **`operationPath` navigation is new** — it had never existed in any version.
     - **Indexing runs on open, change AND save**, always file-scoped: saving an Arazzo file re-resolves and re-indexes its declared sources (so a newly added `sourceDescription` works without reopening); saving a source spec re-indexes that file (AsyncAPI files included, not just `openapi:`).
-    - **Per-document typed source registry** ([server/source_registry.go](arazzo-designer-lsp/server/source_registry.go)) — for each Arazzo document it records every declared source's name, declared `type`, the type the file **actually** is (`OpenAPIFile.SpecType`), resolved file URI, and a remote flag; exposes `AsyncSources`/`RESTSources` so **event-driven sources are tracked separately from REST ones**, plus `TypeMismatch()` when a file contradicts its declared type. Entries are document-scoped (a source name means nothing outside the document that declared it) and dropped on close. Surfaced to clients — e.g. the graph, to tell which kind of API a step targets — via the additive **`arazzo/getSourceInfo`** LSP method (`{sources, async, rest}`); `arazzo/getModel`'s shape is unchanged.
-  - Validation now also covers **`operationPath`** (format, unknown source, `arazzo`-typed source → use `workflowId`) and the **scoped `operationId`** (unknown source, malformed `$` expression), symmetric with the existing `channelPath` rules.
-  - Validation: [validator.go](arazzo-designer-lsp/validator/validator.go) — **`channelPath` present but `action` absent → ERROR** (direction undefined), plus channelPath format + source-type (`asyncapi`) checks. The **`operationId`/`action` mismatch** LSP diagnostic was originally deferred here (it needs cross-source resolution the validator could not do) — **now implemented**, see the step-action resolver below.
-- **Part 3 — Visualizer properties panel ✅ DONE.** [NodePropertiesPanel.tsx](arazzo-designer-visualizer/src/views/WorkflowView/NodePropertiesPanel.tsx) now shows, on a clicked step: a **Step Type** field (AsyncAPI via `channelPath`/`action`; a scoped `operationId` resolves to its source's declared type; a bare `operationId` resolves when the doc declares exactly one typed source, else OpenAPI; `workflowId` → Workflow), an **AsyncAPI** section (`channelPath`/`action`/`correlationId`/`timeout`), and a **Depends On** section. The async fields already reach the panel via `...stepData` (no plumbing needed). **Properties panel ONLY** — no node/graph/badge/edge changes (those stay in Phase 13).
+    - **Per-document typed source registry** ([server/source_registry.go](arazzo-designer-lsp/server/source_registry.go)) — for each Arazzo document it records every declared source's name, declared `type`, the type the file **actually** is (`OpenAPIFile.SpecType`), resolved file URI, and a remote flag; exposes `AsyncSources`/`RESTSources` so **event-driven sources are tracked separately from REST ones**, plus `TypeMismatch()` when a file contradicts its declared type. Entries are document-scoped and dropped on close. Surfaced to clients via the additive **`arazzo/getSourceInfo`** LSP method (`{sources, async, rest}`); `arazzo/getModel`'s shape is unchanged.
+  - **Part 3 — Visualizer properties panel ✅ DONE.** [NodePropertiesPanel.tsx](arazzo-designer-visualizer/src/views/WorkflowView/NodePropertiesPanel.tsx) shows, on a clicked step: a **Step Type** field, an **AsyncAPI** section (`channelPath`/`action`/`correlationId`/`timeout`), and a **Depends On** section. **Properties panel ONLY** — no node/graph/badge/edge changes (those stay in Phase 13).
 
-Tests: AsyncAPI source loads ✅; op/channel indexed ✅; **all three targeting forms** (`operationId` bare+scoped, `channelPath`, `operationPath`) navigate to the right file+line in **both source-reference spellings** ✅; hover matches the click target for every form ✅; navigation stays scoped to declared sources (an undeclared same-named op is never reached) ✅; `$self`-aware resolution matches the runner ✅; per-document registry records declared/resolved types, splits async vs REST, flags type mismatches, and is dropped on close ✅; save re-indexes declared sources ✅; channelPath-without-action errors ✅; targeting validation (unknown source / bad format / malformed expression / arazzo-source operationPath) ✅; async metadata + Step Type shown in the properties panel ✅; graph rendering otherwise unchanged ✅. Examples: [examples/async_test/phase8/](../../examples/async_test/phase8) (01 panel/nav, 02 operationId, 03 async validation, **04 every targeting form × both spellings, 05 targeting validation**) — 04 and 05 are also test fixtures, so the shipped examples are verified to behave exactly as their headers claim.
+**Step Type resolution rules** (properties panel): `channelPath`/`action` → AsyncAPI; a **scoped**
+`operationId` resolves to its source's declared type; a **bare** `operationId` resolves only when the
+document declares exactly one typed source, otherwise it falls back to OpenAPI; `workflowId` →
+Workflow.
 
-**Deferred out of Phase 8 (tracked):** the single-clickable-link for a whole `channelPath` value (needs a DocumentLink provider — Ctrl+click/hover already navigate correctly, the link is just segmented); removal of the dead directory-scan code.
+**Diagnostics added here:**
+
+| condition | severity |
+|---|---|
+| `channelPath` present but `action` absent | **error** — direction is otherwise undefined |
+| `channelPath` / `operationPath` not `<source>#<pointer>` | **error** |
+| `channelPath` / `operationPath` / `operationId` names an unknown source description | **warning** — it may simply be unresolvable from the editor |
+| `channelPath` source is not `type: asyncapi` | **error** |
+| `operationPath` source is `type: arazzo` | **error** — use `workflowId` |
+| scoped `operationId` not `$sourceDescriptions.<name>.<operationId>` | **error** |
+
+The **`operationId`/`action` mismatch** diagnostic was originally deferred out of this phase because it
+needs cross-source resolution the validator could not do — it lands in Phase 9 via the injected
+step-action resolver.
+
+Tests: AsyncAPI source loads ✅; op/channel indexed ✅; **all three targeting forms** navigate to the right file+line in **both source-reference spellings** ✅; hover matches the click target for every form ✅; navigation stays scoped to declared sources ✅; `$self`-aware resolution matches the runner ✅; per-document registry records declared/resolved types, splits async vs REST, flags type mismatches, and is dropped on close ✅; save re-indexes declared sources ✅; channelPath-without-action errors ✅; targeting validation ✅; async metadata + Step Type shown in the properties panel ✅; graph rendering otherwise unchanged ✅. Examples: [examples/async_test/phase8/](../../examples/async_test/phase8) (01 panel/nav, 02 operationId, 03 async validation, **04 every targeting form × both spellings, 05 targeting validation**) — 04 and 05 are also test fixtures, so the shipped examples are verified to behave exactly as their headers claim.
+
+**Limits / deferred:**
+- **A whole `channelPath` value is not one clickable link** — it needs a DocumentLink provider.
+  Ctrl+click and hover already navigate correctly; the link is just segmented.
+- **The dead directory-scan code is still present** (`BuildIndex`/`DiscoverOpenAPIFiles`, marked
+  `// NOT USED`) — removal is in the end-cleanup batch.
+- A **bare** `operationId` in a document with several typed sources cannot be resolved to a type with
+  certainty, so the panel falls back to OpenAPI. Scoping the id removes the ambiguity.
+- The registry records a `TypeMismatch()` but nothing surfaces it as a diagnostic yet.
 
 ### Phase 9: AsyncAPI Adapter Runtime — ✅ DONE (blocking model; in-memory adapter)
 
@@ -417,28 +667,91 @@ Goal: make AsyncAPI steps actually EXECUTE. Mostly CLI runner work, but the last
 touch the LSP (a validator hook) and the visualizer (rendering the new message spans) — an async step
 should behave, be diagnosed, and be inspected exactly like a REST step.
 
+**The design decision that shapes everything after it: the BLOCKING model (option (a)).** The spec
+frames `dependsOn` around *non-blocking/asynchronous* steps, which allows two models — (a) a receive
+that waits inline up to `timeout`, with `dependsOn` staying the pure Phase-7 gate, or (b) a receive
+that starts listening in the background while the workflow proceeds, with a later step's `dependsOn`
+doing the waiting. **(a) was chosen** as the simpler model that makes async steps behave like every
+other step. (b) is deferred to Phase 14 — and until then, Phase 7's "started but not completed → wait
+with timeout" branch has nothing to wait for.
+
 **Implemented:**
 - **Adapter interface + in-memory adapter** — [adapter.go](../../arazzo-designer-cli/internal/runner/executor/adapter.go) (`Adapter` = `Send`/`Receive`/`Name`, normalized `Message`) and [adapter_inmemory.go](../../arazzo-designer-cli/internal/runner/executor/adapter_inmemory.go) (broker-less FIFO queues + timeout + a simple correlation heuristic). Default adapter is in-memory; a nil adapter yields the clear "requires a configured adapter" error. Real brokers = Phase 11.
-- **Send/receive wiring** — [async_executor.go](../../arazzo-designer-cli/internal/runner/executor/async_executor.go): `resolveAsyncTarget` routes a step to the async path when it has a `channelPath` or an `operationId` that resolves to an AsyncAPI operation (OpenAPI ops stay on the HTTP path). `send` builds payload/headers (reusing `ParameterProcessor`), serializes (basic JSON) and `Send`s; `receive` evaluates `correlationId`, `Receive`s with `timeout`. Both then run the **SAME `SuccessCriteriaChecker` and `OutputExtractor` as the HTTP path** (fed `$message` instead of `$response` via one added `"message"` context key) — no criteria/output logic is duplicated, and `$message` was already supported by the evaluator.
-- **A send step is not special.** `successCriteria` and `outputs` work on **both** directions. Inside a `receive`, `$message` is the message that arrived; inside a `send`, it is the message that step published (same `{header, payload}` shape). That makes the request/reply pattern work without repeating an expression: a send records what it published (`outputs: {sentId: $message.payload.orderId}`) and a later receive correlates on `$steps.<send>.outputs.sentId`.
-- **Enforcement:** `channelPath` without `action` → runtime hard error; step `action` vs operation `action` mismatch → operation wins + warning; declared `successCriteria` are never silently skipped on either direction.
-- **`correlationId` is always honoured.** A declared `correlationId` was only used when it was a `$`
-  runtime expression; a literal (`correlationId: "OP-2"`) evaluated to nil and the receive silently
-  fell back to **unfiltered**, returning an unrelated message and reporting SUCCESS. Now: absent →
-  unfiltered (with a warning); a literal → used as the id; an expression → its resolved value; an
-  expression resolving to nothing → the step **fails** rather than degrading to unfiltered.
-- **Async direction resolution for the LSP** — the validator only sees the Arazzo text, so it could
-  classify a step as send/receive only when the step wrote `action:` itself. It now takes an optional
-  resolver (`WithStepActionResolver`), which the server wires to the existing operation index
-  ([definition.go](arazzo-designer-lsp/server/definition.go) `resolveStepAsyncAction`) using the same
-  lookups navigation uses. That makes the direction of an `operationId`/`operationPath` step known and
-  enables two editor diagnostics that previously could not fire on the spec-preferred form: **a
-  receive with no `correlationId`**, and the **`action` vs operation-action mismatch** deferred from
-  Phase 8. Both are warnings; when the operation cannot be resolved the checks stay quiet.
-- **Run-log parity with REST steps** — [async_telemetry.go](../../arazzo-designer-cli/internal/runner/executor/async_telemetry.go). A REST step emits a child `http` span (request on start, response on end) which the Logs tab renders under the step; an async step now emits the equivalent **`message` span** (new `telemetry.SpanKindMessage`), nested under the step span exactly as the HTTP span is. Attributes mirror the HTTP ones: `messaging.operation` (send/receive), `messaging.channel`, `messaging.adapter`, plus `messaging.correlation_id`/`messaging.timeout_ms` on a receive, and `messaging.message.body`/`.headers` for the message — published up front on a send, reported on arrival for a receive (the analogue of request vs response). Timeouts and criteria failures close the span as errors carrying the reason. Telemetry lives in the **executor**, not the adapters, so adapters stay pure transport and every future broker is instrumented for free. The visualizer's Logs tab collects `message` spans alongside `http` ones and renders them with the same card layout ([LogsTab.tsx](arazzo-designer-visualizer/src/views/WorkflowView/LogsTab.tsx) `MessagePairCard`).
-- **Blocking model (choice (a)):** receive waits inline up to `timeout`; `dependsOn` stays the Phase-7 gate. Existing run telemetry drives the node red/green (received → success, timed out → failure). Examples [examples/async_test/phase9/](../../examples/async_test/phase9) 01–09 all behave as documented (5 pass, 4 fail on purpose).
+- **Send/receive wiring** — [async_executor.go](../../arazzo-designer-cli/internal/runner/executor/async_executor.go): `resolveAsyncTarget` routes a step to the async path when it has a `channelPath` or an `operationId` that resolves to an AsyncAPI operation (OpenAPI ops stay on the HTTP path). `send` builds payload/headers (reusing `ParameterProcessor`), serializes (basic JSON at this point) and `Send`s; `receive` evaluates `correlationId`, `Receive`s with `timeout`. Both then run the **SAME `SuccessCriteriaChecker` and `OutputExtractor` as the HTTP path** (fed `$message` instead of `$response` via one added `"message"` context key) — no criteria/output logic is duplicated, and `$message` was already supported by the evaluator (Phase 5).
+- **A send step is not special.** `successCriteria` and `outputs` work on **both** directions. Inside a `receive`, `$message` is the message that arrived; inside a `send`, it is the message that step published (same `{header, payload}` shape). That makes request/reply work without repeating an expression: a send records what it published (`outputs: {sentId: $message.payload.orderId}`) and a later receive correlates on `$steps.<send>.outputs.sentId`.
 
-**Deferred:** the **non-blocking** receive model (b) + the `dependsOn` "started-but-not-completed → wait-with-timeout" branch (a later refinement); the real serialization layer (Phase 10); real brokers (Phase 11).
+**The `Message` contract** (`adapter.go`) — the normalized shape every adapter speaks:
+
+| field | meaning |
+|---|---|
+| `Payload` | the **decoded** body, backing `$message.payload` |
+| `Headers` | backing `$message.header.*` |
+| `Raw` / `ContentType` | the **serialized** form (best-effort here; formalized in Phase 10) |
+| `Metadata` | adapter details (topic, transport) |
+
+**`correlationId` is always honoured** — the phase's sharpest bug fix. It was only used when it was a
+`$` runtime expression; a literal (`correlationId: "OP-2"`) evaluated to nil and the receive **silently
+fell back to unfiltered**, returned an unrelated message, and reported SUCCESS. The four states now:
+
+| `correlationId` | behaviour |
+|---|---|
+| absent / empty | unfiltered FIFO take, **with a warning** that it may consume a message this workflow did not expect |
+| a literal (`OP-2`) | used **as the id** |
+| a runtime expression that resolves | its resolved value is the id |
+| a runtime expression that resolves to **nothing** | the step **FAILS** — *refusing to fall back to an unfiltered receive* |
+
+That last row is the rule worth remembering: **a declared correlation that cannot be resolved is an
+error, not a fallback.** Silently degrading to an unfiltered receive is worse than failing, because it
+returns a plausible wrong message and calls it success.
+
+**Other enforcement rules:**
+
+| condition | outcome |
+|---|---|
+| `channelPath` without `action` | runtime **hard error** — direction undefined |
+| step `action` contradicts the AsyncAPI operation's `action` | **operation wins**, plus a warning (the spec defines no conflict rule, so this does not hard-fail) |
+| `timeout` absent or `<= 0` on a receive | defaults to **30s** |
+| no message arrives in time | step fails; the span closes as an error carrying the reason |
+| declared `successCriteria` | never silently skipped on **either** direction |
+| adapter not configured (nil) | *AsyncAPI execution requires a configured adapter for this protocol* |
+
+- **Async direction resolution for the LSP** — the validator only sees the Arazzo text, so it could classify a step as send/receive only when the step wrote `action:` itself. It now takes an optional resolver (`WithStepActionResolver`), which the server wires to the existing operation index ([definition.go](arazzo-designer-lsp/server/definition.go) `resolveStepAsyncAction`) using the same lookups navigation uses. That makes the direction of an `operationId`/`operationPath` step known and enables two editor diagnostics that previously could not fire on the spec-preferred form: **a receive with no `correlationId`**, and the **`action` vs operation-action mismatch** deferred from Phase 8. Both are warnings; **when the operation cannot be resolved the checks stay quiet** rather than guessing. *(These two diagnostics silently never fired until Phase 10 fixed an indexing race — see that phase.)*
+- **Run-log parity with REST steps** — [async_telemetry.go](../../arazzo-designer-cli/internal/runner/executor/async_telemetry.go). A REST step emits a child `http` span (request on start, response on end) which the Logs tab renders under the step; an async step now emits the equivalent **`message` span** (new `telemetry.SpanKindMessage`), nested under the step span exactly as the HTTP span is.
+
+**Message-span attributes** (the async analogue of the HTTP span; `messaging.content_type` was added in
+Phase 10):
+
+| attribute | on | analogue |
+|---|---|---|
+| `messaging.operation` (`send`/`receive`) | both | — |
+| `messaging.channel` | both | `http.url` |
+| `messaging.adapter` | both | — |
+| `messaging.correlation_id` | receive | — |
+| `messaging.timeout_ms` | receive | — |
+| `messaging.message.body` / `.headers` | both | `http.request.body` / `http.response.body` — published up front on a send, reported **on arrival** for a receive |
+| `messaging.content_type` | both (Phase 10) | `Content-Type` |
+
+**Telemetry lives in the executor, not the adapters**, so adapters stay pure transport and every future
+broker is instrumented for free — which is exactly what happened in Phase 11. The visualizer's Logs tab
+collects `message` spans alongside `http` ones and renders them with the same card layout
+([LogsTab.tsx](arazzo-designer-visualizer/src/views/WorkflowView/LogsTab.tsx) `MessagePairCard`).
+
+Existing run telemetry drives the node red/green (received → success, timed out → failure). Examples
+[examples/async_test/phase9/](../../examples/async_test/phase9) 01–09 all behave as documented (5 pass,
+4 fail on purpose; `02` and `08` need their documented `$inputs`).
+
+**Limits / deferred:**
+- **The non-blocking receive model (b)** and the `dependsOn` "started-but-not-completed → wait-with-timeout"
+  branch — Phase 14.
+- **`operationPath` steps were not routed to the async path at all** here (`resolveAsyncTarget` only
+  looked at `channelPath` and `operationId`), so the third targeting form failed with "Operation not
+  found" even though the LSP navigated and validated it happily. Found and fixed in **Phase 10**.
+- The in-memory adapter's correlation is **a value-match heuristic over the whole message**, not a
+  schema-declared correlation location — it matches any scalar anywhere in the payload. Real
+  correlation locations remain deferred past Phase 11.
+- Serialization here is plain `json.Marshal` inline; the real serializer layer is Phase 10.
+- The in-memory adapter carries the **decoded** `Payload` alongside `Raw`, so nothing exercises the
+  deserialize path until a real broker exists (Phase 11).
 
 <details><summary>Original design — kept for reference</summary>
 
@@ -656,47 +969,221 @@ Protobuf/Avro expectations until implemented.
 Goal: real network transports behind the Phase-9 `Adapter` interface, selected from the AsyncAPI
 document (Arazzo has no broker field — `servers.protocol`/`host` is the source of truth).
 
+**Where the transport comes from, and why it has to be the AsyncAPI document.** An Arazzo workflow says
+"send on this channel"; there is no field anywhere in the Arazzo spec that names a broker, a host, or a
+protocol. AsyncAPI has exactly that, in its `servers` section. So the runner reads the transport out of
+the *source description* the step targets, not out of the Arazzo document, and the runner itself never
+learns anything broker-specific — everything below sits behind the Phase-9 `Adapter` interface.
+
 **Implemented (CLI runner):**
 - **Shared `messageBuffer`** — [adapter_buffer.go](../../arazzo-designer-cli/internal/runner/executor/adapter_buffer.go).
-  The per-channel FIFO + correlation matching + wait-until-deadline logic extracted from the
-  in-memory adapter so ALL adapters reuse it (brokers deliver asynchronously; the runner consumes
-  synchronously — this is the queue between). Correlation gained a **raw-bytes fallback**
-  (`bytes.Contains` on `Raw`) for messages that arrive as bytes with no decoded payload.
+  Brokers deliver **asynchronously** (a subscription callback, a reader goroutine) while the runner
+  consumes **synchronously** (a blocking `receive` with a timeout); this buffer is the queue between
+  those two worlds. The per-channel FIFO + correlation matching + wait-until-deadline logic was
+  extracted from the Phase-9 in-memory adapter so ALL adapters reuse one implementation rather than
+  each reinventing it — `InMemoryAdapter` shrank to a thin `push`/`receive` wrapper. Correlation gained
+  a **raw-bytes fallback** (`bytes.Contains` on `Raw`) for messages that arrive as bytes with no
+  decoded payload, which is every message from a real broker.
 - **`WSAdapter`** — [adapter_ws.go](../../arazzo-designer-cli/internal/runner/executor/adapter_ws.go)
-  (gorilla/websocket). One connection per channel (`ws(s)://host/<channel address>`), a reader
-  goroutine drains incoming frames into the buffer, Send writes text frames (write-mutex, deadlines),
-  TLS via `wss`, dead connections dropped + redialed on next use.
+  (gorilla/websocket). A WebSocket is a bidirectional pipe to one URL, so the **channel address maps to
+  the URL path** and the adapter keeps **one connection per channel**
+  (`ws(s)://host/<channel address>`). A reader goroutine drains every incoming frame into the buffer;
+  `Send` writes **text frames** behind a write mutex (gorilla permits only one concurrent writer) with
+  a write deadline; `wss` gets TLS from the dialer. A connection that errors is closed, dropped, and
+  redialed on next use.
 - **`MQTTAdapter`** — [adapter_mqtt.go](../../arazzo-designer-cli/internal/runner/executor/adapter_mqtt.go)
-  (eclipse/paho.mqtt.golang). Channel address = topic; QoS 1; `mqtt`→`tcp://…:1883`,
-  `mqtts`→`ssl://…:8883`; **subscribes to a topic BEFORE publishing** so a same-workflow
-  send→receive round trip works against a real broker (the broker echoes our own publication back to
-  our subscription). The paho client sits behind a tiny `mqttClient` interface so unit tests use a fake.
+  (eclipse/paho.mqtt.golang v1.5.1). Channel address = MQTT **topic**; QoS 1 both ways; retain false.
+  The load-bearing decision: **`Send` subscribes to the topic BEFORE it publishes.** Without that a
+  `send` followed by a `receive` on the same channel can never work against a real broker — the message
+  is published and gone before the receive step starts. Subscribing first means the broker echoes our
+  own publication back to our own subscription and the receive finds it. The paho client sits behind a
+  four-method `mqttClient` interface (`Connect`/`Publish`/`Subscribe`/`IsConnected`) purely so unit
+  tests can substitute a fake and exercise the round trip with no network.
 - **Adapter selection** — [adapter_select.go](../../arazzo-designer-cli/internal/runner/executor/adapter_select.go).
-  `adapterFor` reads the source's `servers` (first by sorted name): ws/wss → WSAdapter,
-  mqtt/mqtts → MQTTAdapter, **kafka → clear "not yet supported" error**, unknown → clear error,
-  **no servers → the default in-memory adapter** (all Phase 9/10 docs + tests unchanged). Adapters
-  cached per `protocol://host` on the StepExecutor (one connection per broker). On receive, bytes are
-  decoded using the **channel's declared message `contentType`** (`channelMessageContentType`) when
-  the transport carries none — the Phase-10 deserialize path now exercised for real.
+  `adapterFor(info)` reads the targeted source's `servers` and maps `protocol` to an adapter. The
+  server is picked **first by sorted server name** — Go map iteration is randomized and the choice has
+  to be repeatable across runs (the same hazard Phase 10 hit with message keys). Servers missing either
+  `protocol` or `host` are skipped. Adapters are **cached per `protocol://host`** on
+  `StepExecutor.asyncAdapters`, so every step against one broker shares a single connection.
 
-**Tests** ([adapter_phase11_test.go](../../arazzo-designer-cli/internal/runner/executor/adapter_phase11_test.go)):
-buffer raw-byte correlation; WS round trip + connect-failure + **full ExecuteStep e2e against a real
-local WebSocket echo server** (httptest); MQTT subscribe-before-publish + round trip + timeout + URL
-mapping via a fake client; **opt-in real-broker integration test** (`ARAZZO_TEST_MQTT_BROKER`) —
-verified green against broker.hivemq.com; adapter selection incl. kafka/unknown errors, in-memory
-fallback, per-broker caching; contentType fallback. Examples — [examples/async_test/phase11/](../../examples/async_test/phase11) cover
-**every MQTT/WS/selection case** (all verified e2e; network ones over the **real public internet**):
-01 MQTT round trip (channelPath, HiveMQ), 02 WebSocket echo (`wss`, echo.websocket.org), 03
-kafka-unsupported (fails), 04 MQTT via operationId, 05 MQTT receive timeout (fails), 06 text/plain
-over MQTT, 07 MQTT over TLS (`mqtts`, port 8883), 08 WS receive timeout (fails), 09 unknown protocol
-`amqp` (fails), 10 in-memory fallback (no `servers`, no network). Correlation tokens filter
-public-topic noise + the WS greeting banner. Phase 9 + 10 examples re-run green (in-memory untouched).
-Gotcha surfaced: `correlationId` is a runtime EXPRESSION — a bare literal evaluates to empty
-(unfiltered/FIFO), so the timeout examples pass the token via `$inputs`.
+**Protocol → transport mapping (exact forms).** `host` may carry an explicit `:port`; the default port
+is applied only when it does not.
 
-**Deferred (TODO in adapter_select.go):** Kafka adapter + real Avro/Protobuf codecs w/
-schema-registry config (they belong together); MQTT credentials/custom TLS; correlation from
-schema-declared locations.
+| `servers.<name>.protocol` | adapter (`Name()`) | connects to | notes |
+|---|---|---|---|
+| `ws` | `websocket` | `ws://<host>/<channel address>` | one connection per channel |
+| `wss` | `websocket` | `wss://<host>/<channel address>` | TLS via the dialer |
+| `mqtt` | `mqtt` | `tcp://<host>:1883` | channel address = topic |
+| `mqtts`, `secure-mqtt` | `mqtt` | `ssl://<host>:8883` | AsyncAPI 3.0 spells TLS MQTT `secure-mqtt` |
+| `kafka`, `kafka-secure` | — | — | **hard error**, planned future phase |
+| *anything else* | — | — | **hard error**, unsupported protocol |
+| *no `servers` section* | `in-memory` | nothing | Phase-9 in-process queues |
+
+That last row is why **every Phase 9 and Phase 10 document, example and test kept working untouched**:
+absent `servers` means the default adapter, which is the only one those phases ever had.
+
+**Rules — what fails, what warns, what happens silently.**
+
+| condition | outcome |
+|---|---|
+| `protocol: kafka` / `kafka-secure` | step fails: *the "kafka" protocol is not yet supported: a Kafka adapter (with Avro/Protobuf schema support) is a planned future phase …* |
+| any other unrecognized `protocol` | step fails: *unsupported AsyncAPI server protocol "…" — supported: ws, wss, mqtt, mqtts (and in-memory when no servers are declared)* |
+| no `servers`, or none with both `protocol` and `host` | in-memory adapter, **no message** — this is the supported Phase 9/10 mode, not a fallback worth warning about |
+| broker connect / dial failure | step fails, naming the URL that was tried |
+| MQTT connect, subscribe or publish exceeding 10s | step fails: *mqtt \<op\> timed out after 10s* |
+| no matching message before the step's `timeout` | step fails via `ErrReceiveTimeout`, with **different wording** for a correlated wait (*no message matching correlationId "x" arrived*) than an uncorrelated one (*no message arrived*) |
+| `Send` called with a nil message | adapter refuses rather than publishing an empty message |
+| transport carries no content type on receive | resolved from the AsyncAPI document via the Phase-10 chain (see below); a **warning** when the channel declares more than one format |
+| `correlationId` resolves to empty | **silent** — the receive becomes an unfiltered FIFO take (see the gotcha below) |
+
+**Kafka is refused loudly and deliberately, not merely "not built yet."** It gets its own error rather
+than falling into the generic unsupported-protocol branch because Kafka is precisely where Avro and
+Protobuf are actually used — and those are still Phase 10's stubs. The `TODO` in `adapter_select.go`
+couples them on purpose: **a Kafka adapter and real Avro/Protobuf codecs (plus schema-registry config)
+land together**, because shipping the transport alone would give users a broker that cannot encode its
+own ecosystem's formats.
+
+**Content type on the receive path — where Phase 10 stops being theoretical.** MQTT 3.1.1 and WebSocket
+carry **no content-type field at all** (MQTT 5.0 added one; a different client library). So on a real
+broker the bytes arrive with no format label and the AsyncAPI document is the *only* thing that says
+how to read them. Phase 10 built that decode path but nothing exercised it, because the in-memory
+adapter always hands the receive step a pre-decoded payload. Phase 11 is where it does real work:
+`executeReceive` resolves **transport-carried type → AsyncAPI message `contentType` (through `$ref`)
+→ document `defaultContentType` → JSON**, warns when the channel declares several formats, and logs
+`decoded as <content type>` either way.
+
+**Correlation matching, in precedence order** (`messageMatchesCorrelation`). An empty id matches
+anything; otherwise the first hit wins:
+1. `Metadata["correlationId"]` equals the id;
+2. any header value equals the id;
+3. any scalar anywhere in the decoded payload equals the id (recursing through maps and slices);
+4. **for bytes-only messages** (every real-broker message): the id appears as a **substring of `Raw`**.
+
+Step 4 is a deliberately blunt heuristic — it can match a token that happens to appear anywhere in the
+body, including inside an unrelated field. Correlation from schema-declared locations is deferred.
+
+**Gotcha worth remembering: a correlation that does not MATCH is indistinguishable from no message at
+all.** The four `correlationId` states are Phase 9's (a bare literal **is** honoured as the id; only an
+*absent* one means unfiltered FIFO, and an expression resolving to nothing is a hard error). What bites
+on a real broker is the fifth situation, which is not an error state at all: the id resolves fine but
+**no arriving message carries it**, so every message is skipped and the step times out looking exactly
+like a dead channel. Running an example with the wrong `$inputs` value reproduces this — see
+`06-mqtt-text-plain`, whose payload hardcodes `txt-8`, so any other token times out. The public-broker
+examples depend on this filtering to ignore strangers' traffic on the shared topic and the WebSocket
+server's greeting banner.
+
+**Fixed values and defaults** (all constants, none configurable yet):
+
+| value | setting |
+|---|---|
+| MQTT connect / subscribe / publish timeout | 10s (`mqttOpTimeout`) |
+| MQTT QoS (publish and subscribe) | 1 |
+| MQTT retain | false |
+| MQTT client id | `arazzo-runner-<unix nanos>`, clean session |
+| WebSocket dial / write timeout | 10s each |
+| WebSocket frame type | text |
+| buffer poll interval | 10ms |
+| receive timeout when the step declares `<= 0` | 30s |
+
+**Tests** ([adapter_phase11_test.go](../../arazzo-designer-cli/internal/runner/executor/adapter_phase11_test.go)) —
+11 tests, all runnable with no network: buffer raw-byte correlation; WS round trip, connect failure,
+and a **full `ExecuteStep` end-to-end against a real local WebSocket echo server** (`httptest`); MQTT
+subscribe-before-publish, round trip, timeout and broker-URL mapping through the fake client; adapter
+selection incl. kafka/unknown errors, in-memory fallback and per-broker caching. Plus an **opt-in real
+broker integration test** gated on `ARAZZO_TEST_MQTT_BROKER` (verified green against
+broker.hivemq.com), so CI never depends on public infrastructure.
+
+**Examples** — [examples/async_test/phase11/](../../examples/async_test/phase11). Unusually, the network
+ones run against the **real public internet**; all ten were re-verified after the Phase-10 restack.
+
+| file | shows | expected |
+|---|---|---|
+| `01-mqtt-roundtrip` | MQTT publish + subscribe via `channelPath` (HiveMQ) | ✅ `sentBack = 21.5` |
+| `02-ws-echo` | WebSocket send + receive over `wss` (echo.websocket.org) | ✅ `echoed` |
+| `03-kafka-unsupported` | `kafka` protocol | ❌ planned-future error |
+| `04-mqtt-operationid` | MQTT via `operationId` (direction from the operation's `action`) | ✅ `got = 19` |
+| `05-mqtt-timeout` | MQTT receive on a quiet topic | ❌ *timed out after 3s: no message arrived* |
+| `06-mqtt-text-plain` | **text/plain over MQTT** — the decoder can only come from the document | ✅ bare-string `heard` |
+| `07-mqtts-tls` | MQTT over TLS (`mqtts` → `ssl://…:8883`) | ✅ `sentBack = 23.7` |
+| `08-ws-timeout` | WebSocket receive with no matching frame | ❌ *no message matching correlationId* |
+| `09-unknown-protocol` | `amqp` protocol | ❌ unsupported-protocol error |
+| `10-inmemory-fallback` | no `servers` → in-memory, no network | ✅ |
+
+The networked examples need their documented `$inputs` token (`06` uses `txt-8`, the rest `demo-42`);
+running them without inputs produces a correlation-filter timeout, not a transport failure — the same
+expression gotcha above, and a good reminder that **an example run without its inputs is not a failing
+example**. Re-verified after the restack: Phase 11 10 flows (6 complete, 4 failing by design), Phase 10
+14 flows (10 / 4), Phase 9 9 flows (5 / 4) — the in-memory path is untouched by this phase.
+
+**Restacked onto Phase 10 (2026-08-14).** Phase 11 was written against a Phase 10 that then moved 52
+commits, so it was rebased. Two files conflicted:
+- **`async_executor.go`** — seven hunks, all the same collision: Phase 10 rewrote the content-type
+  logic in exactly the regions where Phase 11 threaded an `adapter` parameter through. Resolved
+  uniformly by keeping Phase 10's logic with Phase 11's adapter; the merged signatures now carry both
+  (`executeSend(step, adapter, info, channel, state, stepID, parentSpanID)`, same for `executeReceive`).
+- **`asyncapi_plan.md`** — Phase 11's plan commit described Phase 10 in its pre-fix state; Phase 10's
+  current text won, keeping Phase 11's link paths (three links here are missing their `../../` prefix
+  on the Phase-10 branch and are correct here).
+
+The one judgment call: Phase 11's receive fell back to its own `channelMessageContentType(info)` when
+the transport carried no content type. Phase 10 had independently built a fuller chain for the same
+problem — `AsyncInfo.DeclaredContentTypes()`, which follows `$ref`s, honours `defaultContentType`, and
+warns on ambiguity — so **`channelMessageContentType` was dropped from the call path in favour of it**.
+Example 06 is the proof, since MQTT carries no content-type field: it logs `decoded as text/plain` and
+returns a bare string rather than failing a JSON parse. **`channelMessageContentType` in
+`adapter_select.go` is now dead code** — no production callers, only its own unit test — and should be
+deleted along with `TestChannelMessageContentType`.
+
+**Deferred (TODO in adapter_select.go):** Kafka adapter + real Avro/Protobuf codecs with
+schema-registry config (they belong together, see above); MQTT credentials and custom TLS
+configuration; correlation from schema-declared locations.
+
+**Known gaps / limits (not blocking):**
+- **Adapters are never closed.** There is no shutdown path — no `Close`, no `Disconnect`, no
+  `Unsubscribe`. MQTT connections and WebSocket connections live until the process exits (a WS
+  connection is dropped only when it errors). Fine for a CLI run, a leak for a long-lived server.
+- **`StepExecutor.asyncAdapters` is written without a lock**, same class of problem as
+  `serializerRegistry()` — harmless while steps run sequentially, a data race once Phase 14 runs them
+  in goroutines. Both should be fixed together.
+- **`secure-mqtt` works but is not advertised**: `adapterFor` accepts it, yet both error messages list
+  only "ws, wss, mqtt, mqtts", so a user who mistypes it is told the correct spelling is unsupported.
+- **The buffer polls rather than signals** (10ms), so every receive has a latency floor and burns a
+  little CPU while waiting. A condition variable would fix both.
+- **MQTT send is self-echoing by design.** Because `Send` subscribes first, the sender's own message
+  comes back to it — which is what makes single-workflow round trips work, but means a receive step
+  cannot distinguish "my own message" from "a peer's" except via `correlationId`.
+- **Subscription is LAZY, so there is a window in which messages are missed.** `ensureSubscribed`
+  (MQTT) / `ensureConn` (WS) are called only from `Send` and `Receive`, i.e. by **the first step that
+  touches a channel** — there is no workflow-start hook. In `send→A, receive←A, receive←B`, channel B
+  is not subscribed until the third step runs, and anything a peer published to B before that moment is
+  lost permanently (MQTT does not replay to late subscribers; we publish with `retained: false`). Note
+  that `Send` subscribing first is not a decision about where subscription belongs — it exists so the
+  broker echoes our own publication back — so channel A being covered early is incidental.
+  **The `messageBuffer` does NOT close this gap**: it queues what a subscription delivered, so it only
+  covers "arrived after subscribing but before the receive step ran". The fix is to resolve every
+  step's target up front and **subscribe to all channels the workflow will use before step 1 runs**,
+  shrinking the window to the workflow's own start. That needs `resolveAsyncTarget` per step before
+  executing any (a channel reached by `operationId`/`operationPath` is not literal on the step), moves
+  connection errors to workflow start rather than the offending step, and for WebSocket means dialing —
+  and therefore receiving the server's greeting frame — earlier.
+- **The AsyncAPI Correlation ID Object is never read.** AsyncAPI 3.0 lets a message declare where the
+  id lives (`correlationId.location`, e.g. `$message.header#/correlationId`), which is the contract
+  publishers and subscribers are supposed to share. Nothing in the runtime reads it: `asyncapi_finder.go`
+  does not mention `correlationId` at all. Consequently the **send** side puts the id nowhere in
+  particular (the examples just happen to include a `token` field), the **receive** side searches the
+  whole message, and **nothing validates** that a sent message carries a correlatable value at all — a
+  mismatch only surfaces as a receive timeout. Combined with the raw-bytes substring fallback this can
+  match the wrong message outright: with id `42`, the body `{"orderId":"99","note":"see ticket 42"}`
+  matches. Implementing it properly means reading the Correlation ID Object (through `$ref`), evaluating
+  its `location` against the arriving message, **and** using it on the send side to place the id
+  automatically. Phase 9's example `02-correlation` already predicted this would land in Phase 11; it
+  did not.
+- **No QoS, retain, consumer-group or keepalive configuration** — all fixed constants. No WebSocket
+  ping/pong keepalive or reconnect backoff either.
+- **The networked examples depend on public infrastructure** (broker.hivemq.com, echo.websocket.org)
+  and on the topics being quiet enough that correlation filtering succeeds. The unit tests do not.
+- Phase 10's own gap list still applies to the async path (REST steps encoding through a separate
+  looser encoder; empty `text/plain` decoding back to nil rather than `""`).
 
 <details><summary>Original design — kept for reference</summary>
 
