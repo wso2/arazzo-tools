@@ -1,0 +1,39 @@
+asyncapi: 3.0.0
+info:
+  title: Order bus (pre-subscription)
+  version: 1.0.0
+
+# No `servers` section, so these channels run on the in-memory adapter — every example here is
+# offline. Pre-subscription still walks and resolves them exactly as it would for a real broker;
+# what differs is only that the in-memory adapter has nothing to subscribe TO (its queues exist from
+# the start), so nothing can be missed. Against MQTT or WebSocket the same walk is what closes the
+# window in which a message would be lost.
+channels:
+  orders:
+    address: orders/new
+    messages:
+      order:
+        contentType: application/json
+
+  replies:
+    address: orders/replies
+    messages:
+      reply:
+        contentType: application/json
+
+  # Only ever published to in these examples — deliberately, to show it is NOT pre-subscribed.
+  audit:
+    address: orders/audit
+    messages:
+      entry:
+        contentType: application/json
+
+operations:
+  onOrder:
+    action: receive
+    channel:
+      $ref: '#/channels/orders'
+  publishOrder:
+    action: send
+    channel:
+      $ref: '#/channels/orders'
