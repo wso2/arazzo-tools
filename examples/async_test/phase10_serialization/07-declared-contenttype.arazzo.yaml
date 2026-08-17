@@ -1,0 +1,79 @@
+# Phase 10 — Scenario 7: THE STEP OMITS `contentType` — the ASYNCAPI DOCUMENT decides.
+#
+# Arazzo §5.8.14.1 on a Request Body Object's contentType:
+#   "The Content-Type for the request content. If omitted then refer to Content-Type specified at the
+#    targeted operation to understand serialization requirements."
+#
+# So JSON is the LAST resort, not the first answer. Here neither send step declares a contentType, and
+# the two steps still serialize differently — because the channels they target declare different
+# formats in notifications.asyncapi.yaml:
+#
+#   alerts  ->  contentType: text/plain        -> "all clear" goes out as bare text  (9 bytes)
+#   events  ->  contentType: application/json  -> the object goes out as JSON
+#
+# If the send path defaulted straight to JSON (ignoring the document), the alert would go on the wire
+# as `"all clear"` — WITH the quote characters — onto a channel every other consumer reads as plain
+# text. The workflow's OUTPUTS cannot show you this (the in-memory adapter carries the decoded payload,
+# so nothing ever decodes) — but the RUN LOG can. Each send logs the bytes it produced:
+#   Step raiseAlert:  ... as text/plain (9 bytes): "all clear"
+#   Step publishEvent: ... as application/json (37 bytes): "{\"kind\":\"deploy\",...}"
+#
+# EXPECTED: run **declaredFlow** → completes with
+#   heard = "all clear"   and   kind = "deploy"
+#
+# Precedence, in full:  step contentType  →  AsyncAPI message contentType  →  AsyncAPI
+# defaultContentType  →  application/json. See 01 for the step-declared form and 02 for the
+# nothing-declared-anywhere default.
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 10 - content type declared by the AsyncAPI document"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: notify
+    url: ./notifications.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: declaredFlow
+    steps:
+      # No contentType on the step. The `alerts` channel declares text/plain, so this publishes
+      # bare text — not a JSON-quoted string.
+      - stepId: raiseAlert
+        channelPath: notify#/channels/alerts
+        action: send
+        requestBody:
+          payload: "all clear"
+
+      - stepId: hearAlert
+        channelPath: notify#/channels/alerts
+        action: receive
+        timeout: 2000
+        successCriteria:
+          - condition: '$message.payload == "all clear"'
+        outputs:
+          heard: $message.payload
+
+      # Same document, same absence of a step contentType — but the `events` channel declares
+      # application/json, so this one is serialized as JSON.
+      - stepId: publishEvent
+        channelPath: notify#/channels/events
+        action: send
+        requestBody:
+          payload:
+            kind: "deploy"
+            note: "v3 shipped"
+
+      - stepId: hearEvent
+        channelPath: notify#/channels/events
+        action: receive
+        timeout: 2000
+        successCriteria:
+          - condition: '$message.payload.kind == "deploy"'
+        outputs:
+          kind: $message.payload.kind
+    outputs:
+      heard: $steps.hearAlert.outputs.heard
+      kind: $steps.hearEvent.outputs.kind

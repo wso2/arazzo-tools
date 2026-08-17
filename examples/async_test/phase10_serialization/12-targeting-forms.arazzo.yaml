@@ -1,0 +1,81 @@
+# Phase 10 — Scenario 12: ALL THREE TARGETING FORMS REACH THE SAME DECLARATION.
+#
+# Arazzo lets a step name its target three ways, and an async step may use any of them:
+#
+#   channelPath    notify#/channels/audits
+#   operationId    recordAudit
+#   operationPath  notify#/operations/recordAudit
+#
+# All three below address the same `audits` channel, whose message is a `$ref` into
+# components.messages where `contentType: text/plain` is declared. None of the steps declares a
+# contentType or an `action` — the document supplies both — and all six steps must behave identically.
+#
+# EXPECTED: run **formsFlow** → completes with
+#   viaChannel = "A"   viaOperationId = "B"   viaOperationPath = "C"
+#
+# Each value comes back as BARE TEXT (no quotes), proving every form resolved the $ref'd text/plain
+# declaration — a form that failed to resolve it would fall back to JSON and return quoted strings.
+# Sends and receives deliberately use DIFFERENT forms from each other, so a mismatch between the two
+# directions would show up too.
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 10 - channelPath / operationId / operationPath parity"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: notify
+    url: ./notifications.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: formsFlow
+    steps:
+      # --- send by channelPath, receive by operationId ---
+      - stepId: sendByChannel
+        channelPath: notify#/channels/audits
+        action: send                              # a channelPath has no direction of its own
+        requestBody:
+          payload: "A"
+
+      - stepId: takeByOperationId
+        operationId: readAudit                    # direction comes from the operation
+        timeout: 2000
+        successCriteria:
+          - condition: '$message.payload == "A"'
+        outputs:
+          got: $message.payload
+
+      # --- send by operationId, receive by operationPath ---
+      - stepId: sendByOperationId
+        operationId: recordAudit
+        requestBody:
+          payload: "B"
+
+      - stepId: takeByOperationPath
+        operationPath: notify#/operations/readAudit
+        timeout: 2000
+        successCriteria:
+          - condition: '$message.payload == "B"'
+        outputs:
+          got: $message.payload
+
+      # --- send by operationPath, receive by channelPath ---
+      - stepId: sendByOperationPath
+        operationPath: notify#/operations/recordAudit
+        requestBody:
+          payload: "C"
+
+      - stepId: takeByChannel
+        channelPath: notify#/channels/audits
+        action: receive
+        timeout: 2000
+        successCriteria:
+          - condition: '$message.payload == "C"'
+        outputs:
+          got: $message.payload
+    outputs:
+      viaChannel: $steps.takeByOperationId.outputs.got
+      viaOperationId: $steps.takeByOperationPath.outputs.got
+      viaOperationPath: $steps.takeByChannel.outputs.got

@@ -1,0 +1,65 @@
+# Phase 10 — Scenario 9: THE STEP AND THE DOCUMENT DISAGREE. The step's value overrides the
+# document's, and both layers say so.
+#
+# The `alerts` channel is declared as `text/plain` in notifications.asyncapi.yaml. This step declares
+# `application/json`. Per Arazzo §5.8.14.1 the document is consulted only when the step's contentType
+# is OMITTED — so the step's value is authoritative and the message really is published as JSON.
+#
+# That is legal, and it is also usually a mistake: the AsyncAPI document is the contract every other
+# consumer of that channel reads, and this message will not match it. So it is flagged twice:
+#
+#   EDITOR (LSP)  yellow warning on the step:
+#       "requestBody 'contentType' is 'application/json' but the AsyncAPI document declares
+#        'text/plain' for this channel — the value declared in this step overrides the AsyncAPI
+#        declaration, so this message will not match the format the document describes"
+#
+#   RUNTIME       a warning line in the run log:
+#       "Warning: step emitJson: requestBody contentType "application/json" differs from the
+#        "text/plain" declared by the AsyncAPI document for channel "notify/alerts"; the value
+#        declared in this step overrides the AsyncAPI declaration"
+#
+# EXPECTED: run **mismatchFlow** → COMPLETES with `heard = "beta"`, and a warning is logged.
+#
+# Why the payload still round-trips: the in-memory adapter carries the decoded payload alongside the
+# bytes, so the receive never has to decode. Against a real broker only the bytes travel, and what
+# happens then depends on whether the transport carries a content type — the receive consults that
+# FIRST, and only falls back to the channel's declaration when it carries none:
+#   MQTT 5 / anything carrying "application/json"  -> decodes as JSON -> `beta`, no quotes
+#   MQTT 3.1.1 / WebSocket (no content type)       -> falls back to the declared text/plain, so the
+#                                                     JSON quote characters survive into the string
+# Either way the message does not match what the document describes. The warning is the point of this
+# example, not the output.
+#
+# Compare 01 (step declares, and agrees) and 07 (step declares nothing, document decides).
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 10 - step vs document content type disagreement"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: notify
+    url: ./notifications.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: mismatchFlow
+    steps:
+      - stepId: emitJson
+        channelPath: notify#/channels/alerts
+        action: send
+        requestBody:
+          contentType: application/json     # the channel declares text/plain -> warned, and used
+          payload: "beta"
+
+      - stepId: hear
+        channelPath: notify#/channels/alerts
+        action: receive
+        timeout: 2000
+        successCriteria:
+          - condition: '$message.payload == "beta"'
+        outputs:
+          heard: $message.payload
+    outputs:
+      heard: $steps.hear.outputs.heard

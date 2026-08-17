@@ -6,11 +6,11 @@
 package executor
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wso2/arazzo-designer-cli/internal/evaluator"
@@ -19,10 +19,15 @@ import (
 )
 
 // resolveAsyncTarget reports whether a step is an AsyncAPI step and, if so, its resolved target.
-// A step is async when it has a `channelPath`, or an `operationId` that resolves to an AsyncAPI
-// operation (OpenAPI operationIds live under `paths`, not `operations`, so they never match here).
-// For a channelPath the step is always treated as async even if resolution fails (nil info), so a
-// malformed channel hard-fails rather than silently falling through to the HTTP path.
+// A step is async when it has a `channelPath`, or an `operationId`/`operationPath` that resolves to an
+// AsyncAPI operation — all three targeting forms the spec allows, matching what the LSP already
+// navigates and validates.
+//
+// An `operationId`/`operationPath` that does NOT resolve to an AsyncAPI operation falls through to the
+// HTTP path, which is how REST steps using those same fields keep working (OpenAPI operationIds live
+// under `paths` rather than `operations`, and an OpenAPI operation has no `action`). For a channelPath
+// the step is always treated as async even if resolution fails (nil info), so a malformed channel
+// hard-fails rather than silently being executed as HTTP.
 func (se *StepExecutor) resolveAsyncTarget(step map[string]interface{}) (*AsyncInfo, bool) {
 	finder := NewAsyncFinder(se.SourceDescriptions)
 	if cp, _ := step["channelPath"].(string); strings.TrimSpace(cp) != "" {
@@ -30,6 +35,11 @@ func (se *StepExecutor) resolveAsyncTarget(step map[string]interface{}) (*AsyncI
 	}
 	if opID, _ := step["operationId"].(string); strings.TrimSpace(opID) != "" {
 		if info := finder.FindOperationByID(opID); info != nil {
+			return info, true
+		}
+	}
+	if opPath, _ := step["operationPath"].(string); strings.TrimSpace(opPath) != "" {
+		if info := finder.FindOperationByPath(opPath); info != nil {
 			return info, true
 		}
 	}
@@ -61,9 +71,9 @@ func (se *StepExecutor) executeAsyncStep(step map[string]interface{}, info *Asyn
 
 	switch action {
 	case "send":
-		return se.executeSend(step, channel, state, stepID, parentSpanID)
+		return se.executeSend(step, info, channel, state, stepID, parentSpanID)
 	case "receive":
-		return se.executeReceive(step, channel, state, stepID, parentSpanID)
+		return se.executeReceive(step, info, channel, state, stepID, parentSpanID)
 	default:
 		return se.createFailureResult(stepID, step, state, fmt.Sprintf("invalid AsyncAPI action %q", action))
 	}
@@ -94,35 +104,53 @@ func resolveAsyncAction(step map[string]interface{}, info *AsyncInfo) (string, e
 }
 
 // executeSend builds the outgoing message from the step's requestBody + header parameters, serializes
-// it (basic JSON in Phase 9), publishes it on the channel, then — exactly like the receive path —
-// evaluates any `successCriteria` and extracts any `outputs` through the shared checker/extractor.
-func (se *StepExecutor) executeSend(step map[string]interface{}, channel string, state *models.ExecutionState, stepID, parentSpanID string) *models.StepResult {
+// it to wire bytes via the Phase-10 serializer chosen by the resolved content type, publishes it on
+// the channel, then — exactly like the receive path — evaluates any `successCriteria` and extracts any
+// `outputs` through the shared checker/extractor.
+func (se *StepExecutor) executeSend(step map[string]interface{}, info *AsyncInfo, channel string, state *models.ExecutionState, stepID, parentSpanID string) *models.StepResult {
 	var payload interface{}
+	stepContentType := ""
 	if reqBody := toMap(step["requestBody"]); reqBody != nil {
 		if prepared := se.ParamProcessor.PrepareRequestBody(reqBody, state); prepared != nil {
 			payload = prepared["payload"]
+			stepContentType, _ = prepared["contentType"].(string)
 		}
 	}
+	contentType := resolveSendContentType(stepContentType, info, stepID, channel)
 	headers := headerParams(se.ParamProcessor.PrepareParameters(step, state))
 
-	// Basic Phase-9 serialization; Phase 10 formalizes the layer. A payload that cannot be encoded
-	// must not be published as an empty message and reported as a successful send.
-	raw, err := json.Marshal(payload)
+	// Serialize the logical payload into the wire form the channel carries (Phase 10). A payload that
+	// cannot be encoded must not be published as an empty message and reported as a successful send.
+	serializer, err := se.serializerRegistry().For(contentType)
+	if err != nil {
+		return se.createFailureResult(stepID, step, state, fmt.Sprintf("send on channel %q: %v", channel, err))
+	}
+	raw, err := serializer.Serialize(payload)
 	if err != nil {
 		return se.createFailureResult(stepID, step, state, fmt.Sprintf("send on channel %q: could not serialize payload: %v", channel, err))
+	}
+	// Publish the content type as RESOLVED, not the serializer's canonical name: a vendor type
+	// ("application/vnd.order+json") or a charset parameter is information the receiver may care about,
+	// and canonicalizing would quietly discard it. Fall back to the serializer's own type when nothing
+	// was declared anywhere, so the message still says what format it is.
+	publishedContentType := contentType
+	if strings.TrimSpace(publishedContentType) == "" {
+		publishedContentType = serializer.ContentType()
 	}
 	msg := &Message{
 		Payload:     payload,
 		Headers:     headers,
-		ContentType: "application/json",
+		ContentType: publishedContentType,
 		Raw:         raw,
 		Metadata:    map[string]interface{}{},
 	}
 
 	// The message being published is the request-side detail of this span, mirroring how the HTTP
-	// span carries the request body.
-	span := se.startMessagingSpan(state.TraceID, parentSpanID, "send", channel, se.AsyncAdapter.Name(),
-		messageAttrs("messaging.message", payload, headers))
+	// span carries the request body. The encoder that produced the bytes goes with it — which
+	// serializer ran is the one thing Phase 10 decides, and it is invisible from the payload alone.
+	sendAttrs := messageAttrs("messaging.message", payload, headers)
+	sendAttrs["messaging.content_type"] = msg.ContentType
+	span := se.startMessagingSpan(state.TraceID, parentSpanID, "send", channel, se.AsyncAdapter.Name(), sendAttrs)
 
 	if err := se.AsyncAdapter.Send(channel, msg); err != nil {
 		span.end(telemetry.SpanStatusError, err.Error(), nil)
@@ -154,7 +182,12 @@ func (se *StepExecutor) executeSend(step map[string]interface{}, channel string,
 	if success {
 		state.StepsStatus[stepID] = models.StepStatusSuccess
 		span.end(telemetry.SpanStatusOK, "", nil)
-		log.Printf("Step %s: sent a message on channel %q via %s adapter", stepID, channel, se.AsyncAdapter.Name())
+		// Log the wire form, not just the fact of sending: which serializer ran is the whole subject of
+		// the content-type resolution above, and it is otherwise invisible — the in-memory adapter
+		// carries the decoded payload alongside the bytes, so a receive step never has to decode and
+		// every format looks identical from the workflow's outputs.
+		log.Printf("Step %s: sent a message on channel %q via %s adapter as %s (%d bytes): %s",
+			stepID, channel, se.AsyncAdapter.Name(), msg.ContentType, len(raw), previewBytes(raw))
 	} else {
 		state.StepsStatus[stepID] = models.StepStatusFailure
 		span.end(telemetry.SpanStatusError, "sent message did not satisfy successCriteria", nil)
@@ -184,10 +217,56 @@ func (se *StepExecutor) executeSend(step map[string]interface{}, channel string,
 	}
 }
 
+// resolveSendContentType applies the Arazzo rule for a request body's content type: the step's own
+// `contentType` wins, and only when it is omitted does the runtime "refer to Content-Type specified at
+// the targeted operation" (§5.8.14.1) — for an async step, the content type the AsyncAPI document
+// declares for the targeted channel/message. JSON remains the last resort (an empty content type
+// selects the registry's default), not the first answer.
+//
+// Both values present and disagreeing is not an error: the step's value is authoritative per the rule
+// above. It is worth a warning though, because the AsyncAPI document is the contract other consumers
+// of the channel read, and publishing a format it doesn't describe is usually a mistake.
+func resolveSendContentType(stepContentType string, info *AsyncInfo, stepID, channel string) string {
+	declared := info.DeclaredContentTypes()
+
+	if strings.TrimSpace(stepContentType) == "" {
+		if len(declared) == 0 {
+			return "" // nothing declared anywhere: the registry's default (JSON) applies
+		}
+		// More than one declared format means the channel carries messages of different kinds and the
+		// document does not say which one THIS step sends — the first is a deterministic pick, not an
+		// answer. Only worth saying when the step declared nothing itself: a step that did has already
+		// settled it, and telling it to "set contentType" would be advice it has followed.
+		if len(declared) > 1 {
+			log.Printf("Warning: step %s: channel %q declares more than one contentType (%s); using %q — set 'contentType' on the step's requestBody to choose explicitly",
+				stepID, channel, strings.Join(declared, ", "), declared[0])
+		}
+		return declared[0]
+	}
+
+	// A disagreement is only a disagreement when the step's format is NOT one the document declares.
+	// Comparing against a single pick would falsely flag a step that correctly named the channel's
+	// SECOND message format.
+	if len(declared) > 0 && !containsMediaType(declared, stepContentType) {
+		log.Printf("Warning: step %s: requestBody contentType %q differs from the %s declared by the AsyncAPI document for channel %q; the value declared in this step overrides the AsyncAPI declaration",
+			stepID, stepContentType, strings.Join(quoteAll(declared), " / "), channel)
+	}
+	return stepContentType
+}
+
+// quoteAll renders content types for a message, each in quotes.
+func quoteAll(types []string) []string {
+	out := make([]string, len(types))
+	for i, t := range types {
+		out[i] = fmt.Sprintf("%q", t)
+	}
+	return out
+}
+
 // executeReceive waits for a (optionally correlated) message on the channel, exposes it as $message,
 // then evaluates successCriteria and extracts outputs through the SAME checker/extractor used by HTTP
 // steps. A received message with no successCriteria counts as success.
-func (se *StepExecutor) executeReceive(step map[string]interface{}, channel string, state *models.ExecutionState, stepID, parentSpanID string) *models.StepResult {
+func (se *StepExecutor) executeReceive(step map[string]interface{}, info *AsyncInfo, channel string, state *models.ExecutionState, stepID, parentSpanID string) *models.StepResult {
 	// Resolve the correlation id. A DECLARED correlationId must always be honoured: silently falling
 	// back to an unfiltered receive would return an unrelated message and report success, which is
 	// worse than failing. Only the ABSENCE of a correlationId means "take the next message".
@@ -220,10 +299,60 @@ func (se *StepExecutor) executeReceive(step map[string]interface{}, channel stri
 		return se.createFailureResult(stepID, step, state, reason)
 	}
 
+	// Decode the wire bytes into a payload when the adapter delivered only Raw (Phase 10). The
+	// in-memory test adapter already carries the decoded Payload, so this is a no-op there; a real
+	// broker delivers bytes and this is where they become $message.payload.
+	//
+	// A receive step has no requestBody, so there is no step-level content type to consult. The
+	// transport speaks first when it can (HTTP has a Content-Type header, MQTT 5 a Content Type
+	// property), but MQTT 3.1.1 and WebSocket carry no such field at all — for those the AsyncAPI
+	// document is the only thing that says how to read the bytes. JSON stays the last resort.
+	//
+	// Resolved up front rather than inside the decode branch so the format can be REPORTED even when
+	// no decode was needed: with the in-memory adapter the payload arrives already decoded, and a user
+	// still needs to see which decoder governs the channel.
+	contentType := strings.TrimSpace(msg.ContentType)
+	if contentType == "" {
+		// The transport said nothing, so the document decides — and if it declares several formats it
+		// cannot say which one THIS message is. Unlike a send, there is nothing on the step to settle it
+		// with (a receive has no requestBody), so the fix is in the AsyncAPI document. Same shape as the
+		// send-side warning in resolveSendContentType.
+		declared := info.DeclaredContentTypes()
+		if len(declared) > 1 {
+			log.Printf("Warning: step %s: the message carried no contentType and channel %q declares more than one (%s); decoding as %q — declare one format per channel so the decoder is unambiguous",
+				stepID, channel, strings.Join(declared, ", "), declared[0])
+		}
+		if len(declared) > 0 {
+			contentType = declared[0]
+		}
+	}
+	// One lookup, used both to name the format the way the registry does (which also turns "nothing
+	// declared" into the JSON default) and to decode below.
+	serializer, serr := se.serializerRegistry().For(contentType)
+	if serr == nil {
+		contentType = serializer.ContentType()
+	}
+
+	payload := msg.Payload
+	if payload == nil && len(msg.Raw) > 0 {
+		if serr != nil {
+			reason := fmt.Sprintf("receive on channel %q: cannot decode message: %v", channel, serr)
+			span.end(telemetry.SpanStatusError, reason, nil)
+			return se.createFailureResult(stepID, step, state, reason)
+		}
+		decoded, derr := serializer.Deserialize(msg.Raw)
+		if derr != nil {
+			reason := fmt.Sprintf("receive on channel %q: could not deserialize message body: %v", channel, derr)
+			span.end(telemetry.SpanStatusError, reason, nil)
+			return se.createFailureResult(stepID, step, state, reason)
+		}
+		payload = decoded
+	}
+
 	// Shape the message for the evaluator's $message root: {header, payload}.
 	message := map[string]interface{}{
 		"header":  msg.Headers,
-		"payload": msg.Payload,
+		"payload": payload,
 	}
 	// The reused SuccessChecker / OutputExtractor read the message from response["message"].
 	responseForCheck := map[string]interface{}{"message": message}
@@ -238,12 +367,15 @@ func (se *StepExecutor) executeReceive(step map[string]interface{}, channel stri
 	if len(toSlice(step["successCriteria"])) > 0 {
 		success = se.SuccessChecker.CheckSuccessCriteria(step, responseForCheck, state)
 	}
-	// The message that arrived is the result-side detail, mirroring the HTTP response body.
-	receivedAttrs := messageAttrs("messaging.message", msg.Payload, msg.Headers)
+	// The message that arrived is the result-side detail, mirroring the HTTP response body. The
+	// decoder is reported alongside it: which format governed the message is otherwise invisible.
+	receivedAttrs := messageAttrs("messaging.message", payload, msg.Headers)
+	receivedAttrs["messaging.content_type"] = contentType
 	if success {
 		state.StepsStatus[stepID] = models.StepStatusSuccess
 		span.end(telemetry.SpanStatusOK, "", receivedAttrs)
-		log.Printf("Step %s: received a message on channel %q via %s adapter", stepID, channel, se.AsyncAdapter.Name())
+		log.Printf("Step %s: received a message on channel %q via %s adapter, decoded as %s",
+			stepID, channel, se.AsyncAdapter.Name(), contentType)
 	} else {
 		state.StepsStatus[stepID] = models.StepStatusFailure
 		span.end(telemetry.SpanStatusError, "received message did not satisfy successCriteria", receivedAttrs)
@@ -266,7 +398,7 @@ func (se *StepExecutor) executeReceive(step map[string]interface{}, channel stri
 	return &models.StepResult{
 		StepID:       stepID,
 		Success:      success,
-		ResponseBody: msg.Payload,
+		ResponseBody: payload,
 		Outputs:      outputs,
 		Error:        failureReason,
 		NextAction:   se.ActionHandler.DetermineNextAction(step, success, state),
@@ -307,6 +439,33 @@ func (se *StepExecutor) resolveCorrelationID(step map[string]interface{}, state 
 	}
 
 	return corrExpr, ""
+}
+
+// serializerRegistry returns the executor's serializer registry, defaulting to the standard set if a
+// StepExecutor was constructed without one (all normal construction goes through NewStepExecutor).
+func (se *StepExecutor) serializerRegistry() *SerializerRegistry {
+	if se.Serializers != nil {
+		return se.Serializers
+	}
+	// Return the shared default rather than assigning it: writing to se.Serializers here would be a
+	// data race the moment two steps run concurrently (Phase 14), and the executor is not otherwise
+	// mutated during a run. Built once, lazily, so nothing pays for it when Serializers is configured.
+	return defaultSerializers()
+}
+
+// defaultSerializers is the fallback registry for a StepExecutor built without one. All normal
+// construction goes through NewStepExecutor, which sets Serializers explicitly.
+var defaultSerializers = sync.OnceValue(NewDefaultSerializerRegistry)
+
+// previewBytes renders wire bytes for a log line: quoted so the exact characters are visible (a text
+// `23.5` and a JSON `"23.5"` are otherwise indistinguishable on screen), and truncated so a large
+// message cannot flood the log.
+func previewBytes(raw []byte) string {
+	const max = 120
+	if len(raw) > max {
+		return fmt.Sprintf("%q…", raw[:max])
+	}
+	return fmt.Sprintf("%q", raw)
 }
 
 // headerParams pulls the "header" bucket out of the prepared parameters map for use as message headers.

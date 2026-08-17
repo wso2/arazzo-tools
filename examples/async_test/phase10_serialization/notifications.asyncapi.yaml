@@ -1,0 +1,89 @@
+asyncapi: 3.0.0
+info:
+  title: Notifications
+  version: 1.0.0
+channels:
+  # A JSON channel (structured payload) and a plain-text channel (free-form text). Phase 10 lets the
+  # SAME runner carry both by choosing a serializer from the step's requestBody `contentType`.
+  events:
+    address: notify/events
+    messages:
+      event:
+        contentType: application/json
+        payload:
+          type: object
+          properties:
+            kind: { type: string }
+            note: { type: string }
+  alerts:
+    address: notify/alerts
+    messages:
+      alert:
+        contentType: text/plain
+        payload:
+          type: string
+  # A binary channel whose messages are declared as Protobuf — the serializer for it is a stub in
+  # Phase 10 (real codec + descriptor config arrive in Phase 11), so using it fails clearly.
+  metrics:
+    address: notify/metrics
+    messages:
+      metric:
+        contentType: application/x-protobuf
+        payload:
+          type: object
+  # A binary channel whose messages are declared as Avro — likewise a Phase-10 stub.
+  audit:
+    address: notify/audit
+    messages:
+      entry:
+        contentType: application/avro
+        payload:
+          type: object
+  # A channel that declares NO contentType, and this document sets no `defaultContentType` either.
+  # Nothing anywhere says what this channel carries, which is the one case where the runtime falls
+  # back to application/json on its own (see 02).
+  untyped:
+    address: notify/untyped
+  # This channel's message is a $ref into components.messages — the idiomatic way a real AsyncAPI
+  # document is written. The contentType is declared over there, not inline (see 08).
+  audits:
+    address: notify/audits
+    messages:
+      audit:
+        $ref: '#/components/messages/audit'
+  # A channel carrying TWO message definitions that declare DIFFERENT formats. Nothing here says which
+  # one a given step sends, so the document cannot answer the question on its own (see 13).
+  mixed:
+    address: notify/mixed
+    messages:
+      alphaJson:
+        contentType: application/json
+        payload:
+          type: object
+      betaText:
+        contentType: text/plain
+        payload:
+          type: string
+operations:
+  publishEvent:
+    action: send
+    channel:
+      $ref: '#/channels/events'
+  publishAlert:
+    action: send
+    channel:
+      $ref: '#/channels/alerts'
+  recordAudit:
+    action: send
+    channel:
+      $ref: '#/channels/audits'
+  readAudit:
+    action: receive
+    channel:
+      $ref: '#/channels/audits'
+components:
+  messages:
+    audit:
+      contentType: text/plain
+      payload:
+        type: string

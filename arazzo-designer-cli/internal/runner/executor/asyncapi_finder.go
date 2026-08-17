@@ -21,6 +21,11 @@ type AsyncInfo struct {
 	OperationID    string                 // the operation key (when resolved via operationId)
 	Operation      map[string]interface{} // the operation object (when resolved via operationId)
 	Action         string                 // the operation's declared action ("send"/"receive"), if known
+
+	// Doc is the AsyncAPI document the target was resolved in. Resolution does not end at the channel:
+	// a channel's messages are commonly `$ref`s into `components`, and the document root carries
+	// `defaultContentType` — both need the whole document, not just the channel object.
+	Doc map[string]interface{}
 }
 
 // Wired into execution as of Phase 9: async_executor.go resolves each async step through
@@ -64,10 +69,54 @@ func (af *AsyncFinder) FindChannelByPath(channelPath string) *AsyncInfo {
 		Source:     name,
 		Channel:    channel,
 		ChannelKey: lastPointerSegment(pointer),
+		Doc:        spec,
 	}
 	if addr, ok := channel["address"].(string); ok {
 		info.ChannelAddress = addr
 	}
+	return info
+}
+
+// FindOperationByPath resolves a step `operationPath` of the form "<sourceRef>#<jsonPointer>" (spec
+// §5.8.5) to an AsyncAPI operation — the third targeting form, alongside `channelPath` and
+// `operationId`.
+//
+// It returns nil for an OpenAPI operationPath so that a REST step falls through to the HTTP path
+// unharmed. The test is the operation's `action`: AsyncAPI 3.0 makes it REQUIRED on an Operation
+// Object, and an OpenAPI operation has no such field — the same distinction FindOperationByID gets
+// for free from AsyncAPI operations living under `operations` rather than `paths`.
+func (af *AsyncFinder) FindOperationByPath(operationPath string) *AsyncInfo {
+	hash := strings.Index(operationPath, "#")
+	if hash < 0 {
+		return nil
+	}
+	sourceRef := resolveSourceDescriptionRef(strings.Trim(operationPath[:hash], "{}"))
+	pointer := operationPath[hash+1:]
+	if strings.TrimSpace(pointer) == "" {
+		return nil // an empty fragment would resolve to the whole document, not an operation
+	}
+
+	name, spec := af.findSource(sourceRef)
+	if spec == nil {
+		return nil
+	}
+	op := toMap(evaluator.ResolveJSONPointer(spec, pointer))
+	if op == nil {
+		return nil
+	}
+	action, _ := op["action"].(string)
+	if strings.TrimSpace(action) == "" {
+		return nil // not an AsyncAPI operation
+	}
+
+	info := &AsyncInfo{
+		Source:      name,
+		OperationID: lastPointerSegment(pointer),
+		Operation:   op,
+		Action:      strings.TrimSpace(action),
+		Doc:         spec,
+	}
+	attachOperationChannel(info, spec, op)
 	return info
 }
 
@@ -117,24 +166,122 @@ func (af *AsyncFinder) findOperationInSource(sourceName, opID string) *AsyncInfo
 	if op == nil {
 		return nil
 	}
-	info := &AsyncInfo{Source: sourceName, OperationID: opID, Operation: op}
+	info := &AsyncInfo{Source: sourceName, OperationID: opID, Operation: op, Doc: spec}
 	if action, ok := op["action"].(string); ok {
 		info.Action = action
 	}
-	// Follow the operation's channel $ref (e.g. "#/channels/orders") to the channel object.
-	if ch := toMap(op["channel"]); ch != nil {
-		if ref, ok := ch["$ref"].(string); ok && strings.HasPrefix(ref, "#") {
-			pointer := strings.TrimPrefix(ref, "#")
-			if chObj := toMap(evaluator.ResolveJSONPointer(spec, pointer)); chObj != nil {
-				info.Channel = chObj
-				info.ChannelKey = lastPointerSegment(pointer)
-				if addr, ok := chObj["address"].(string); ok {
-					info.ChannelAddress = addr
-				}
-			}
+	attachOperationChannel(info, spec, op)
+	return info
+}
+
+// attachOperationChannel follows an operation's channel `$ref` (e.g. "#/channels/orders") to the
+// channel object and records it on the info, so an operation-targeted step reaches exactly the same
+// channel details a `channelPath` step addresses directly.
+func attachOperationChannel(info *AsyncInfo, spec, op map[string]interface{}) {
+	ch := toMap(op["channel"])
+	if ch == nil {
+		return
+	}
+	ref, ok := ch["$ref"].(string)
+	if !ok || !strings.HasPrefix(ref, "#") {
+		return
+	}
+	pointer := strings.TrimPrefix(ref, "#")
+	chObj := toMap(evaluator.ResolveJSONPointer(spec, pointer))
+	if chObj == nil {
+		return
+	}
+	info.Channel = chObj
+	info.ChannelKey = lastPointerSegment(pointer)
+	if addr, ok := chObj["address"].(string); ok {
+		info.ChannelAddress = addr
+	}
+}
+
+// resolveLocalRef follows a local "$ref" ("#/components/messages/alert") to the object it names,
+// through the same JSON Pointer resolver used for channels and operations. Anything else — no $ref, an
+// external/URL ref, or a ref that doesn't resolve — is returned unchanged, so a caller can always read
+// the object it already has.
+func resolveLocalRef(doc, obj map[string]interface{}) map[string]interface{} {
+	ref, ok := obj["$ref"].(string)
+	if !ok || !strings.HasPrefix(ref, "#") {
+		return obj
+	}
+	if resolved := toMap(evaluator.ResolveJSONPointer(doc, strings.TrimPrefix(ref, "#"))); resolved != nil {
+		return resolved
+	}
+	return obj
+}
+
+// DeclaredContentType returns the content type the AsyncAPI document declares for this target, or ""
+// when it declares none. It is the "targeted operation" half of the Arazzo rule for a request body's
+// contentType: "If omitted then refer to Content-Type specified at the targeted operation to
+// understand serialization requirements" (Arazzo §5.8.14.1).
+//
+// Within the AsyncAPI document the lookup follows that spec's own precedence: a message's own
+// `contentType` first, then the document's root `defaultContentType` ("When omitted, the value MUST
+// be the one specified on the defaultContentType field", AsyncAPI 3.0 Message Object).
+//
+// A channel's messages may be written inline or as `$ref`s into `components.messages` — the idiomatic
+// form in a real document — so each is dereferenced before its contentType is read. Messages are
+// visited in sorted key order so a channel carrying several message definitions resolves the same way
+// on every run (Go randomizes map iteration).
+func (info *AsyncInfo) DeclaredContentType() string {
+	if types := info.DeclaredContentTypes(); len(types) > 0 {
+		return types[0]
+	}
+	return ""
+}
+
+// DeclaredContentTypes returns every DISTINCT format the AsyncAPI document declares for this target's
+// channel, in sorted-message-key order. Usually one; more than one means the channel carries messages
+// of different formats and the document alone cannot say which one a given step sends.
+//
+// A channel's messages may be written inline or as `$ref`s into `components.messages` — the idiomatic
+// form in a real document — so each is dereferenced before its contentType is read. When no message
+// declares one, the document's root `defaultContentType` applies ("When omitted, the value MUST be the
+// one specified on the defaultContentType field", AsyncAPI 3.0 Message Object) and is returned as the
+// single entry. Empty when the document declares nothing at all.
+func (info *AsyncInfo) DeclaredContentTypes() []string {
+	if info == nil {
+		return nil
+	}
+	messages := toMap(info.Channel["messages"])
+	names := make([]string, 0, len(messages))
+	for name := range messages {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var types []string
+	for _, name := range names {
+		message := resolveLocalRef(info.Doc, toMap(messages[name]))
+		ct, ok := message["contentType"].(string)
+		ct = strings.TrimSpace(ct)
+		if !ok || ct == "" || containsMediaType(types, ct) {
+			continue
+		}
+		types = append(types, ct)
+	}
+	if len(types) > 0 {
+		return types
+	}
+	if defaultContentType, _ := info.Doc["defaultContentType"].(string); strings.TrimSpace(defaultContentType) != "" {
+		return []string{strings.TrimSpace(defaultContentType)}
+	}
+	return nil
+}
+
+// containsMediaType reports whether types already holds this wire format. Compared with sameMediaType
+// so two spellings of one format ("application/json" and "application/vnd.order+json") count once —
+// they select the same serializer, so the channel is not carrying two formats.
+func containsMediaType(types []string, contentType string) bool {
+	for _, t := range types {
+		if sameMediaType(t, contentType) {
+			return true
 		}
 	}
-	return info
+	return false
 }
 
 // ActionMismatch reports whether a step's declared `action` contradicts the resolved operation's

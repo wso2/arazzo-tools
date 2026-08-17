@@ -24,6 +24,13 @@ type ChannelInfo struct {
 	FileURI    string
 	FileName   string
 	LineNumber int
+
+	// ContentTypes are the DISTINCT wire formats this channel's messages declare, resolved through
+	// AsyncAPI's own precedence: each message's `contentType`, else the document's root
+	// `defaultContentType`. Empty when the document declares neither — which is what lets the editor
+	// tell an author that the runtime will fall back to JSON. More than one entry means the channel
+	// carries messages of different formats, so the document alone cannot say which one a step sends.
+	ContentTypes []string
 }
 
 // OperationInfo contains information about an OpenAPI operation
@@ -38,6 +45,11 @@ type OperationInfo struct {
 	LineNumber  int
 	Column      int
 	Tags        []string
+
+	// ChannelKey is the channel an AsyncAPI operation targets (followed from its `channel.$ref`).
+	// Empty for OpenAPI operations. It lets a step that targets an operationId reach the channel's
+	// declared content type, the same way a channelPath step reaches it directly.
+	ChannelKey string
 }
 
 // OpenAPIFile represents a parsed OpenAPI or AsyncAPI specification file

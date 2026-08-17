@@ -1,0 +1,216 @@
+package executor
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestSerializerRegistry_Selection(t *testing.T) {
+	r := NewDefaultSerializerRegistry()
+
+	cases := []struct {
+		contentType string
+		wantName    string
+		wantErr     bool
+	}{
+		{"", "json", false},                                // empty -> default JSON
+		{"application/json", "json", false},                // exact
+		{"application/json; charset=utf-8", "json", false}, // parameters stripped
+		{"APPLICATION/JSON", "json", false},                // case-insensitive
+		{"text/plain", "text", false},                      // text
+		{"application/cloudevents+json", "json", false},    // structured +json suffix
+		{"application/x-protobuf", "protobuf", false},      // known-but-stubbed still selects
+		{"application/avro", "avro", false},
+		{"application/octet-stream", "", true}, // unknown -> clear error
+	}
+	for _, c := range cases {
+		s, err := r.For(c.contentType)
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("For(%q): expected error, got serializer %q", c.contentType, s.Name())
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("For(%q): unexpected error %v", c.contentType, err)
+			continue
+		}
+		if s.Name() != c.wantName {
+			t.Errorf("For(%q): got serializer %q, want %q", c.contentType, s.Name(), c.wantName)
+		}
+	}
+}
+
+// The error must not present a stub as something the reader can use: pointing them at
+// "application/avro" only sends them into a different failure.
+func TestSerializerRegistry_UnknownErrorSeparatesStubsFromSupported(t *testing.T) {
+	r := NewDefaultSerializerRegistry()
+	_, err := r.For("application/octet-stream")
+	if err == nil {
+		t.Fatal("unknown content type should error")
+	}
+	msg := err.Error()
+
+	supported, stubbed, found := strings.Cut(msg, "; recognized but not yet implemented: ")
+	if !found {
+		t.Fatalf("error should name the not-yet-implemented types separately, got: %s", msg)
+	}
+	for _, ct := range []string{"application/json", "text/plain"} {
+		if !strings.Contains(supported, ct) {
+			t.Errorf("%q should be listed as supported, got: %s", ct, supported)
+		}
+	}
+	for _, ct := range []string{"application/avro", "avro/binary", "application/x-protobuf", "application/protobuf"} {
+		if strings.Contains(supported, ct) {
+			t.Errorf("stub %q must not be listed as supported, got: %s", ct, supported)
+		}
+		if !strings.Contains(stubbed, ct) {
+			t.Errorf("stub %q should be listed as recognized-but-unimplemented, got: %s", ct, stubbed)
+		}
+	}
+}
+
+// A registry with no stubs at all keeps the simpler one-list message.
+func TestSerializerRegistry_UnknownErrorOmitsEmptyStubList(t *testing.T) {
+	r := &SerializerRegistry{byType: map[string]Serializer{}, fallback: &JSONSerializer{}}
+	r.Register(&JSONSerializer{})
+	_, err := r.For("application/octet-stream")
+	if err == nil || strings.Contains(err.Error(), "not yet implemented") {
+		t.Errorf("a registry with no stubs should not mention them, got: %v", err)
+	}
+}
+
+func TestJSONSerializer_RoundTrip(t *testing.T) {
+	s := &JSONSerializer{}
+	in := map[string]interface{}{"orderId": "A1", "status": "new"}
+
+	raw, err := s.Serialize(in)
+	if err != nil {
+		t.Fatalf("serialize: %v", err)
+	}
+	if !strings.Contains(string(raw), `"orderId"`) {
+		t.Errorf("serialized JSON missing field: %s", raw)
+	}
+
+	out, err := s.Deserialize(raw)
+	if err != nil {
+		t.Fatalf("deserialize: %v", err)
+	}
+	m, ok := out.(map[string]interface{})
+	if !ok || m["orderId"] != "A1" || m["status"] != "new" {
+		t.Errorf("round-trip mismatch: got %#v", out)
+	}
+}
+
+func TestJSONSerializer_EmptyBodyIsNil(t *testing.T) {
+	s := &JSONSerializer{}
+	v, err := s.Deserialize([]byte("   "))
+	if err != nil || v != nil {
+		t.Errorf("empty body should deserialize to (nil, nil), got (%v, %v)", v, err)
+	}
+}
+
+func TestJSONSerializer_InvalidBodyErrors(t *testing.T) {
+	s := &JSONSerializer{}
+	if _, err := s.Deserialize([]byte("{not json")); err == nil {
+		t.Error("invalid JSON should error")
+	}
+}
+
+func TestTextSerializer_RoundTrip(t *testing.T) {
+	s := &TextSerializer{}
+
+	raw, err := s.Serialize("hello")
+	if err != nil || string(raw) != "hello" {
+		t.Fatalf("serialize string: %q / %v", raw, err)
+	}
+	// non-string payloads are stringified
+	raw2, _ := s.Serialize(42)
+	if string(raw2) != "42" {
+		t.Errorf("serialize int: got %q, want 42", raw2)
+	}
+	out, err := s.Deserialize([]byte("world"))
+	if err != nil || out != "world" {
+		t.Errorf("deserialize: got %v / %v", out, err)
+	}
+}
+
+func TestSchemaRequiredSerializers_FailClearly(t *testing.T) {
+	r := NewDefaultSerializerRegistry()
+	for _, ct := range []string{"application/x-protobuf", "application/protobuf", "application/avro", "avro/binary"} {
+		s, err := r.For(ct)
+		if err != nil {
+			t.Fatalf("For(%q) should select a stub serializer, got err %v", ct, err)
+		}
+		if _, err := s.Serialize(map[string]interface{}{"x": 1}); err == nil {
+			t.Errorf("%q serialize should fail with a needs-schema error", ct)
+		}
+		if _, err := s.Deserialize([]byte{0x01}); err == nil {
+			t.Errorf("%q deserialize should fail with a needs-schema error", ct)
+		}
+	}
+}
+
+// A structured payload has no plain-text form. Stringifying it would put Go's own map rendering on
+// the wire, which no consumer can read — and this is reachable without the author asking for
+// text/plain, because an AsyncAPI channel's declared contentType selects the serializer for them.
+func TestTextSerializer_RejectsStructuredPayloads(t *testing.T) {
+	s := &TextSerializer{}
+	for _, payload := range []interface{}{
+		map[string]interface{}{"kind": "deploy"},
+		[]interface{}{1, 2, 3},
+		map[interface{}]interface{}{"k": "v"},
+	} {
+		raw, err := s.Serialize(payload)
+		if err == nil {
+			t.Errorf("serializing %T as text/plain should fail, got %q", payload, raw)
+		}
+	}
+
+	// Scalars still work — they have an unambiguous text form.
+	for _, payload := range []interface{}{"hi", 42, true, nil} {
+		if _, err := s.Serialize(payload); err != nil {
+			t.Errorf("serializing scalar %v as text/plain should succeed, got %v", payload, err)
+		}
+	}
+}
+
+// A registry without a JSON serializer must report a `+json` content type as unsupported rather than
+// returning a nil Serializer with a nil error, which would panic at the first method call.
+func TestRegistryWithoutJSONReportsSuffixAsUnsupported(t *testing.T) {
+	r := &SerializerRegistry{byType: map[string]Serializer{}, fallback: &TextSerializer{}}
+	r.Register(&TextSerializer{})
+
+	s, err := r.For("application/vnd.order+json")
+	if err == nil {
+		t.Fatalf("expected an error, got serializer %v", s)
+	}
+	if s != nil {
+		t.Errorf("a failed lookup must return a nil serializer alongside the error, got %v", s)
+	}
+}
+
+// The runtime's mismatch check must fold media types the same way the editor's does, or the same
+// document produces a runtime warning and no editor warning (or the reverse).
+func TestSameMediaType(t *testing.T) {
+	same := [][2]string{
+		{"application/json", "application/json; charset=utf-8"},
+		{"application/json", "application/vnd.order+json"},
+		{"application/vnd.order+json", "application/vnd.other+json"},
+		{"TEXT/PLAIN", "text/plain"},
+	}
+	for _, p := range same {
+		if !sameMediaType(p[0], p[1]) {
+			t.Errorf("%q and %q select the same serializer and must compare equal", p[0], p[1])
+		}
+	}
+	differ := [][2]string{
+		{"application/json", "text/plain"},
+		{"application/json", "application/avro"},
+	}
+	for _, p := range differ {
+		if sameMediaType(p[0], p[1]) {
+			t.Errorf("%q and %q are different wire formats", p[0], p[1])
+		}
+	}
+}

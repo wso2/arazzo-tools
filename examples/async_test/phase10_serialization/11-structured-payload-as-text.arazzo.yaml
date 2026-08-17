@@ -1,0 +1,44 @@
+# Phase 10 — Scenario 11: AN OBJECT CANNOT BE CARRIED AS TEXT (fails on purpose).
+#
+# The `alerts` channel declares `text/plain`. This step declares no contentType, so the document
+# decides — and hands the text serializer an OBJECT payload.
+#
+# There is no meaningful plain-text form for an object. Stringifying it would put the runtime's own
+# internal rendering on the wire (`map[kind:deploy note:v3]`), which no consumer can read and which
+# silently satisfies nothing. So it is a hard error, the same way an unknown content type is (03):
+# never guess a wire format.
+#
+# EXPECTED: run **badTextFlow** → FAILS with
+#   send on channel "notify/alerts": could not serialize payload: cannot serialize a structured
+#   payload (object/array) as text/plain: declare a structured contentType such as application/json
+#   on the step's requestBody, or send a scalar value
+#
+# Note WHY this matters: the author never wrote `text/plain` anywhere. The AsyncAPI document selected
+# the serializer for them (see 07), which is exactly what makes failing loudly here worth doing —
+# otherwise a correct-looking Arazzo document publishes garbage.
+#
+# The fix is either of the two the message names: declare `contentType: application/json` on the step
+# (it wins over the document — see 09), or send a scalar the channel can actually carry.
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 10 - structured payload on a text channel"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: notify
+    url: ./notifications.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: badTextFlow
+    steps:
+      - stepId: emitObject
+        channelPath: notify#/channels/alerts     # declares text/plain
+        action: send
+        requestBody:
+          #contentType: application/json
+          payload:                               # ...but the payload is an object
+            kind: "deploy"
+            note: "v3"

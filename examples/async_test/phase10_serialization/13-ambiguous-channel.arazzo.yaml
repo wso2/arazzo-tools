@@ -1,0 +1,83 @@
+# Phase 10 — Scenario 13: A CHANNEL THAT DECLARES TWO DIFFERENT FORMATS.
+#
+# The `mixed` channel in notifications.asyncapi.yaml defines two messages:
+#
+#   alphaJson -> contentType: application/json
+#   betaText  -> contentType: text/plain
+#
+# Both are legal. But when a step sends without declaring a contentType of its own, the document has
+# no way to say WHICH of the two this particular message is — so the runtime has to guess. It picks
+# the first message in sorted key order (`alphaJson` → application/json) so a run is repeatable, and
+# it says out loud that it guessed:
+#
+#   Warning: step sendGuessed: channel "notify/mixed" declares more than one contentType
+#   (application/json, text/plain); using "application/json" — set 'contentType' on the step's
+#   requestBody to choose explicitly
+#
+# The second step does exactly that and the warning disappears for it — the step's own contentType
+# always wins over the document (Arazzo §5.8.14.1), so declaring it removes the ambiguity entirely.
+#
+# EXPECTED: run **ambiguousFlow** → completes with
+#   guessed  = "hello"    and   chosen = "hello"
+#
+# The interesting part is NOT the outputs — it is the run log. Look for:
+#   Step sendGuessed: ... as application/json (7 bytes): "\"hello\""   ← guessed, quotes included
+#   Step sendChosen:  ... as text/plain (5 bytes): "hello"             ← chosen, bare text
+# and the warning above appearing for the guessed steps but not the chosen one.
+#
+# In the RUN LOG the warning appears ONCE, on `sendGuessed` — the only step that actually had to guess:
+#   - `sendChosen` declared its own contentType, so nothing was ambiguous for it;
+#   - the receives take the content type the message itself carries (the in-memory adapter passes it
+#     along), so they never consult the declaration here. Against a real broker, which carries no
+#     content type, a receive WOULD have to guess the decoder — and it warns then too.
+#
+# In the EDITOR all four steps are flagged, because the ambiguity is a property of the channel and the
+# editor cannot know what a run will carry. A receive has no requestBody to settle it in, so its
+# message points at the document instead: "declare one format per channel so the decoder is
+# unambiguous". Splitting the two message kinds into separate channels is the durable fix.
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 10 - ambiguous channel content types"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: notify
+    url: ./notifications.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: ambiguousFlow
+    steps:
+      # No contentType: the document declares two different ones, so this is the ambiguous case.
+      - stepId: sendGuessed
+        channelPath: notify#/channels/mixed
+        action: send
+        requestBody:
+          payload: "hello"
+
+      - stepId: takeGuessed
+        channelPath: notify#/channels/mixed
+        action: receive
+        timeout: 2000
+        outputs:
+          guessed: $message.payload
+
+      # Declaring the contentType settles it — the step's value wins over the document.
+      - stepId: sendChosen
+        channelPath: notify#/channels/mixed
+        action: send
+        requestBody:
+          contentType: text/plain
+          payload: "hello"
+
+      - stepId: takeChosen
+        channelPath: notify#/channels/mixed
+        action: receive
+        timeout: 2000
+        outputs:
+          chosen: $message.payload
+    outputs:
+      guessed: $steps.takeGuessed.outputs.guessed
+      chosen: $steps.takeChosen.outputs.chosen

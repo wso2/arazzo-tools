@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/arazzo/lsp/utils"
@@ -108,6 +109,7 @@ func extractAsyncOperations(spec map[string]interface{}, fileURI, content string
 			FileName:    fileName,
 			LineNumber:  findKeyLineNumber(content, opID),
 			Column:      0,
+			ChannelKey:  operationChannelKey(opMap),
 		})
 	}
 	return ops
@@ -121,17 +123,98 @@ func extractChannels(spec map[string]interface{}, fileURI, content string) []*Ch
 		return channels
 	}
 	fileName := baseName(fileURI)
+	defaultContentType := getString(spec, "defaultContentType")
 	for key, chRaw := range channelsObj {
 		chMap, _ := chRaw.(map[string]interface{})
 		channels = append(channels, &ChannelInfo{
-			Key:        key,
-			Address:    getString(chMap, "address"),
-			FileURI:    fileURI,
-			FileName:   fileName,
-			LineNumber: findKeyLineNumber(content, key),
+			Key:         key,
+			Address:     getString(chMap, "address"),
+			FileURI:     fileURI,
+			FileName:    fileName,
+			LineNumber:  findKeyLineNumber(content, key),
+			ContentTypes: channelContentTypes(spec, chMap, defaultContentType),
 		})
 	}
 	return channels
+}
+
+// channelContentTypes resolves the distinct wire formats a channel's messages declare, following
+// AsyncAPI 3.0's own precedence: each message's `contentType`, and "When omitted, the value MUST be the
+// one specified on the defaultContentType field" (Message Object). A channel's messages may be inline
+// or `$ref`s into `components.messages`, so each is dereferenced first. Messages are visited in sorted
+// key order so a channel with several message definitions resolves identically on every parse.
+//
+// Mirrors AsyncInfo.DeclaredContentTypes in the runner, so the editor and the run agree.
+func channelContentTypes(spec, channel map[string]interface{}, defaultContentType string) []string {
+	messages, _ := channel["messages"].(map[string]interface{})
+	names := make([]string, 0, len(messages))
+	for name := range messages {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var types []string
+	for _, name := range names {
+		msg, _ := messages[name].(map[string]interface{})
+		ct := getString(resolveLocalRef(spec, msg), "contentType")
+		if ct == "" || containsMediaType(types, ct) {
+			continue
+		}
+		types = append(types, ct)
+	}
+	if len(types) > 0 {
+		return types
+	}
+	if defaultContentType != "" {
+		return []string{defaultContentType}
+	}
+	return nil
+}
+
+// containsMediaType reports whether types already holds this wire format, comparing the way the
+// runtime's registry keys on it so two spellings of one format count once.
+func containsMediaType(types []string, contentType string) bool {
+	for _, t := range types {
+		if utils.SameMediaType(t, contentType) {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveLocalRef follows a local "$ref" ("#/components/messages/alert") to the object it names.
+// Anything else — no $ref, an external ref, or one that doesn't resolve — is returned unchanged, so a
+// caller can always read the object it already has.
+func resolveLocalRef(spec, obj map[string]interface{}) map[string]interface{} {
+	ref := getString(obj, "$ref")
+	if !strings.HasPrefix(ref, "#/") {
+		return obj
+	}
+	var current interface{} = spec
+	for _, token := range utils.SplitJSONPointer(strings.TrimPrefix(ref, "#")) {
+		m, ok := current.(map[string]interface{})
+		if !ok {
+			return obj
+		}
+		if current, ok = m[token]; !ok {
+			return obj
+		}
+	}
+	if resolved, ok := current.(map[string]interface{}); ok {
+		return resolved
+	}
+	return obj
+}
+
+// operationChannelKey follows an AsyncAPI operation's `channel.$ref` (e.g. "#/channels/orders") to the
+// channel key it targets. Returns "" when the operation has no local channel reference.
+func operationChannelKey(op map[string]interface{}) string {
+	channel, _ := op["channel"].(map[string]interface{})
+	ref := getString(channel, "$ref")
+	if !strings.HasPrefix(ref, "#/channels/") {
+		return ""
+	}
+	return utils.UnescapeJSONPointerToken(strings.TrimPrefix(ref, "#/channels/"))
 }
 
 // findKeyLineNumber finds the (0-indexed) line where a YAML/JSON map key is defined, e.g. the

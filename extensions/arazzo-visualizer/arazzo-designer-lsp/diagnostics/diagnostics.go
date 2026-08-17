@@ -21,15 +21,25 @@ func NewDiagnosticsProvider() *DiagnosticsProvider {
 	}
 }
 
-// ProvideDiagnostics generates diagnostics for the given content.
+// StepResolvers supplies the facts about a step that live in the SOURCE documents rather than in the
+// Arazzo text, resolved from the indexed AsyncAPI/OpenAPI files. Each is optional: a nil resolver
+// simply keeps the checks that depend on it quiet.
 //
-// resolveStepAction tells the validator which direction (send/receive) an `operationId`/
-// `operationPath` step targets, resolved from the indexed AsyncAPI sources; pass nil when no index is
-// available, in which case the direction-dependent async checks only apply to steps that write
-// `action:` themselves. It is a PER-CALL argument rather than provider state: diagnostics for
-// different documents must never share a resolver, or one document's validation could resolve
-// against another's sources.
-func (d *DiagnosticsProvider) ProvideDiagnostics(content string, resolveStepAction func(step *parser.Step) (string, bool)) []protocol.Diagnostic {
+//   - Action — the direction (send/receive) an `operationId`/`operationPath` step targets, which the
+//     Arazzo text only states when the step writes `action:` itself.
+//   - ContentType — every content type the AsyncAPI document declares for the step's channel, plus
+//     whether that channel was resolved at all.
+//
+// These are PER-CALL values rather than provider state: diagnostics for different documents must never
+// share a resolver, or one document's validation could resolve against another's sources.
+type StepResolvers struct {
+	Action      func(step *parser.Step) (action string, ok bool)
+	ContentType func(step *parser.Step) (declared []string, resolved bool)
+}
+
+// ProvideDiagnostics generates diagnostics for the given content, using resolvers for the facts that
+// live outside the Arazzo document (see StepResolvers).
+func (d *DiagnosticsProvider) ProvideDiagnostics(content string, resolvers StepResolvers) []protocol.Diagnostic {
 	diagnostics := []protocol.Diagnostic{}
 
 	utils.LogDebug("DiagnosticsProvider: Parsing document (length: %d bytes)", len(content))
@@ -57,7 +67,9 @@ func (d *DiagnosticsProvider) ProvideDiagnostics(content string, resolveStepActi
 	// Validate the document
 	// A validator scoped to THIS call, so the resolver above cannot leak into another document's
 	// validation (the shared provider is reused across documents and requests).
-	v := validator.NewValidator().WithStepActionResolver(resolveStepAction)
+	v := validator.NewValidator().
+		WithStepActionResolver(resolvers.Action).
+		WithStepContentTypeResolver(resolvers.ContentType)
 	validationErrors := v.Validate(doc)
 	// Warn about unknown/misspelled fields the struct-based parser silently ignores
 	validationErrors = append(validationErrors, v.ValidateUnknownFields(content)...)
@@ -66,8 +78,14 @@ func (d *DiagnosticsProvider) ProvideDiagnostics(content string, resolveStepActi
 	// Convert validation errors to LSP diagnostics
 	for _, validationErr := range validationErrors {
 		severity := protocol.DiagnosticSeverityError
-		if validationErr.Severity == "warning" {
+		switch validationErr.Severity {
+		case "warning":
 			severity = protocol.DiagnosticSeverityWarning
+		case "information":
+			// Not a defect: the document is legal and the runtime has a defined behaviour. These
+			// surface a silent assumption (e.g. "this will be serialized as JSON") without marking a
+			// correct document as a problem.
+			severity = protocol.DiagnosticSeverityInformation
 		}
 
 		diagnostics = append(diagnostics, protocol.Diagnostic{
