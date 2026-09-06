@@ -93,7 +93,7 @@ func TestPrewarmSkipsSendOnlyChannels(t *testing.T) {
 		t.Error("a channel a step receives on should be warmed")
 	}
 	if _, subscribed := fake.subs["orders/audit"]; subscribed {
-		t.Error("a send-only channel must not be warmed — nothing would ever drain its buffer")
+		t.Error("a send-only channel must not be warmed - nothing would ever drain its buffer")
 	}
 }
 
