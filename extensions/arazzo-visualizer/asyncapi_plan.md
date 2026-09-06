@@ -1203,6 +1203,27 @@ what they cannot show: in-memory pre-subscription is a no-op, so the message-cap
 only demonstrable against a broker that discards messages for absent subscribers, which is what the
 unit test does.
 
+**In-memory is now stated in the editor, not just implied by the run log.** A source with no `servers`
+runs on the in-memory adapter — and the runtime already says so per step ("via in-memory adapter"), but
+only once you run it. The editor said nothing, which matters because of HOW that mode fails: an
+in-memory send/receive pair **always succeeds**, since the workflow receives the message it just sent.
+A document that simply forgot `servers` therefore produces a completely green run that never contacted
+a broker — a passing workflow that proves nothing.
+
+`OpenAPIFile.DeclaresServers` records whether an indexed AsyncAPI document has a non-empty `servers`
+section; `Server.resolveSourceDeclaresServers` (through `ensureSourcesIndexed`, as every source-backed
+resolver must) feeds `Validator.validateSourceAdapters`, which reports an **information** diagnostic on
+the source description. Information, not a warning: running in-memory is a supported, deliberate mode —
+it is what every Phase 9/10 example uses — so it is a default worth stating, not a mistake. It is
+emitted **once per source, not per step**, so a document full of async steps does not fill with markers
+repeating one fact, and OpenAPI sources are excluded (they have no `servers` concept).
+
+To land the marker on the entry rather than the top of the file, `SourceDescription` gained a
+`LineNumber`, extracted the same way workflows and steps already are — matched only inside the
+top-level `sourceDescriptions:` block, since `name:` also appears on parameters. Note the other
+sourceDescription diagnostics still use `Line: 0` and land at the top of the file; they could reuse
+this now.
+
 **Correlation ID locations — Phase 11's own deferred item, now closed.** AsyncAPI 3.0 lets a Message
 Object declare where its correlation id lives (`correlationId: {location: "$message.header#/correlationId"}`),
 and that declaration is the contract between publisher and subscriber. Until now nothing read it: the
