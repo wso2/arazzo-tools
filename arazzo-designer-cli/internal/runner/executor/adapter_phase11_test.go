@@ -348,3 +348,35 @@ func TestAdapterFor_CachesPerBroker(t *testing.T) {
 }
 
 // ---- receive-side contentType fallback from the AsyncAPI channel declaration ----
+
+// A reader goroutine outlives its connection by the moment it takes to unwind, so Send and readLoop
+// can both report the SAME dead connection. If a redial has happened in between, dropping blindly
+// would close the LIVE replacement and leave the channel silently disconnected.
+func TestWSDropConnOnlyForgetsTheFailedConnection(t *testing.T) {
+	host := startWSEchoServer(t)
+	a := NewWSAdapter(host)
+
+	first, err := a.ensureConn("echo")
+	if err != nil {
+		t.Fatalf("first dial: %v", err)
+	}
+	a.dropConn("echo", first) // the write path reports the failure
+
+	second, err := a.ensureConn("echo") // a later step redials
+	if err != nil {
+		t.Fatalf("redial: %v", err)
+	}
+	if second == first {
+		t.Fatal("expected a genuinely new connection after the drop")
+	}
+
+	// The dead connection's reader finally unwinds and reports the same failure.
+	a.dropConn("echo", first)
+
+	a.mu.Lock()
+	live, stillThere := a.conns["echo"]
+	a.mu.Unlock()
+	if !stillThere || live != second {
+		t.Error("the replacement connection must survive a late drop of the old one")
+	}
+}

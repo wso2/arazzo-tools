@@ -65,7 +65,7 @@ func (a *WSAdapter) Send(channel string, msg *Message) error {
 	defer wc.writeMu.Unlock()
 	_ = wc.conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
 	if err := wc.conn.WriteMessage(websocket.TextMessage, msg.Raw); err != nil {
-		a.dropConn(channel) // stale connection; next use redials
+		a.dropConn(channel, wc) // stale connection; next use redials
 		return fmt.Errorf("websocket write to %s failed: %w", a.channelURL(channel), err)
 	}
 	return nil
@@ -114,7 +114,7 @@ func (a *WSAdapter) readLoop(channel string, wc *wsConn) {
 	for {
 		_, data, err := wc.conn.ReadMessage()
 		if err != nil {
-			a.dropConn(channel)
+			a.dropConn(channel, wc)
 			return
 		}
 		a.buffer.push(channel, &Message{
@@ -125,10 +125,15 @@ func (a *WSAdapter) readLoop(channel string, wc *wsConn) {
 }
 
 // dropConn closes and forgets a channel's connection (safe to call twice).
-func (a *WSAdapter) dropConn(channel string) {
+//
+// It only forgets the connection that actually failed. A reader goroutine outlives its connection by
+// the moment it takes to unwind, so Send and readLoop can both report the SAME dead connection — and
+// if a later Send/Receive has already redialled in between, dropping blindly would close the live
+// replacement and leave the channel silently disconnected.
+func (a *WSAdapter) dropConn(channel string, failed *wsConn) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if wc, ok := a.conns[channel]; ok {
+	if wc, ok := a.conns[channel]; ok && wc == failed {
 		_ = wc.conn.Close()
 		delete(a.conns, channel)
 	}
