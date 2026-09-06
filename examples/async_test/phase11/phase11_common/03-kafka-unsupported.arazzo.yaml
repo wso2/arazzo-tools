@@ -5,7 +5,7 @@
 #
 # EXPECTED: run **kafkaFlow** → the step fails with:
 #   the "kafka" protocol is not yet supported: a Kafka adapter (with Avro/Protobuf schema support)
-#   is a planned future phase — supported protocols: ws, wss, mqtt, mqtts ...
+#   is a planned future phase - supported protocols: ws, wss, mqtt, mqtts ...
 
 arazzo: 1.1.0
 

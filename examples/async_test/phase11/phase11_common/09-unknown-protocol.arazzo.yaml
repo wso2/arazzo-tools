@@ -3,7 +3,7 @@
 # error instead of guessing a transport. (Same guard that stops kafka — see scenario 3.)
 #
 # EXPECTED: run **amqpFlow** → the step fails with:
-#   unsupported AsyncAPI server protocol "amqp" — supported: ws, wss, mqtt, mqtts
+#   unsupported AsyncAPI server protocol "amqp" - supported: ws, wss, mqtt, mqtts
 #   (and in-memory when no servers are declared)
 
 arazzo: 1.1.0
