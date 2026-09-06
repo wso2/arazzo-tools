@@ -203,3 +203,43 @@ var errFailingAdapter = &adapterError{"connection refused"}
 type adapterError struct{ msg string }
 
 func (e *adapterError) Error() string { return e.msg }
+
+// Two sources on DIFFERENT brokers can use the same channel address. adapterFor caches per
+// protocol://host, so those are two adapter instances that both call themselves "mqtt" - keying the
+// dedupe by adapter NAME would collide and leave the second broker silently unsubscribed.
+func TestPrewarmSubscribesTheSameChannelOnEveryBroker(t *testing.T) {
+	srcs := map[string]interface{}{}
+	for _, name := range []string{"eastBus", "westBus"} {
+		host := "east.example.com"
+		if name == "westBus" {
+			host = "west.example.com"
+		}
+		srcs[name] = map[string]interface{}{
+			"asyncapi": "3.0.0",
+			"servers":  map[string]interface{}{"b": map[string]interface{}{"protocol": "mqtt", "host": host}},
+			"channels": map[string]interface{}{"orders": map[string]interface{}{"address": "orders/new"}},
+		}
+	}
+	se := NewStepExecutor(map[string]interface{}{}, srcs, &models.RuntimeParams{}, &telemetry.NoopSink{})
+
+	east, eastFake := newFakeMQTTAdapter()
+	west, westFake := newFakeMQTTAdapter()
+	se.asyncAdapters = map[string]Adapter{
+		"mqtt://east.example.com": east,
+		"mqtt://west.example.com": west,
+	}
+
+	se.PrewarmAsyncChannels([]interface{}{
+		map[string]interface{}{"stepId": "a", "channelPath": "eastBus#/channels/orders", "action": "receive"},
+		map[string]interface{}{"stepId": "b", "channelPath": "westBus#/channels/orders", "action": "receive"},
+	})
+
+	for name, fake := range map[string]*fakeMQTTClient{"east": eastFake, "west": westFake} {
+		fake.mu.Lock()
+		_, subscribed := fake.subs["orders/new"]
+		fake.mu.Unlock()
+		if !subscribed {
+			t.Errorf("%s broker should have been subscribed despite sharing the channel address", name)
+		}
+	}
+}

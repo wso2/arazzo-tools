@@ -105,7 +105,7 @@ func (se *StepExecutor) executeAsyncStep(step map[string]interface{}, info *Asyn
 // takes must not sink a workflow that would otherwise have succeeded. This runs before any span
 // exists, so it is a plain log line and never becomes step telemetry.
 func (se *StepExecutor) PrewarmAsyncChannels(steps []interface{}) {
-	warmed := map[string]bool{}
+	warmed := map[warmedChannel]bool{}
 	var listening []string
 
 	for _, raw := range steps {
@@ -134,8 +134,12 @@ func (se *StepExecutor) PrewarmAsyncChannels(steps []interface{}) {
 		if err != nil || adapter == nil {
 			continue // unsupported protocol or no adapter — the step itself reports it
 		}
-		// One subscription per adapter+channel: several steps commonly read the same channel.
-		key := adapter.Name() + "\x00" + channel
+		// One subscription per adapter+channel: several steps commonly read the same channel. Keyed
+		// on the adapter INSTANCE, not its name - adapters are cached per protocol://host, so two
+		// sources on different brokers are different instances that both call themselves "mqtt".
+		// Keying by name would collide when they share a channel address, silently leaving the
+		// second broker unsubscribed.
+		key := warmedChannel{adapter: adapter, channel: channel}
 		if warmed[key] {
 			continue
 		}
@@ -154,6 +158,13 @@ func (se *StepExecutor) PrewarmAsyncChannels(steps []interface{}) {
 	if len(listening) > 0 {
 		log.Printf("Listening on %d channel(s) before the first step: %s", len(listening), strings.Join(quoteAll(listening), ", "))
 	}
+}
+
+// warmedChannel identifies one already-subscribed channel on one adapter instance. Adapter is an
+// interface over pointer types, so it is comparable and safe as a map key.
+type warmedChannel struct {
+	adapter Adapter
+	channel string
 }
 
 // asyncDirection reports the direction a step will run with, WITHOUT the validation and warnings
