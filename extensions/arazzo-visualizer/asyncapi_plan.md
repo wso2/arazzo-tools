@@ -1707,7 +1707,7 @@ it only becomes meaningful once Phase 11 provides a real broker to wait on.
 ## Known Issues / Bugs (separate from the v1.1.0 phases — fix independently)
 
 > **End-of-project cleanup batch.** None of these are v1.1.0 phase work. Best tackled together at the
-> very end, after Phases 1–12, in one final pass: (1) the final XPath push (XPath selectors + `targetSelectorType: xpath`, see Phases 4/6), (2) the server-stop UI bug below, (3) executable `type: arazzo` source descriptions below, and (4) the two remaining LSP validation blind spots below (goto target existence; $steps refs outside parameters).
+> very end, after Phases 1–12, in one final pass: (1) the final XPath push (XPath selectors + `targetSelectorType: xpath`, see Phases 4/6), (2) the server-stop UI bug below, (3) executable `type: arazzo` source descriptions below, (4) the two remaining LSP validation blind spots below (goto target existence; $steps refs outside parameters), and (5) JSON line mapping in the LSP parser below.
 
 ### BUG (HIGH PRIORITY): a reconnected MQTT client silently stops receiving
 
@@ -1787,6 +1787,30 @@ Related and already fixed (recorded so the distinction is clear): the `$steps.<i
 a hard **error** whenever the referenced step was declared later, which false-positived on a legal
 backward-`goto` loop — declaration order is not execution order. It now errors only when the step does
 not exist, and warns when it exists but is declared later.
+
+### GAP: the LSP maps line numbers for YAML keys only, not JSON
+
+`Parser.extractLineNumbers` finds an element's line with regexes shaped for YAML — `workflowId:`,
+`stepId:`, and (added in Phase 11) `name:` inside the `sourceDescriptions:` block. An Arazzo document
+may equally be JSON, where the same keys are written `"workflowId":`, and none of the patterns match a
+quoted key.
+
+The consequence is mild but real: in a JSON Arazzo file every diagnostic that anchors to a
+workflow, step or source description falls back to `Line: 0` and the marker lands at the top of the
+file instead of on the offending element. Nothing is mis-reported — only mis-placed. The document
+still parses, because `yaml.Unmarshal` accepts JSON (YAML is a superset); it is purely the line-number
+side that is YAML-shaped.
+
+Raised by a review of the Phase 11 source-description line mapping and **declined there deliberately**:
+the new `name:` pattern has exactly the same limitation as the pre-existing `workflowId:`/`stepId:`
+ones, so it introduced no new gap, and fixing only the newest of the three would have left the feature
+inconsistent. It belongs here, as one change covering all three patterns at once.
+
+**Fix:** widen each pattern to accept an optionally-quoted key (`"?workflowId"?\s*:`), do the same for
+the `sourceDescriptions:` block start and the top-level-key terminator, and add a JSON fixture
+asserting the mapped lines. Worth pairing with the separate observation that the other
+sourceDescription diagnostics still pass `Line: 0` even in YAML and could now use
+`SourceDescription.LineNumber`.
 
 ### GAP: `type: arazzo` source descriptions (external Arazzo documents) are not executable
 **Pre-existing since v1.0.1 — NOT a v1.1.0 item.** Recorded here so it isn't lost; tackle at the very
