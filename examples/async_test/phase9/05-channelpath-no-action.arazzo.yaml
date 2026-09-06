@@ -2,7 +2,7 @@
 # the runner can't choose send vs receive → hard error at runtime (the LSP also flags this at edit time).
 #
 # EXPECTED: run **badFlow** → `noAction` fails immediately:
-#   a 'channelPath' step requires 'action' (send or receive) — the message-flow direction is
+#   a 'channelPath' step requires 'action' (send or receive) - the message-flow direction is
 #   otherwise undefined
 
 arazzo: 1.1.0
