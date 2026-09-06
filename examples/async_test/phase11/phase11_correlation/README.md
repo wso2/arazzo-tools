@@ -100,7 +100,7 @@ receive on channel "orders/located" timed out after 2s: no message matching corr
 
 ```
 Warning: step await: the AsyncAPI document declares no correlationId location for channel
-"orders/unlocated", so the whole message is searched for "42" — a message that merely contains
+"orders/unlocated", so the whole message is searched for "42" - a message that merely contains
 that value elsewhere can match; declare 'correlationId.location' on the channel's message to
 match precisely
 ```
