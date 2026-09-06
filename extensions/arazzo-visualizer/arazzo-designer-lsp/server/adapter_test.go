@@ -75,6 +75,8 @@ sourceDescriptions:
   - name: rest
     url: ./rest.openapi.yaml
     type: openapi
+  - name: untyped
+    url: ./without.asyncapi.yaml
 workflows:
   - workflowId: wf
     steps:
@@ -133,6 +135,12 @@ workflows:
 	}
 	if find("'rest'") != nil {
 		t.Errorf("an OpenAPI source has no servers concept and must be clean, got:%s", dump.String())
+	}
+
+	// `type` is OPTIONAL on a Source Description Object, so an untyped source pointing at an AsyncAPI
+	// document with no servers must still be reported - the resolver decides from what the file is.
+	if find("'untyped'") == nil {
+		t.Errorf("an untyped source resolving to a serverless AsyncAPI doc should be reported, got:%s", dump.String())
 	}
 }
 

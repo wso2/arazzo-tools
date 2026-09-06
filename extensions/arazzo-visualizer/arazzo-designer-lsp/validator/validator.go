@@ -903,7 +903,10 @@ func (v *Validator) validateSourceAdapters(doc *parser.ArazzoDocument) []Validat
 	var errors []ValidationError
 	for i := range doc.SourceDescriptions {
 		sd := &doc.SourceDescriptions[i]
-		if sd.Type != "asyncapi" {
+		// `type` is OPTIONAL on a Source Description Object, so an untyped source may still be an
+		// AsyncAPI document. Only an explicitly non-AsyncAPI type rules it out here; for everything
+		// else the resolver decides, using what the file ACTUALLY is.
+		if sd.Type != "" && sd.Type != "asyncapi" {
 			continue
 		}
 		declaresServers, resolved := v.resolveSourceDeclaresServers(sd)
