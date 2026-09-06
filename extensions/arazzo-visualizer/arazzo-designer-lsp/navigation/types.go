@@ -68,6 +68,11 @@ type OpenAPIFile struct {
 	Operations  []*OperationInfo
 	Channels    []*ChannelInfo // AsyncAPI channels (empty for OpenAPI files)
 	ParsedAt    time.Time
+
+	// DeclaresServers reports whether an AsyncAPI document has a non-empty `servers` section. That
+	// section is what selects a transport at runtime; without it every channel in the file runs on the
+	// in-memory adapter, which contacts no broker at all. Always false for OpenAPI files.
+	DeclaresServers bool
 }
 
 // NewOperationIndex creates a new operation index
@@ -147,6 +152,15 @@ func (idx *OperationIndex) FileSpecType(fileURI string) (string, bool) {
 		return "", false
 	}
 	return file.SpecType, true
+}
+
+// File returns an indexed file by URI (thread-safe), for callers that need more than the spec type —
+// e.g. whether an AsyncAPI document declares any `servers`.
+func (idx *OperationIndex) File(fileURI string) (*OpenAPIFile, bool) {
+	idx.mutex.RLock()
+	defer idx.mutex.RUnlock()
+	file, ok := idx.Files[fileURI]
+	return file, ok
 }
 
 // HasFile reports whether a file URI has been indexed (thread-safe).

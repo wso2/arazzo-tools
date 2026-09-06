@@ -71,6 +71,8 @@ func ParseOpenAPIFile(fileURI string) (*OpenAPIFile, error) {
 	if asyncVersion := getString(spec, "asyncapi"); asyncVersion != "" {
 		openAPIFile.Version = asyncVersion
 		openAPIFile.SpecType = "asyncapi"
+		servers, _ := spec["servers"].(map[string]interface{})
+		openAPIFile.DeclaresServers = len(servers) > 0
 		openAPIFile.Operations = extractAsyncOperations(spec, fileURI, string(content))
 		openAPIFile.Channels = extractChannels(spec, fileURI, string(content))
 	} else {
