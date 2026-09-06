@@ -29,7 +29,9 @@ and subscribes to each channel a step will receive on, shrinking the window to t
 
 ## Scenarios
 
-All four run on the **in-memory adapter — no broker, no network**.
+Scenarios 01-03 run on the **in-memory adapter** - no broker, no network. `04-unreachable-broker`
+deliberately declares an MQTT server so it exercises the real MQTT failure path; its host is a
+reserved `.invalid` name, so it fails DNS immediately rather than contacting anything.
 
 | file | what it shows | expected |
 |---|---|---|
@@ -39,19 +41,19 @@ All four run on the **in-memory adapter — no broker, no network**.
 | `04-unreachable-broker` | a broker that cannot be reached: warns first, runs anyway, the step fails | ❌ the step fails, not the warm-up |
 
 ```bash
-test_runner examples/async_test/phase11_prewarm/01-listens-before-first-step.arazzo.yaml twoChannels
+test_runner examples/async_test/phase11/phase11_prewarm/01-listens-before-first-step.arazzo.yaml twoChannels
 ```
 
 ```bash
-test_runner examples/async_test/phase11_prewarm/02-send-only-channel-skipped.arazzo.yaml sendOnly
+test_runner examples/async_test/phase11/phase11_prewarm/02-send-only-channel-skipped.arazzo.yaml sendOnly
 ```
 
 ```bash
-test_runner examples/async_test/phase11_prewarm/03-targeting-forms.arazzo.yaml everyForm
+test_runner examples/async_test/phase11/phase11_prewarm/03-targeting-forms.arazzo.yaml everyForm
 ```
 
 ```bash
-test_runner examples/async_test/phase11_prewarm/04-unreachable-broker.arazzo.yaml unreachable
+test_runner examples/async_test/phase11/phase11_prewarm/04-unreachable-broker.arazzo.yaml unreachable
 ```
 
 ## What to look for
