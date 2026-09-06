@@ -71,7 +71,7 @@ on it:
 
 ```
 Warning: could not subscribe to channel "orders/new" via the mqtt adapter before the workflow
-started (needed by step await): mqtt connect to tcp://nonexistent.invalid:1883 failed: ... —
+started (needed by step await): mqtt connect to tcp://nonexistent.invalid:1883 failed: ... -
 the step will try again when it runs, and messages published in the meantime are lost
 ```
 
