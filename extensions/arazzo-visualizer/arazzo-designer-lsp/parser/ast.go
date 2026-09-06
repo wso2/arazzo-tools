@@ -25,6 +25,8 @@ type SourceDescription struct {
 	URL  string                 `yaml:"url" json:"url"`
 	Type string                 `yaml:"type,omitempty" json:"type,omitempty"` // "openapi", "asyncapi", or "arazzo"
 	Ext  map[string]interface{} `yaml:",inline" json:"-"`
+
+	LineNumber int `yaml:"-" json:"-"` // line the entry starts on, so a diagnostic can point at it
 }
 
 // Workflow represents a sequence of steps

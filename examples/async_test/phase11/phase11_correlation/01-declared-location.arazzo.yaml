@@ -1,0 +1,74 @@
+# Phase 11 (correlation) — Scenario 1: THE DOCUMENT SAYS WHERE THE ID LIVES.
+#
+# The `located` channel declares `correlationId.location: $message.header#/correlationId`, so the
+# receive reads the id from that header and nowhere else.
+#
+# Two messages are published before the receive runs, and this is the whole point of the example:
+#   emitDecoy  carries the wanted value "42" in `payload.customerId` — the WRONG place — and its own
+#              correlation header says "OTHER-1".
+#   emitReal   carries "42" in the header the document names, and its order is "42".
+#
+# Because the location is declared, the decoy cannot match: its header is "OTHER-1", and nothing else
+# about it is even looked at.
+#
+# EXPECTED: run **preciseMatch** with input {"want":"42"} → completes with
+#   matched = "42"        (the real order — NOT the decoy's "99")
+#
+# Run 02-no-location to see the same workflow on a channel that declares nothing: there the decoy wins.
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 11 - correlation id read from the declared location"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: orderBus
+    url: ./orders.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: preciseMatch
+    inputs:
+      type: object
+      properties:
+        want:
+          type: string
+    steps:
+      # The decoy: right value, wrong place.
+      - stepId: emitDecoy
+        channelPath: orderBus#/channels/located
+        action: send
+        parameters:
+          - name: correlationId
+            in: header
+            value: "OTHER-1"
+        requestBody:
+          payload:
+            orderId: "99"
+            customerId: $inputs.want
+
+      # The real one: the value where the AsyncAPI document says it belongs. Placing it there is the
+      # author's job — Arazzo has no `correlationId` on a send step, so the runtime cannot do it.
+      - stepId: emitReal
+        channelPath: orderBus#/channels/located
+        action: send
+        parameters:
+          - name: correlationId
+            in: header
+            value: $inputs.want
+        requestBody:
+          payload:
+            orderId: "42"
+
+      - stepId: await
+        channelPath: orderBus#/channels/located
+        action: receive
+        correlationId: $inputs.want
+        timeout: 2000
+        successCriteria:
+          - condition: '$message.payload.orderId == "42"'
+        outputs:
+          matched: $message.payload.orderId
+    outputs:
+      matched: $steps.await.outputs.matched

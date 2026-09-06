@@ -1,0 +1,18 @@
+asyncapi: 3.0.0
+info:
+  title: Unreachable broker
+  version: 1.0.0
+
+# `.invalid` is reserved by RFC 2606 and is guaranteed never to resolve, so this fails fast and
+# without touching the network — no waiting on a real connection attempt.
+servers:
+  ghost:
+    host: nonexistent.invalid
+    protocol: mqtt
+
+channels:
+  orders:
+    address: orders/new
+    messages:
+      order:
+        contentType: application/json

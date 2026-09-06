@@ -1,0 +1,57 @@
+# Phase 11 (correlation) — Scenario 5: THE PRICE OF PRECISION (fails on purpose).
+#
+# The `located` channel declares `correlationId.location: $message.header#/correlationId`. This send
+# puts the id in the PAYLOAD instead — a perfectly reasonable-looking message that simply does not
+# follow the contract the document states.
+#
+# Because a declared location is authoritative, the receive reads that header, finds nothing, and does
+# NOT fall back to searching the rest of the message. So the message is skipped and the step times out.
+#
+# This is the trade the feature makes, and it is worth understanding: precision means a publisher that
+# disagrees with the document is invisible rather than accidentally matched. The failure looks exactly
+# like a dead channel — nothing arrived — even though a message is sitting right there.
+#
+# Placing the id correctly is the AUTHOR's job: Arazzo scopes `correlationId` to receive steps, so a
+# send has no such field and the runtime has no value it could inject.
+#
+# EXPECTED: run **wrongPlace** with input {"want":"42"} → `await` waits ~2s then FAILS:
+#   receive on channel "orders/located" timed out after 2s: no message matching correlationId "42" arrived
+#
+# Compare with 01, whose send puts the same value in the declared header and matches immediately.
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 11 - id published somewhere the document does not name"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: orderBus
+    url: ./orders.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: wrongPlace
+    inputs:
+      type: object
+      properties:
+        want:
+          type: string
+    steps:
+      - stepId: emitMisplaced
+        channelPath: orderBus#/channels/located
+        action: send
+        requestBody:
+          payload:
+            orderId: "42"
+            correlationId: $inputs.want    # in the payload — the document says the HEADER
+
+      - stepId: await
+        channelPath: orderBus#/channels/located
+        action: receive
+        correlationId: $inputs.want
+        timeout: 2000
+        outputs:
+          matched: $message.payload.orderId
+    outputs:
+      matched: $steps.await.outputs.matched

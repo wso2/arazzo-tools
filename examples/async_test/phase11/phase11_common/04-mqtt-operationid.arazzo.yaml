@@ -1,0 +1,44 @@
+# Phase 11 — Scenario 4: MQTT via OPERATIONID (not channelPath). The steps target AsyncAPI operations
+# `publishReading` (action: send) and `consumeReading` (action: receive) — the direction comes from
+# the operation, not the step. Runs over the real MQTT adapter (broker.hivemq.com). Correlation token
+# matches OUR message on the shared public topic.
+#
+# EXPECTED: run **byOperation** with input {"token":"op-33"} → completes with got = 19.0
+# (needs internet access to broker.hivemq.com:1883)
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 11 - MQTT via operationId"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: sensorBus
+    url: ./sensors.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: byOperation
+    inputs:
+      type: object
+      properties:
+        token:
+          type: string
+    steps:
+      - stepId: emit
+        operationId: publishReading        # action: send (from the AsyncAPI operation)
+        requestBody:
+          payload:
+            token: $inputs.token
+            celsius: 19.0
+
+      - stepId: await
+        operationId: consumeReading         # action: receive (from the AsyncAPI operation)
+        correlationId: $inputs.token
+        timeout: 10000
+        successCriteria:
+          - condition: '$message.payload.token == $inputs.token'
+        outputs:
+          got: $message.payload.celsius
+    outputs:
+      got: $steps.await.outputs.got

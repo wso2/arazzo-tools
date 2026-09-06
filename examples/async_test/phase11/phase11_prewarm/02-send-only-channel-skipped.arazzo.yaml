@@ -1,0 +1,60 @@
+# Phase 11 (pre-subscription) — Scenario 2: A SEND-ONLY CHANNEL IS NOT SUBSCRIBED TO.
+#
+# Subscribing FILLS a channel's buffer, and the only thing that ever empties it is a receive step
+# consuming a message. So a channel that this workflow only ever publishes to would accumulate every
+# message anyone puts on it, for the whole run, with nothing ever reading them — unbounded growth on a
+# busy topic, in exchange for nothing. Pre-subscription therefore covers only channels some step
+# RECEIVES on.
+#
+# Sends are unaffected: a send still subscribes to its own topic immediately before publishing (so the
+# broker echoes the message back and a same-workflow round trip works). And any channel used for both
+# directions has a receive step, so it is pre-subscribed anyway — as `orders/new` is here.
+#
+# This workflow touches two channels:
+#   orders/new   -> sent AND received  -> pre-subscribed
+#   orders/audit -> SENT only          -> NOT pre-subscribed
+#
+# EXPECTED: run **sendOnly** → completes with seen = "A-2".
+#
+# In the run log exactly one channel is listed, and `orders/audit` is absent even though the very
+# first step publishes to it:
+#
+#   Listening on 1 channel(s) before the first step: "orders/new"
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 11 - send-only channels are not pre-subscribed"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: bus
+    url: ./bus.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: sendOnly
+    steps:
+      # Send-only: nothing in this workflow ever reads the audit channel.
+      - stepId: record
+        channelPath: bus#/channels/audit
+        action: send
+        requestBody:
+          payload:
+            event: "workflow started"
+
+      - stepId: emit
+        channelPath: bus#/channels/orders
+        action: send
+        requestBody:
+          payload:
+            orderId: "A-2"
+
+      - stepId: await
+        channelPath: bus#/channels/orders
+        action: receive
+        timeout: 2000
+        outputs:
+          seen: $message.payload.orderId
+    outputs:
+      seen: $steps.await.outputs.seen

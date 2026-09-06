@@ -1,0 +1,68 @@
+# Phase 11 (correlation) — Scenario 8: DECLARING THE PAYLOAD MEANS THE HEADER IS NOT READ.
+#
+# "Authoritative" is about the WHOLE location, not just the pointer. The `payloadOnly` channel declares
+#
+#   correlationId.location: $message.payload#/orderId
+#
+# so the receive reads `payload.orderId` and nothing else — not even a header literally named
+# `correlationId`, which is the one place a reader would most expect a correlation id to be.
+#
+# Two messages are published:
+#   decoy  carries the wanted value in a header called `correlationId`, and a different orderId;
+#   real   carries it in `payload.orderId`, exactly where the document points.
+#
+# Without a declared location the decoy would match on the header, and the workflow would continue on
+# the wrong order. Here it cannot.
+#
+# EXPECTED: run **payloadWins** with input {"want":"42"} → completes with
+#   matched = "42"      (the real one — the header decoy is never looked at)
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 11 - a declared payload location excludes headers"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: orderBus
+    url: ./orders.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: payloadWins
+    inputs:
+      type: object
+      properties:
+        want:
+          type: string
+    steps:
+      # The most plausible-looking decoy there is: the right value, in a header named `correlationId`.
+      - stepId: emitHeaderDecoy
+        channelPath: orderBus#/channels/payloadOnly
+        action: send
+        parameters:
+          - name: correlationId
+            in: header
+            value: $inputs.want
+        requestBody:
+          payload:
+            orderId: "99"
+
+      - stepId: emitReal
+        channelPath: orderBus#/channels/payloadOnly
+        action: send
+        requestBody:
+          payload:
+            orderId: $inputs.want
+
+      - stepId: await
+        channelPath: orderBus#/channels/payloadOnly
+        action: receive
+        correlationId: $inputs.want
+        timeout: 2000
+        successCriteria:
+          - condition: '$message.payload.orderId == "42"'
+        outputs:
+          matched: $message.payload.orderId
+    outputs:
+      matched: $steps.await.outputs.matched

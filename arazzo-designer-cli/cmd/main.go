@@ -75,11 +75,11 @@ func serveCmd(args []string) {
 	var sink telemetry.SpanEventSink
 	var sinks []telemetry.SpanEventSink
 	if *traceEndpoint != "" {
-		log.Printf("Local tracing enabled → %s", *traceEndpoint)
+		log.Printf("Local tracing enabled -> %s", *traceEndpoint)
 		sinks = append(sinks, telemetry.NewHTTPSink(*traceEndpoint))
 	}
 	if *otlpEndpoint != "" {
-		log.Printf("OTLP tracing enabled → %s/v1/traces", *otlpEndpoint)
+		log.Printf("OTLP tracing enabled -> %s/v1/traces", *otlpEndpoint)
 		sinks = append(sinks, telemetry.NewOTLPSink(*otlpEndpoint))
 	}
 	switch len(sinks) {

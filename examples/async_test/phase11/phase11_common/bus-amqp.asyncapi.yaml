@@ -1,0 +1,18 @@
+asyncapi: 3.0.0
+info:
+  title: Message Bus (AMQP — no adapter)
+  version: 1.0.0
+# protocol `amqp` has no adapter in this build — the runner fails loudly rather than guessing a
+# transport. (Only ws/wss/mqtt/mqtts are implemented; kafka is a planned future phase.)
+servers:
+  rabbit:
+    host: amqp.example.com
+    protocol: amqp
+channels:
+  jobs:
+    address: jobs.queue
+    messages:
+      job:
+        contentType: application/json
+        payload:
+          type: object

@@ -41,11 +41,11 @@ func TestInMemoryAdapter_FIFO(t *testing.T) {
 	_ = a.Send("ch", &Message{Payload: map[string]interface{}{"n": 1}})
 	_ = a.Send("ch", &Message{Payload: map[string]interface{}{"n": 2}})
 
-	m1, err := a.Receive("ch", "", time.Second)
+	m1, err := a.Receive("ch", Correlation{}, time.Second)
 	if err != nil || m1.Payload.(map[string]interface{})["n"] != 1 {
 		t.Fatalf("first receive: %v / %v", m1, err)
 	}
-	m2, err := a.Receive("ch", "", time.Second)
+	m2, err := a.Receive("ch", Correlation{}, time.Second)
 	if err != nil {
 		t.Fatalf("second receive: %v", err) // stop here: m2 is nil on error
 	}
@@ -60,12 +60,12 @@ func TestInMemoryAdapter_Correlation(t *testing.T) {
 	_ = a.Send("ch", &Message{Payload: map[string]interface{}{"orderId": "B"}})
 
 	// Ask for "B" first — correlation should skip "A" and return the B message.
-	m, err := a.Receive("ch", "B", time.Second)
+	m, err := a.Receive("ch", Correlation{ID: "B"}, time.Second)
 	if err != nil || m.Payload.(map[string]interface{})["orderId"] != "B" {
 		t.Fatalf("correlated receive: %v / %v", m, err)
 	}
 	// "A" is still queued.
-	m2, _ := a.Receive("ch", "A", time.Second)
+	m2, _ := a.Receive("ch", Correlation{ID: "A"}, time.Second)
 	if m2 == nil || m2.Payload.(map[string]interface{})["orderId"] != "A" {
 		t.Errorf("expected the A message to remain, got %v", m2)
 	}
@@ -74,7 +74,7 @@ func TestInMemoryAdapter_Correlation(t *testing.T) {
 func TestInMemoryAdapter_Timeout(t *testing.T) {
 	a := NewInMemoryAdapter()
 	start := time.Now()
-	_, err := a.Receive("empty", "", 60*time.Millisecond)
+	_, err := a.Receive("empty", Correlation{}, 60*time.Millisecond)
 	if err != ErrReceiveTimeout {
 		t.Fatalf("expected ErrReceiveTimeout, got %v", err)
 	}
@@ -497,7 +497,7 @@ func TestAsyncSendUsesContentTypeSerializer(t *testing.T) {
 	}
 
 	// Pull the raw bytes back off the adapter and confirm they are plain text, not JSON.
-	msg, err := se.AsyncAdapter.Receive("orders/new", "", time.Second)
+	msg, err := se.AsyncAdapter.Receive("orders/new", Correlation{}, time.Second)
 	if err != nil {
 		t.Fatalf("receive: %v", err)
 	}
@@ -564,7 +564,7 @@ func sendRaw(t *testing.T, se *StepExecutor, step map[string]interface{}) []byte
 	if r := se.ExecuteStep(step, nil, state); !r.Success {
 		t.Fatalf("send failed: %s", r.Error)
 	}
-	msg, err := se.AsyncAdapter.Receive("orders/new", "", time.Second)
+	msg, err := se.AsyncAdapter.Receive("orders/new", Correlation{}, time.Second)
 	if err != nil {
 		t.Fatalf("receive: %v", err)
 	}
@@ -830,7 +830,7 @@ func TestSendPublishesResolvedContentType(t *testing.T) {
 		}, nil, state); !r.Success {
 			t.Fatalf("%q: send failed: %s", c.declared, r.Error)
 		}
-		msg, err := se.AsyncAdapter.Receive("orders/new", "", time.Second)
+		msg, err := se.AsyncAdapter.Receive("orders/new", Correlation{}, time.Second)
 		if err != nil {
 			t.Fatalf("%q: receive: %v", c.declared, err)
 		}

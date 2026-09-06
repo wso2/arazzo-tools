@@ -71,6 +71,8 @@ func ParseOpenAPIFile(fileURI string) (*OpenAPIFile, error) {
 	if asyncVersion := getString(spec, "asyncapi"); asyncVersion != "" {
 		openAPIFile.Version = asyncVersion
 		openAPIFile.SpecType = "asyncapi"
+		servers, _ := spec["servers"].(map[string]interface{})
+		openAPIFile.DeclaresServers = len(servers) > 0
 		openAPIFile.Operations = extractAsyncOperations(spec, fileURI, string(content))
 		openAPIFile.Channels = extractChannels(spec, fileURI, string(content))
 	} else {
@@ -132,7 +134,8 @@ func extractChannels(spec map[string]interface{}, fileURI, content string) []*Ch
 			FileURI:     fileURI,
 			FileName:    fileName,
 			LineNumber:  findKeyLineNumber(content, key),
-			ContentTypes: channelContentTypes(spec, chMap, defaultContentType),
+			ContentTypes:         channelContentTypes(spec, chMap, defaultContentType),
+			CorrelationLocations: channelCorrelationLocations(spec, chMap),
 		})
 	}
 	return channels
@@ -169,6 +172,44 @@ func channelContentTypes(spec, channel map[string]interface{}, defaultContentTyp
 		return []string{defaultContentType}
 	}
 	return nil
+}
+
+// channelCorrelationLocations resolves the distinct places a channel's messages say their correlation
+// id lives, from each message's AsyncAPI Correlation ID Object. Mirrors the runtime's
+// AsyncInfo.DeclaredCorrelationLocations so the editor reports what a run will actually do.
+//
+// Both the message and the Correlation ID Object may be `$ref`s into `components`, so each is
+// dereferenced first. Locations are compared verbatim — a JSON Pointer expression has no equivalent
+// spellings the way a media type does, so two differing strings are two different places.
+func channelCorrelationLocations(spec, channel map[string]interface{}) []string {
+	messages, _ := channel["messages"].(map[string]interface{})
+	names := make([]string, 0, len(messages))
+	for name := range messages {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var locations []string
+	for _, name := range names {
+		msg, _ := messages[name].(map[string]interface{})
+		correlation, _ := resolveLocalRef(spec, msg)["correlationId"].(map[string]interface{})
+		location := getString(resolveLocalRef(spec, correlation), "location")
+		if location == "" || containsExact(locations, location) {
+			continue
+		}
+		locations = append(locations, location)
+	}
+	return locations
+}
+
+// containsExact reports whether values already holds s, compared verbatim.
+func containsExact(values []string, s string) bool {
+	for _, v := range values {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 // containsMediaType reports whether types already holds this wire format, comparing the way the

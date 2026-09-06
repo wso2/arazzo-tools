@@ -53,7 +53,13 @@ func (se *StepExecutor) executeAsyncStep(step map[string]interface{}, info *Asyn
 	if info == nil {
 		return se.createFailureResult(stepID, step, state, "AsyncAPI target could not be resolved (channel or operation not found)")
 	}
-	if se.AsyncAdapter == nil {
+	// Pick the transport from the AsyncAPI `servers` declaration (Phase 11): ws/mqtt -> real broker
+	// adapter, no servers -> the default in-memory adapter.
+	adapter, err := se.adapterFor(info)
+	if err != nil {
+		return se.createFailureResult(stepID, step, state, err.Error())
+	}
+	if adapter == nil {
 		return se.createFailureResult(stepID, step, state, "AsyncAPI execution requires a configured adapter for this protocol")
 	}
 
@@ -71,12 +77,106 @@ func (se *StepExecutor) executeAsyncStep(step map[string]interface{}, info *Asyn
 
 	switch action {
 	case "send":
-		return se.executeSend(step, info, channel, state, stepID, parentSpanID)
+		return se.executeSend(step, adapter, info, channel, state, stepID, parentSpanID)
 	case "receive":
-		return se.executeReceive(step, info, channel, state, stepID, parentSpanID)
+		return se.executeReceive(step, adapter, info, channel, state, stepID, parentSpanID)
 	default:
 		return se.createFailureResult(stepID, step, state, fmt.Sprintf("invalid AsyncAPI action %q", action))
 	}
+}
+
+// PrewarmAsyncChannels subscribes, BEFORE the workflow's first step runs, to every channel that some
+// step will receive on.
+//
+// Subscription is otherwise lazy — it happens inside the first Send or Receive that touches a channel.
+// That leaves a window: a message a peer publishes to a channel between the run starting and the step
+// that reads it being reached is gone, because a broker does not replay what arrived while nobody was
+// listening. Walking the steps up front closes the window to the workflow's own start, which is as
+// early as this layer can get.
+//
+// Only channels a step RECEIVES on are warmed. Subscribing fills a channel's buffer, and the only
+// thing that drains it is a receive; a send-only channel would accumulate every message published
+// there for the whole run with nothing ever reading them. Sends are unaffected — Send still subscribes
+// before it publishes (so a same-workflow round trip works), and any channel in a send/receive pair
+// has a receive step and is therefore warmed anyway.
+//
+// Failures are WARNINGS, never fatal. A channel that cannot be reached now will be retried by the step
+// that needs it, which fails with its own precise error; and a channel behind a branch the run never
+// takes must not sink a workflow that would otherwise have succeeded. This runs before any span
+// exists, so it is a plain log line and never becomes step telemetry.
+func (se *StepExecutor) PrewarmAsyncChannels(steps []interface{}) {
+	warmed := map[warmedChannel]bool{}
+	var listening []string
+
+	for _, raw := range steps {
+		step := toMap(raw)
+		if step == nil {
+			continue
+		}
+		info, isAsync := se.resolveAsyncTarget(step)
+		if !isAsync || info == nil {
+			continue
+		}
+		if asyncDirection(step, info) != "receive" {
+			continue
+		}
+
+		channel := info.ChannelAddress
+		if channel == "" {
+			channel = info.ChannelKey
+		}
+		if channel == "" {
+			continue // no resolvable channel; the step will report this properly when it runs
+		}
+
+		stepID, _ := step["stepId"].(string)
+		adapter, err := se.adapterFor(info)
+		if err != nil || adapter == nil {
+			continue // unsupported protocol or no adapter — the step itself reports it
+		}
+		// One subscription per adapter+channel: several steps commonly read the same channel. Keyed
+		// on the adapter INSTANCE, not its name - adapters are cached per protocol://host, so two
+		// sources on different brokers are different instances that both call themselves "mqtt".
+		// Keying by name would collide when they share a channel address, silently leaving the
+		// second broker unsubscribed.
+		key := warmedChannel{adapter: adapter, channel: channel}
+		if warmed[key] {
+			continue
+		}
+		warmed[key] = true
+
+		if err := adapter.Subscribe(channel); err != nil {
+			log.Printf("Warning: could not subscribe to channel %q via the %s adapter before the workflow started (needed by step %s): %v - the step will try again when it runs, and messages published in the meantime are lost",
+				channel, adapter.Name(), stepID, err)
+			continue
+		}
+		listening = append(listening, channel)
+	}
+
+	// Say what is being listened to, so a successful prewarm is visible rather than merely implied.
+	// Named channels only: which adapter carries each is already on every step's own log line.
+	if len(listening) > 0 {
+		log.Printf("Listening on %d channel(s) before the first step: %s", len(listening), strings.Join(quoteAll(listening), ", "))
+	}
+}
+
+// warmedChannel identifies one already-subscribed channel on one adapter instance. Adapter is an
+// interface over pointer types, so it is comparable and safe as a map key.
+type warmedChannel struct {
+	adapter Adapter
+	channel string
+}
+
+// asyncDirection reports the direction a step will run with, WITHOUT the validation and warnings
+// resolveAsyncAction emits. Prewarm inspects every step before any of them execute, so it must not
+// pre-empt or duplicate the diagnostics a step produces when it actually runs. Mirrors the same
+// precedence: a targeted operation's declared action wins over the step's own.
+func asyncDirection(step map[string]interface{}, info *AsyncInfo) string {
+	if info != nil && info.Action != "" {
+		return info.Action
+	}
+	action, _ := step["action"].(string)
+	return strings.TrimSpace(action)
 }
 
 // resolveAsyncAction determines the direction (send/receive) of an async step. When the step targets
@@ -95,7 +195,7 @@ func resolveAsyncAction(step map[string]interface{}, info *AsyncInfo) (string, e
 		return opAction, nil
 	}
 	if stepAction == "" { //if we reach here that means that a channelPath is given. if there is no action then there is an error
-		return "", fmt.Errorf("a 'channelPath' step requires 'action' (send or receive) — the message-flow direction is otherwise undefined")
+		return "", fmt.Errorf("a 'channelPath' step requires 'action' (send or receive) - the message-flow direction is otherwise undefined")
 	}
 	if stepAction != "send" && stepAction != "receive" {
 		return "", fmt.Errorf("invalid action %q (must be 'send' or 'receive')", stepAction)
@@ -105,9 +205,9 @@ func resolveAsyncAction(step map[string]interface{}, info *AsyncInfo) (string, e
 
 // executeSend builds the outgoing message from the step's requestBody + header parameters, serializes
 // it to wire bytes via the Phase-10 serializer chosen by the resolved content type, publishes it on
-// the channel, then — exactly like the receive path — evaluates any `successCriteria` and extracts any
-// `outputs` through the shared checker/extractor.
-func (se *StepExecutor) executeSend(step map[string]interface{}, info *AsyncInfo, channel string, state *models.ExecutionState, stepID, parentSpanID string) *models.StepResult {
+// the channel via the selected adapter, then — exactly like the receive path — evaluates any
+// `successCriteria` and extracts any `outputs` through the shared checker/extractor.
+func (se *StepExecutor) executeSend(step map[string]interface{}, adapter Adapter, info *AsyncInfo, channel string, state *models.ExecutionState, stepID, parentSpanID string) *models.StepResult {
 	var payload interface{}
 	stepContentType := ""
 	if reqBody := toMap(step["requestBody"]); reqBody != nil {
@@ -150,9 +250,9 @@ func (se *StepExecutor) executeSend(step map[string]interface{}, info *AsyncInfo
 	// serializer ran is the one thing Phase 10 decides, and it is invisible from the payload alone.
 	sendAttrs := messageAttrs("messaging.message", payload, headers)
 	sendAttrs["messaging.content_type"] = msg.ContentType
-	span := se.startMessagingSpan(state.TraceID, parentSpanID, "send", channel, se.AsyncAdapter.Name(), sendAttrs)
+	span := se.startMessagingSpan(state.TraceID, parentSpanID, "send", channel, adapter.Name(), sendAttrs)
 
-	if err := se.AsyncAdapter.Send(channel, msg); err != nil {
+	if err := adapter.Send(channel, msg); err != nil {
 		span.end(telemetry.SpanStatusError, err.Error(), nil)
 		return se.createFailureResult(stepID, step, state, fmt.Sprintf("send on channel %q failed: %v", channel, err))
 	}
@@ -187,7 +287,7 @@ func (se *StepExecutor) executeSend(step map[string]interface{}, info *AsyncInfo
 		// carries the decoded payload alongside the bytes, so a receive step never has to decode and
 		// every format looks identical from the workflow's outputs.
 		log.Printf("Step %s: sent a message on channel %q via %s adapter as %s (%d bytes): %s",
-			stepID, channel, se.AsyncAdapter.Name(), msg.ContentType, len(raw), previewBytes(raw))
+			stepID, channel, adapter.Name(), msg.ContentType, len(raw), previewBytes(raw))
 	} else {
 		state.StepsStatus[stepID] = models.StepStatusFailure
 		span.end(telemetry.SpanStatusError, "sent message did not satisfy successCriteria", nil)
@@ -238,7 +338,7 @@ func resolveSendContentType(stepContentType string, info *AsyncInfo, stepID, cha
 		// answer. Only worth saying when the step declared nothing itself: a step that did has already
 		// settled it, and telling it to "set contentType" would be advice it has followed.
 		if len(declared) > 1 {
-			log.Printf("Warning: step %s: channel %q declares more than one contentType (%s); using %q — set 'contentType' on the step's requestBody to choose explicitly",
+			log.Printf("Warning: step %s: channel %q declares more than one contentType (%s); using %q - set 'contentType' on the step's requestBody to choose explicitly",
 				stepID, channel, strings.Join(declared, ", "), declared[0])
 		}
 		return declared[0]
@@ -266,7 +366,7 @@ func quoteAll(types []string) []string {
 // executeReceive waits for a (optionally correlated) message on the channel, exposes it as $message,
 // then evaluates successCriteria and extracts outputs through the SAME checker/extractor used by HTTP
 // steps. A received message with no successCriteria counts as success.
-func (se *StepExecutor) executeReceive(step map[string]interface{}, info *AsyncInfo, channel string, state *models.ExecutionState, stepID, parentSpanID string) *models.StepResult {
+func (se *StepExecutor) executeReceive(step map[string]interface{}, adapter Adapter, info *AsyncInfo, channel string, state *models.ExecutionState, stepID, parentSpanID string) *models.StepResult {
 	// Resolve the correlation id. A DECLARED correlationId must always be honoured: silently falling
 	// back to an unfiltered receive would return an unrelated message and report success, which is
 	// worse than failing. Only the ABSENCE of a correlationId means "take the next message".
@@ -276,16 +376,22 @@ func (se *StepExecutor) executeReceive(step map[string]interface{}, info *AsyncI
 	}
 
 	timeout := receiveTimeout(step)
+	correlation := se.resolveCorrelation(correlationID, info, stepID, channel)
 
 	// What we are waiting FOR is the request-side detail of this span (the analogue of the HTTP
 	// request); the message that actually arrives is added on the end event below.
 	waitAttrs := map[string]string{"messaging.timeout_ms": fmt.Sprintf("%d", timeout.Milliseconds())}
 	if correlationID != "" {
 		waitAttrs["messaging.correlation_id"] = correlationID
+		// Which places were consulted is as much a part of "how this message was chosen" as the id
+		// itself, and it is the difference between a precise match and a whole-message scan.
+		if len(correlation.Locations) > 0 {
+			waitAttrs["messaging.correlation_location"] = strings.Join(correlation.Locations, ", ")
+		}
 	}
-	span := se.startMessagingSpan(state.TraceID, parentSpanID, "receive", channel, se.AsyncAdapter.Name(), waitAttrs)
+	span := se.startMessagingSpan(state.TraceID, parentSpanID, "receive", channel, adapter.Name(), waitAttrs)
 
-	msg, err := se.AsyncAdapter.Receive(channel, correlationID, timeout)
+	msg, err := adapter.Receive(channel, correlation, timeout)
 	if err != nil {
 		reason := fmt.Sprintf("receive on channel %q failed: %v", channel, err)
 		if errors.Is(err, ErrReceiveTimeout) {
@@ -319,7 +425,7 @@ func (se *StepExecutor) executeReceive(step map[string]interface{}, info *AsyncI
 		// send-side warning in resolveSendContentType.
 		declared := info.DeclaredContentTypes()
 		if len(declared) > 1 {
-			log.Printf("Warning: step %s: the message carried no contentType and channel %q declares more than one (%s); decoding as %q — declare one format per channel so the decoder is unambiguous",
+			log.Printf("Warning: step %s: the message carried no contentType and channel %q declares more than one (%s); decoding as %q - declare one format per channel so the decoder is unambiguous",
 				stepID, channel, strings.Join(declared, ", "), declared[0])
 		}
 		if len(declared) > 0 {
@@ -375,7 +481,7 @@ func (se *StepExecutor) executeReceive(step map[string]interface{}, info *AsyncI
 		state.StepsStatus[stepID] = models.StepStatusSuccess
 		span.end(telemetry.SpanStatusOK, "", receivedAttrs)
 		log.Printf("Step %s: received a message on channel %q via %s adapter, decoded as %s",
-			stepID, channel, se.AsyncAdapter.Name(), contentType)
+			stepID, channel, adapter.Name(), contentType)
 	} else {
 		state.StepsStatus[stepID] = models.StepStatusFailure
 		span.end(telemetry.SpanStatusError, "received message did not satisfy successCriteria", receivedAttrs)
@@ -425,7 +531,7 @@ func (se *StepExecutor) resolveCorrelationID(step map[string]interface{}, state 
 	}
 
 	if corrExpr == "" {
-		log.Printf("Warning: step %s: receive on channel %q declares no correlationId — it will consume the next message on the channel without filtering, which may be a message this workflow did not expect", stepID, channel)
+		log.Printf("Warning: step %s: receive on channel %q declares no correlationId - it will consume the next message on the channel without filtering, which may be a message this workflow did not expect", stepID, channel)
 		return "", ""
 	}
 
@@ -433,12 +539,51 @@ func (se *StepExecutor) resolveCorrelationID(step map[string]interface{}, state 
 	if strings.HasPrefix(corrExpr, "$") || strings.Contains(corrExpr, "{$") {
 		v := evaluator.EvaluateExpression(corrExpr, state, se.SourceDescriptions, nil)
 		if v == nil {
-			return "", fmt.Sprintf("receive on channel %q: correlationId %q resolved to no value, so there is no id to match — refusing to fall back to an unfiltered receive", channel, corrExpr)
+			return "", fmt.Sprintf("receive on channel %q: correlationId %q resolved to no value, so there is no id to match - refusing to fall back to an unfiltered receive", channel, corrExpr)
 		}
 		return fmt.Sprintf("%v", v), ""
 	}
 
 	return corrExpr, ""
+}
+
+// resolveCorrelation pairs the id a step is waiting for with the places the AsyncAPI document says
+// that id lives, producing the whole instruction the adapter needs to pick a message.
+//
+// A declared location turns matching from a guess into a lookup. Without one the matcher has to search
+// the entire message — metadata, headers, every scalar in the payload, and finally the raw bytes as a
+// substring — which can match a message that merely MENTIONS the id: waiting for "42" against a body
+// reading {"orderId":"99","note":"see ticket 42"} succeeds, and the workflow proceeds on the wrong
+// message while reporting success. That is exactly what the AsyncAPI Correlation ID Object exists to
+// prevent, so when the document declares one it is used exclusively, and when it does not the receive
+// says so rather than leaving the imprecision invisible (the editor reports the same thing).
+func (se *StepExecutor) resolveCorrelation(correlationID string, info *AsyncInfo, stepID, channel string) Correlation {
+	if correlationID == "" {
+		return Correlation{} // unfiltered; resolveCorrelationID has already warned
+	}
+
+	locations := info.DeclaredCorrelationLocations()
+	if len(locations) == 0 {
+		log.Printf("Warning: step %s: the AsyncAPI document declares no correlationId location for channel %q, so the whole message is searched for %q - a message that merely contains that value elsewhere can match; declare 'correlationId.location' on the channel's message to match precisely",
+			stepID, channel, correlationID)
+		return Correlation{ID: correlationID}
+	}
+
+	return Correlation{
+		ID:        correlationID,
+		Locations: locations,
+		// Only needed for a `$message.payload#/…` location on a bytes-only message (a real broker).
+		// The transport carries no content type there, so the document's declaration is what decides
+		// the format — the same chain the decode below uses, resolved independently because matching
+		// happens before a message has been chosen.
+		Decode: func(raw []byte) (interface{}, error) {
+			serializer, err := se.serializerRegistry().For(info.DeclaredContentType())
+			if err != nil {
+				return nil, err
+			}
+			return serializer.Deserialize(raw)
+		},
+	}
 }
 
 // serializerRegistry returns the executor's serializer registry, defaulting to the standard set if a
@@ -463,7 +608,7 @@ var defaultSerializers = sync.OnceValue(NewDefaultSerializerRegistry)
 func previewBytes(raw []byte) string {
 	const max = 120
 	if len(raw) > max {
-		return fmt.Sprintf("%q…", raw[:max])
+		return fmt.Sprintf("%q...", raw[:max])
 	}
 	return fmt.Sprintf("%q", raw)
 }

@@ -1,0 +1,52 @@
+asyncapi: 3.0.0
+info:
+  title: Sensor Readings (public MQTT broker)
+  version: 1.0.0
+# The `servers` section is what tells the runner WHICH transport to use (Phase 11):
+# protocol mqtt + host -> the MQTT adapter connects to tcp://broker.hivemq.com:1883.
+servers:
+  hivemq:
+    host: broker.hivemq.com
+    protocol: mqtt
+channels:
+  readings:
+    # the MQTT topic. This is a PUBLIC broker: anyone may publish here — the examples use a
+    # correlation token so a receive matches OUR message and not a stranger's.
+    address: arazzo/phase11/readings
+    messages:
+      reading:
+        contentType: application/json
+        payload:
+          type: object
+          properties:
+            token: { type: string }
+            celsius: { type: number }
+  # A deliberately-unused topic (unique address) so a receive on it reliably TIMES OUT — nothing is
+  # ever published here. Used by the timeout scenario.
+  quiet:
+    address: arazzo/phase11/quiet-8f2a1c
+    messages:
+      none:
+        contentType: application/json
+        payload:
+          type: object
+  # A text/plain channel: same MQTT transport, different wire format — the Phase-10 serializer layer
+  # decides bytes<->value from this declared contentType (transports carry no format label).
+  alerts:
+    address: arazzo/phase11/alerts
+    messages:
+      alert:
+        contentType: text/plain
+        payload:
+          type: string
+operations:
+  # send + receive operations on the readings channel — the operationId path into the async runtime
+  # (direction comes from the operation's `action`, not the step).
+  publishReading:
+    action: send
+    channel:
+      $ref: '#/channels/readings'
+  consumeReading:
+    action: receive
+    channel:
+      $ref: '#/channels/readings'

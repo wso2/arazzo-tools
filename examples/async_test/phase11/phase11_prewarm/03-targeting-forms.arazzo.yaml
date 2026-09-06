@@ -1,0 +1,77 @@
+# Phase 11 (pre-subscription) — Scenario 3: EVERY TARGETING FORM IS RESOLVED, AND DE-DUPLICATED.
+#
+# A receive step names its channel in one of three ways, and pre-subscription has to follow all of
+# them — a channel reached by `operationId` is exactly as easy to miss as one named directly, and the
+# spec-preferred forms are the ones an author is most likely to use:
+#
+#   channelPath:   bus#/channels/orders
+#   operationId:   onOrder                  -> operation -> channel $ref -> orders
+#   operationPath: bus#/operations/onOrder
+#
+# All three land on the SAME channel (`orders/new`), so it must be subscribed to once, not three
+# times. Note the `operationId`/`operationPath` steps declare no `action`: the direction comes from the
+# operation's own `action: receive`, which pre-subscription reads the same way the executor does.
+#
+# EXPECTED: run **everyForm** → completes with a = "1", b = "2", c = "3".
+#
+# In the run log, ONE channel is listed despite four steps referring to it:
+#
+#   Listening on 1 channel(s) before the first step: "orders/new"
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 11 - pre-subscription across every targeting form"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: bus
+    url: ./bus.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: everyForm
+    steps:
+      - stepId: emitAll
+        operationId: publishOrder
+        requestBody:
+          payload:
+            orderId: "1"
+
+      - stepId: emitTwo
+        channelPath: bus#/channels/orders
+        action: send
+        requestBody:
+          payload:
+            orderId: "2"
+
+      - stepId: emitThree
+        channelPath: bus#/channels/orders
+        action: send
+        requestBody:
+          payload:
+            orderId: "3"
+
+      - stepId: byChannelPath
+        channelPath: bus#/channels/orders
+        action: receive
+        timeout: 2000
+        outputs:
+          a: $message.payload.orderId
+
+      # Direction comes from the operation, not the step.
+      - stepId: byOperationId
+        operationId: onOrder
+        timeout: 2000
+        outputs:
+          b: $message.payload.orderId
+
+      - stepId: byOperationPath
+        operationPath: bus#/operations/onOrder
+        timeout: 2000
+        outputs:
+          c: $message.payload.orderId
+    outputs:
+      a: $steps.byChannelPath.outputs.a
+      b: $steps.byOperationId.outputs.b
+      c: $steps.byOperationPath.outputs.c

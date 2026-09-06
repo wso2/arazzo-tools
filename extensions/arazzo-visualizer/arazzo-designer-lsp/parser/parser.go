@@ -57,7 +57,26 @@ func (p *Parser) extractLineNumbers(content string) map[string]int {
 	// Pattern to match stepId
 	stepPattern := regexp.MustCompile(`^\s*-?\s*stepId:\s*["\']?([^"'\s]+)["\']?`)
 
+	// A source description is identified by its `name`, but `name:` also appears on parameters, so it
+	// is only matched while inside the top-level `sourceDescriptions:` block.
+	sourceNamePattern := regexp.MustCompile(`^\s*-?\s*name:\s*["\']?([^"'\s]+)["\']?`)
+	topLevelKeyPattern := regexp.MustCompile(`^[A-Za-z_$]`)
+	inSourceDescriptions := false
+
 	for i, line := range lines {
+		// The sourceDescriptions block starts at a top-level key and ends at the next one.
+		if strings.HasPrefix(line, "sourceDescriptions:") {
+			inSourceDescriptions = true
+			continue
+		}
+		if inSourceDescriptions {
+			if topLevelKeyPattern.MatchString(line) {
+				inSourceDescriptions = false
+			} else if matches := sourceNamePattern.FindStringSubmatch(line); matches != nil {
+				lineMap["source:"+matches[1]] = i
+			}
+		}
+
 		if matches := workflowPattern.FindStringSubmatch(line); matches != nil {
 			workflowID := matches[1]
 			lineMap["workflow:"+workflowID] = i
@@ -73,6 +92,13 @@ func (p *Parser) extractLineNumbers(content string) map[string]int {
 
 // populateLineNumbers adds line numbers to workflow and step structures
 func (p *Parser) populateLineNumbers(doc *ArazzoDocument, content string) {
+	for i := range doc.SourceDescriptions {
+		sd := &doc.SourceDescriptions[i]
+		if lineNum, ok := doc.LineMap["source:"+sd.Name]; ok {
+			sd.LineNumber = lineNum
+		}
+	}
+
 	for i := range doc.Workflows {
 		workflow := &doc.Workflows[i]
 		key := "workflow:" + workflow.WorkflowID

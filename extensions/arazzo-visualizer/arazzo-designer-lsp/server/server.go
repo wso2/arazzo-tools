@@ -346,16 +346,22 @@ func (s *Server) provideDiagnostics(ctx context.Context, uri protocol.DocumentUR
 	utils.LogInfo("Generating diagnostics for: %s", uri)
 
 	// Give the validator the facts it cannot read from the document text — the direction an
-	// `operationId`/`operationPath` step targets, and the content type declared for its channel — both
-	// of which live in the AsyncAPI source. Passed per call and closed over THIS document's
-	// uri/content, so concurrent diagnostics for different documents can never resolve against each
-	// other's sources.
+	// `operationId`/`operationPath` step targets, the content type declared for its channel, and where
+	// that channel says its correlation id lives — all of which live in the AsyncAPI source. Passed per
+	// call and closed over THIS document's uri/content, so concurrent diagnostics for different
+	// documents can never resolve against each other's sources.
 	resolvers := diagnostics.StepResolvers{
 		Action: func(step *parser.Step) (string, bool) {
 			return s.resolveStepAsyncAction(uri, content, step)
 		},
 		ContentType: func(step *parser.Step) ([]string, bool) {
 			return s.resolveStepMessageContentType(uri, content, step)
+		},
+		CorrelationLocation: func(step *parser.Step) ([]string, string, bool) {
+			return s.resolveStepCorrelationLocation(uri, content, step)
+		},
+		SourceDeclaresServers: func(sd *parser.SourceDescription) (bool, bool) {
+			return s.resolveSourceDeclaresServers(uri, content, sd)
 		},
 	}
 

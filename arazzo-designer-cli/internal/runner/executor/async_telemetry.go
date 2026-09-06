@@ -45,7 +45,7 @@ func (se *StepExecutor) startMessagingSpan(traceID, parentSpanID, operation, cha
 		traceID:  traceID,
 		parentID: parentSpanID,
 		spanID:   telemetry.GenerateSpanID(),
-		// Reads like the HTTP span's "POST https://…" in the logs.
+		// Reads like the HTTP span's "POST https://..." in the logs.
 		name:  upperOperation(operation) + " " + channel,
 		start: time.Now(),
 		attrs: attrs,

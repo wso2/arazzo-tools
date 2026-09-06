@@ -1,0 +1,39 @@
+# Phase 11 — Scenario 8: WebSocket RECEIVE TIMEOUT (fails on purpose). The step connects to the echo
+# server and waits for a message carrying its correlation token. Nothing is ever sent, so the only
+# frame the server volunteers — its greeting banner — does NOT match the token and is skipped; after
+# `timeout` the step fails. Proves the timeout path works against a real socket.
+#
+# NOTE: the token comes from an input so you can vary it; a bare literal would filter just as well.
+# What matters is that SOME correlationId is set — drop it entirely and the receive becomes unfiltered,
+# so the greeting banner would be consumed and this step would pass instead of timing out.
+#
+# EXPECTED: run **wsTimeout** with input {"token":"no-echo-7b21e"} → `hear` waits ~3s then fails:
+#   receive on channel "/" timed out after 3s: no message matching correlationId "no-echo-7b21e" arrived
+# (needs internet access to echo.websocket.org:443)
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 11 - WebSocket receive timeout"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: echoServer
+    url: ./echo.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: wsTimeout
+    inputs:
+      type: object
+      properties:
+        token:
+          type: string
+    steps:
+      - stepId: hear
+        channelPath: echoServer#/channels/mirror
+        action: receive
+        correlationId: $inputs.token        # nothing is sent with this token -> greeting skipped -> times out
+        timeout: 3000
+        successCriteria:
+          - condition: '$message.payload.token == $inputs.token'

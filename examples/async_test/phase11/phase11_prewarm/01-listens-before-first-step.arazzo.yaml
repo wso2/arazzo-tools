@@ -1,0 +1,66 @@
+# Phase 11 (pre-subscription) — Scenario 1: LISTENING STARTS BEFORE STEP 1.
+#
+# Subscription used to be lazy: a channel was subscribed to inside the first Send or Receive that
+# touched it. That left a window — anything a peer published to a channel between the run starting and
+# the step that reads it being reached was gone, because a broker does not replay what arrived while
+# nobody was listening.
+#
+# Now the runner walks every step first and subscribes to each channel a step will RECEIVE on.
+#
+# EXPECTED: run **twoChannels** → completes with reply = "ack".
+#
+# The interesting part is the ORDER of the run log. Before any step output, one line reports what is
+# being listened to:
+#
+#   Listening on 2 channel(s) before the first step: "orders/new", "orders/replies"
+#   ...
+#   === Executing step: emit ===
+#
+# Both channels appear even though `orders/replies` is not touched until the last step — that is the
+# whole point. `orders/new` is listed because `await` receives on it, not because `emit` sends to it.
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 11 - channels are listened to before the first step"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: bus
+    url: ./bus.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: twoChannels
+    steps:
+      - stepId: emit
+        channelPath: bus#/channels/orders
+        action: send
+        requestBody:
+          payload:
+            orderId: "A-1"
+
+      - stepId: await
+        channelPath: bus#/channels/orders
+        action: receive
+        timeout: 2000
+        outputs:
+          seen: $message.payload.orderId
+
+      # Reached only at the end — but subscribed to from the very beginning.
+      - stepId: reply
+        channelPath: bus#/channels/replies
+        action: send
+        requestBody:
+          payload:
+            status: "ack"
+
+      - stepId: readReply
+        channelPath: bus#/channels/replies
+        action: receive
+        timeout: 2000
+        outputs:
+          reply: $message.payload.status
+    outputs:
+      seen: $steps.await.outputs.seen
+      reply: $steps.readReply.outputs.reply

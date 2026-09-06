@@ -1,0 +1,102 @@
+asyncapi: 3.0.0
+info:
+  title: Orders (correlation id locations)
+  version: 1.0.0
+
+# Three channels that differ ONLY in whether — and how — they declare where a correlation id lives.
+# Everything else about them is identical, so the examples isolate exactly that one variable.
+channels:
+  # DECLARES a location. A receive reads the id from the header named `correlationId` and nowhere
+  # else, so a message merely carrying that value somewhere else cannot match.
+  located:
+    address: orders/located
+    messages:
+      order:
+        contentType: application/json
+        correlationId:
+          location: $message.header#/correlationId
+        payload:
+          type: object
+
+  # DECLARES NOTHING. A receive has to search the whole message — every header, every scalar in the
+  # payload, and (against a real broker, where only bytes arrive) the raw body as a substring.
+  unlocated:
+    address: orders/unlocated
+    messages:
+      order:
+        contentType: application/json
+        payload:
+          type: object
+
+  # The idiomatic real-world shape: the MESSAGE is a $ref into components, and the Correlation ID
+  # Object it points at is ITSELF a $ref. Both are followed, and this one locates the id in the
+  # PAYLOAD rather than a header.
+  audits:
+    address: orders/audits
+    messages:
+      audit:
+        $ref: '#/components/messages/audit'
+
+  # TWO message kinds, each keeping its id somewhere different. Every declared location is checked,
+  # so whichever kind arrives is matched — picking just one would miss the other outright.
+  mixed:
+    address: orders/mixed
+    messages:
+      alpha:
+        contentType: application/json
+        correlationId:
+          location: $message.header#/traceId
+        payload:
+          type: object
+      beta:
+        contentType: application/json
+        correlationId:
+          location: $message.payload#/meta/id
+        payload:
+          type: object
+
+  # Declares a location the runtime does not support: only `$message.header#/…` and
+  # `$message.payload#/…` are recognised. An unrecognised root is a clean MISS, never a match against
+  # some other part of the message.
+  mistyped:
+    address: orders/mistyped
+    messages:
+      order:
+        contentType: application/json
+        correlationId:
+          location: $message.metadata#/id
+        payload:
+          type: object
+
+  # Declares a PAYLOAD location, so headers are not consulted at all — even one named `correlationId`.
+  payloadOnly:
+    address: orders/payload-only
+    messages:
+      order:
+        contentType: application/json
+        correlationId:
+          location: $message.payload#/orderId
+        payload:
+          type: object
+
+operations:
+  onLocated:
+    action: receive
+    channel:
+      $ref: '#/channels/located'
+  publishLocated:
+    action: send
+    channel:
+      $ref: '#/channels/located'
+
+components:
+  messages:
+    audit:
+      contentType: application/json
+      correlationId:
+        $ref: '#/components/correlationIds/byAuditId'
+      payload:
+        type: object
+  correlationIds:
+    byAuditId:
+      location: $message.payload#/auditId

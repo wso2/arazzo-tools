@@ -1,0 +1,63 @@
+# Phase 11 (correlation) — Scenario 6: A LOCATION THE RUNTIME DOES NOT UNDERSTAND (fails on purpose).
+#
+# The `mistyped` channel declares:
+#
+#   correlationId.location: $message.metadata#/id
+#
+# Only `$message.header#/…` and `$message.payload#/…` are recognised — those are the two parts of a
+# message AsyncAPI's runtime expressions address. `$message.metadata#/…` is neither, so it cannot be
+# read.
+#
+# The important part is what happens next: an unreadable location is a clean MISS. It does NOT degrade
+# into "well, search the whole message instead" — that would quietly reintroduce the imprecision the
+# declaration exists to remove, and would make a typo'd location behave like no location at all while
+# looking correct in the document. Better to match nothing and time out visibly.
+#
+# The message published here carries the id in a header AND in the payload, so a whole-message scan
+# would certainly have matched it. It still times out.
+#
+# EXPECTED: run **badLocation** with input {"want":"42"} → `await` waits ~2s then FAILS:
+#   receive on channel "orders/mistyped" timed out after 2s: no message matching correlationId "42" arrived
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 11 - unsupported correlation location is a clean miss"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: orderBus
+    url: ./orders.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: badLocation
+    inputs:
+      type: object
+      properties:
+        want:
+          type: string
+    steps:
+      # The id is in BOTH obvious places — and still will not be found, because the document points at
+      # a third place that cannot be read.
+      - stepId: emit
+        channelPath: orderBus#/channels/mistyped
+        action: send
+        parameters:
+          - name: correlationId
+            in: header
+            value: $inputs.want
+        requestBody:
+          payload:
+            orderId: "42"
+            id: $inputs.want
+
+      - stepId: await
+        channelPath: orderBus#/channels/mistyped
+        action: receive
+        correlationId: $inputs.want
+        timeout: 2000
+        outputs:
+          matched: $message.payload.orderId
+    outputs:
+      matched: $steps.await.outputs.matched

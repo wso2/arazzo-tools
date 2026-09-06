@@ -1,0 +1,81 @@
+# Phase 11 (correlation) — Scenario 2: THE DOCUMENT SAYS NOTHING, AND THE WRONG MESSAGE WINS.
+#
+# Identical to 01 in every respect except the channel: `unlocated` declares no
+# `correlationId.location`. With nowhere specific to look, the receive searches the WHOLE message —
+# every header, then every scalar in the payload (and, against a real broker where only bytes arrive,
+# the raw body as a substring, which is wider still).
+#
+# So the decoy matches on `payload.customerId`, which merely happens to hold the wanted value, and the
+# workflow proceeds on the wrong order while reporting SUCCESS. That silent wrong answer is what
+# declaring a location prevents.
+#
+# EXPECTED: run **impreciseMatch** with input {"want":"42"} → completes with
+#   matched = "99"        <-- THE DECOY. Compare with 01, which returns "42".
+#
+# The run log says so up front:
+#   Warning: step await: the AsyncAPI document declares no correlationId location for channel
+#   "orders/unlocated", so the whole message is searched for "42" - a message that merely contains
+#   that value elsewhere can match; declare 'correlationId.location' on the channel's message to
+#   match precisely
+#
+# In the EDITOR the same step carries a blue (information) marker saying the same thing and naming
+# the source description to fix — `orderBus`.
+#
+# NOTE: this example "passes" (the workflow completes) precisely BECAUSE the bug is silent. The
+# successCriteria below asserts the wrong-but-actual value, so the example fails loudly if this ever
+# starts behaving differently.
+
+arazzo: 1.1.0
+
+info:
+  title: "Phase 11 - no declared location, so the whole message is searched"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: orderBus
+    url: ./orders.asyncapi.yaml
+    type: asyncapi
+
+workflows:
+  - workflowId: impreciseMatch
+    inputs:
+      type: object
+      properties:
+        want:
+          type: string
+    steps:
+      - stepId: emitDecoy
+        channelPath: orderBus#/channels/unlocated
+        action: send
+        parameters:
+          - name: correlationId
+            in: header
+            value: "OTHER-1"
+        requestBody:
+          payload:
+            orderId: "99"
+            customerId: $inputs.want
+
+      - stepId: emitReal
+        channelPath: orderBus#/channels/unlocated
+        action: send
+        parameters:
+          - name: correlationId
+            in: header
+            value: $inputs.want
+        requestBody:
+          payload:
+            orderId: "42"
+
+      - stepId: await
+        channelPath: orderBus#/channels/unlocated
+        action: receive
+        correlationId: $inputs.want
+        timeout: 2000
+        successCriteria:
+          # Deliberately asserting the WRONG order: that is what this channel actually returns.
+          - condition: '$message.payload.orderId == "99"'
+        outputs:
+          matched: $message.payload.orderId
+    outputs:
+      matched: $steps.await.outputs.matched
