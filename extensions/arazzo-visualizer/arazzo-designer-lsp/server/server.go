@@ -360,6 +360,9 @@ func (s *Server) provideDiagnostics(ctx context.Context, uri protocol.DocumentUR
 		CorrelationLocation: func(step *parser.Step) ([]string, string, bool) {
 			return s.resolveStepCorrelationLocation(uri, content, step)
 		},
+		SourceDeclaresServers: func(sd *parser.SourceDescription) (bool, bool) {
+			return s.resolveSourceDeclaresServers(uri, content, sd)
+		},
 	}
 
 	// First, explicitly clear old diagnostics by publishing an empty array

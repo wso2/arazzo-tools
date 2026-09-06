@@ -372,6 +372,34 @@ func (s *Server) resolveStepCorrelationLocation(uri protocol.DocumentURI, conten
 	return ch.CorrelationLocations, stepSourceName(step, ch.FileName), true
 }
 
+// resolveSourceDeclaresServers reports whether the AsyncAPI document behind a source description
+// declares a `servers` section — the section that selects a transport. Without one, every channel in
+// that file runs on the in-memory adapter and no broker is contacted.
+//
+// Indexes through ensureSourcesIndexed for the same reason the other resolvers do: without it this
+// races the background indexer and reports "not resolved" on a freshly opened document.
+func (s *Server) resolveSourceDeclaresServers(uri protocol.DocumentURI, content string, sd *parser.SourceDescription) (declaresServers bool, resolved bool) {
+	if sd == nil || sd.Name == "" {
+		return false, false
+	}
+	for _, src := range s.ensureSourcesIndexed(uri, content) {
+		if src.name != sd.Name {
+			continue
+		}
+		file, ok := s.operationIndex.File(src.fileURI)
+		if !ok || file == nil {
+			return false, false // declared but unreadable: say nothing rather than guess
+		}
+		// Only an AsyncAPI document HAS servers; an OpenAPI file trivially declares none and must not
+		// be reported as running in-memory.
+		if file.SpecType != "asyncapi" {
+			return false, false
+		}
+		return file.DeclaresServers, true
+	}
+	return false, false
+}
+
 // stepSourceName names the source description a step targets, so advice can point at the document the
 // author has to edit. Prefers the name they actually wrote (both spellings of a source reference are
 // accepted, as everywhere else), falling back to the resolved file name — a bare `operationId` names no

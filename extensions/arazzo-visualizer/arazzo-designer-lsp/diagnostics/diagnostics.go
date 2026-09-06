@@ -33,9 +33,10 @@ func NewDiagnosticsProvider() *DiagnosticsProvider {
 // These are PER-CALL values rather than provider state: diagnostics for different documents must never
 // share a resolver, or one document's validation could resolve against another's sources.
 type StepResolvers struct {
-	Action              func(step *parser.Step) (action string, ok bool)
-	ContentType         func(step *parser.Step) (declared []string, resolved bool)
-	CorrelationLocation func(step *parser.Step) (locations []string, source string, resolved bool)
+	Action                func(step *parser.Step) (action string, ok bool)
+	ContentType           func(step *parser.Step) (declared []string, resolved bool)
+	CorrelationLocation   func(step *parser.Step) (locations []string, source string, resolved bool)
+	SourceDeclaresServers func(sd *parser.SourceDescription) (declaresServers bool, resolved bool)
 }
 
 // ProvideDiagnostics generates diagnostics for the given content, using resolvers for the facts that
@@ -71,7 +72,8 @@ func (d *DiagnosticsProvider) ProvideDiagnostics(content string, resolvers StepR
 	v := validator.NewValidator().
 		WithStepActionResolver(resolvers.Action).
 		WithStepContentTypeResolver(resolvers.ContentType).
-		WithStepCorrelationLocationResolver(resolvers.CorrelationLocation)
+		WithStepCorrelationLocationResolver(resolvers.CorrelationLocation).
+		WithSourceAdapterResolver(resolvers.SourceDeclaresServers)
 	validationErrors := v.Validate(doc)
 	// Warn about unknown/misspelled fields the struct-based parser silently ignores
 	validationErrors = append(validationErrors, v.ValidateUnknownFields(content)...)
