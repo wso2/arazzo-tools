@@ -39,9 +39,9 @@ func (se *StepExecutor) adapterFor(info *AsyncInfo) (Adapter, error) {
 		adapter = NewMQTTAdapter(protocol, host)
 	case "kafka", "kafka-secure":
 		// TODO(phase-future): Kafka adapter + real Avro/Protobuf serializers (see file comment).
-		return nil, fmt.Errorf("the %q protocol is not yet supported: a Kafka adapter (with Avro/Protobuf schema support) is a planned future phase — supported protocols: ws, wss, mqtt, mqtts (and in-memory when no servers are declared)", protocol)
+		return nil, fmt.Errorf("the %q protocol is not yet supported: a Kafka adapter (with Avro/Protobuf schema support) is a planned future phase - supported protocols: ws, wss, mqtt, mqtts (and in-memory when no servers are declared)", protocol)
 	default:
-		return nil, fmt.Errorf("unsupported AsyncAPI server protocol %q — supported: ws, wss, mqtt, mqtts (and in-memory when no servers are declared)", protocol)
+		return nil, fmt.Errorf("unsupported AsyncAPI server protocol %q - supported: ws, wss, mqtt, mqtts (and in-memory when no servers are declared)", protocol)
 	}
 
 	if se.asyncAdapters == nil {

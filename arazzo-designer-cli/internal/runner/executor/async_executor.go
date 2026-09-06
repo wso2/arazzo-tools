@@ -142,7 +142,7 @@ func (se *StepExecutor) PrewarmAsyncChannels(steps []interface{}) {
 		warmed[key] = true
 
 		if err := adapter.Subscribe(channel); err != nil {
-			log.Printf("Warning: could not subscribe to channel %q via the %s adapter before the workflow started (needed by step %s): %v — the step will try again when it runs, and messages published in the meantime are lost",
+			log.Printf("Warning: could not subscribe to channel %q via the %s adapter before the workflow started (needed by step %s): %v - the step will try again when it runs, and messages published in the meantime are lost",
 				channel, adapter.Name(), stepID, err)
 			continue
 		}
@@ -184,7 +184,7 @@ func resolveAsyncAction(step map[string]interface{}, info *AsyncInfo) (string, e
 		return opAction, nil
 	}
 	if stepAction == "" { //if we reach here that means that a channelPath is given. if there is no action then there is an error
-		return "", fmt.Errorf("a 'channelPath' step requires 'action' (send or receive) — the message-flow direction is otherwise undefined")
+		return "", fmt.Errorf("a 'channelPath' step requires 'action' (send or receive) - the message-flow direction is otherwise undefined")
 	}
 	if stepAction != "send" && stepAction != "receive" {
 		return "", fmt.Errorf("invalid action %q (must be 'send' or 'receive')", stepAction)
@@ -327,7 +327,7 @@ func resolveSendContentType(stepContentType string, info *AsyncInfo, stepID, cha
 		// answer. Only worth saying when the step declared nothing itself: a step that did has already
 		// settled it, and telling it to "set contentType" would be advice it has followed.
 		if len(declared) > 1 {
-			log.Printf("Warning: step %s: channel %q declares more than one contentType (%s); using %q — set 'contentType' on the step's requestBody to choose explicitly",
+			log.Printf("Warning: step %s: channel %q declares more than one contentType (%s); using %q - set 'contentType' on the step's requestBody to choose explicitly",
 				stepID, channel, strings.Join(declared, ", "), declared[0])
 		}
 		return declared[0]
@@ -414,7 +414,7 @@ func (se *StepExecutor) executeReceive(step map[string]interface{}, adapter Adap
 		// send-side warning in resolveSendContentType.
 		declared := info.DeclaredContentTypes()
 		if len(declared) > 1 {
-			log.Printf("Warning: step %s: the message carried no contentType and channel %q declares more than one (%s); decoding as %q — declare one format per channel so the decoder is unambiguous",
+			log.Printf("Warning: step %s: the message carried no contentType and channel %q declares more than one (%s); decoding as %q - declare one format per channel so the decoder is unambiguous",
 				stepID, channel, strings.Join(declared, ", "), declared[0])
 		}
 		if len(declared) > 0 {
@@ -520,7 +520,7 @@ func (se *StepExecutor) resolveCorrelationID(step map[string]interface{}, state 
 	}
 
 	if corrExpr == "" {
-		log.Printf("Warning: step %s: receive on channel %q declares no correlationId — it will consume the next message on the channel without filtering, which may be a message this workflow did not expect", stepID, channel)
+		log.Printf("Warning: step %s: receive on channel %q declares no correlationId - it will consume the next message on the channel without filtering, which may be a message this workflow did not expect", stepID, channel)
 		return "", ""
 	}
 
@@ -528,7 +528,7 @@ func (se *StepExecutor) resolveCorrelationID(step map[string]interface{}, state 
 	if strings.HasPrefix(corrExpr, "$") || strings.Contains(corrExpr, "{$") {
 		v := evaluator.EvaluateExpression(corrExpr, state, se.SourceDescriptions, nil)
 		if v == nil {
-			return "", fmt.Sprintf("receive on channel %q: correlationId %q resolved to no value, so there is no id to match — refusing to fall back to an unfiltered receive", channel, corrExpr)
+			return "", fmt.Sprintf("receive on channel %q: correlationId %q resolved to no value, so there is no id to match - refusing to fall back to an unfiltered receive", channel, corrExpr)
 		}
 		return fmt.Sprintf("%v", v), ""
 	}
@@ -553,7 +553,7 @@ func (se *StepExecutor) resolveCorrelation(correlationID string, info *AsyncInfo
 
 	locations := info.DeclaredCorrelationLocations()
 	if len(locations) == 0 {
-		log.Printf("Warning: step %s: the AsyncAPI document declares no correlationId location for channel %q, so the whole message is searched for %q — a message that merely contains that value elsewhere can match; declare 'correlationId.location' on the channel's message to match precisely",
+		log.Printf("Warning: step %s: the AsyncAPI document declares no correlationId location for channel %q, so the whole message is searched for %q - a message that merely contains that value elsewhere can match; declare 'correlationId.location' on the channel's message to match precisely",
 			stepID, channel, correlationID)
 		return Correlation{ID: correlationID}
 	}
@@ -597,7 +597,7 @@ var defaultSerializers = sync.OnceValue(NewDefaultSerializerRegistry)
 func previewBytes(raw []byte) string {
 	const max = 120
 	if len(raw) > max {
-		return fmt.Sprintf("%q…", raw[:max])
+		return fmt.Sprintf("%q...", raw[:max])
 	}
 	return fmt.Sprintf("%q", raw)
 }

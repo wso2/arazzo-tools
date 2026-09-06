@@ -35,7 +35,7 @@ type wsConn struct {
 	writeMu sync.Mutex
 }
 
-// NewWSAdapter creates a WebSocket adapter for one server. host may be "ws://…", "wss://…", or a
+// NewWSAdapter creates a WebSocket adapter for one server. host may be "ws://...", "wss://...", or a
 // bare "host[:port]" (defaulting to ws://).
 func NewWSAdapter(host string) *WSAdapter {
 	base := strings.TrimRight(strings.TrimSpace(host), "/")
