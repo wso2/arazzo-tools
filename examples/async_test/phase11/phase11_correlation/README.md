@@ -57,35 +57,35 @@ reintroduce exactly the imprecision the declaration removes. The failure looks l
 though a message is sitting right there.
 
 ```bash
-test_runner examples/async_test/phase11_correlation/01-declared-location.arazzo.yaml preciseMatch '{"want":"42"}'
+test_runner examples/async_test/phase11/phase11_correlation/01-declared-location.arazzo.yaml preciseMatch '{"want":"42"}'
 ```
 
 ```bash
-test_runner examples/async_test/phase11_correlation/02-no-location.arazzo.yaml impreciseMatch '{"want":"42"}'
+test_runner examples/async_test/phase11/phase11_correlation/02-no-location.arazzo.yaml impreciseMatch '{"want":"42"}'
 ```
 
 ```bash
-test_runner examples/async_test/phase11_correlation/03-refd-location.arazzo.yaml auditTrail '{"want":"AUD-7"}'
+test_runner examples/async_test/phase11/phase11_correlation/03-refd-location.arazzo.yaml auditTrail '{"want":"AUD-7"}'
 ```
 
 ```bash
-test_runner examples/async_test/phase11_correlation/04-multiple-locations.arazzo.yaml bothKinds '{"a":"TRACE-1","b":"META-2"}'
+test_runner examples/async_test/phase11/phase11_correlation/04-multiple-locations.arazzo.yaml bothKinds '{"a":"TRACE-1","b":"META-2"}'
 ```
 
 ```bash
-test_runner examples/async_test/phase11_correlation/05-published-to-wrong-place.arazzo.yaml wrongPlace '{"want":"42"}'
+test_runner examples/async_test/phase11/phase11_correlation/05-published-to-wrong-place.arazzo.yaml wrongPlace '{"want":"42"}'
 ```
 
 ```bash
-test_runner examples/async_test/phase11_correlation/06-unsupported-location.arazzo.yaml badLocation '{"want":"42"}'
+test_runner examples/async_test/phase11/phase11_correlation/06-unsupported-location.arazzo.yaml badLocation '{"want":"42"}'
 ```
 
 ```bash
-test_runner examples/async_test/phase11_correlation/07-targeting-forms.arazzo.yaml everyForm '{"a":"C-1","b":"C-2","c":"C-3"}'
+test_runner examples/async_test/phase11/phase11_correlation/07-targeting-forms.arazzo.yaml everyForm '{"a":"C-1","b":"C-2","c":"C-3"}'
 ```
 
 ```bash
-test_runner examples/async_test/phase11_correlation/08-payload-only-ignores-header.arazzo.yaml payloadWins '{"want":"42"}'
+test_runner examples/async_test/phase11/phase11_correlation/08-payload-only-ignores-header.arazzo.yaml payloadWins '{"want":"42"}'
 ```
 
 Both intentional failures report the same shape, naming the id that found nothing:
