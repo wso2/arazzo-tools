@@ -39,16 +39,16 @@ workflows are meant to end in error — that error **is** the expected outcome.
 Via the CLI test runner (`test_runner <file> <workflowId> [input-json]`):
 
 ```
-test_runner examples/async_test/phase11/01-mqtt-roundtrip.arazzo.yaml mqttRoundTrip '{"token":"demo-42"}'
-test_runner examples/async_test/phase11/02-ws-echo.arazzo.yaml wsEcho '{"token":"demo-7"}'
-test_runner examples/async_test/phase11/03-kafka-unsupported.arazzo.yaml kafkaFlow          # fails on purpose
-test_runner examples/async_test/phase11/04-mqtt-operationid.arazzo.yaml byOperation '{"token":"op-33"}'
-test_runner examples/async_test/phase11/05-mqtt-timeout.arazzo.yaml mqttTimeout             # fails on purpose
-test_runner examples/async_test/phase11/06-mqtt-text-plain.arazzo.yaml textAlert '{"token":"txt-8"}'
-test_runner examples/async_test/phase11/07-mqtts-tls.arazzo.yaml mqttsRoundTrip '{"token":"tls-5"}'
-test_runner examples/async_test/phase11/08-ws-timeout.arazzo.yaml wsTimeout '{"token":"no-echo-7b21e"}'   # fails on purpose
-test_runner examples/async_test/phase11/09-unknown-protocol.arazzo.yaml amqpFlow            # fails on purpose
-test_runner examples/async_test/phase11/10-inmemory-fallback.arazzo.yaml localFlow
+test_runner examples/async_test/phase11/phase11_common/01-mqtt-roundtrip.arazzo.yaml mqttRoundTrip '{"token":"demo-42"}'
+test_runner examples/async_test/phase11/phase11_common/02-ws-echo.arazzo.yaml wsEcho '{"token":"demo-7"}'
+test_runner examples/async_test/phase11/phase11_common/03-kafka-unsupported.arazzo.yaml kafkaFlow          # fails on purpose
+test_runner examples/async_test/phase11/phase11_common/04-mqtt-operationid.arazzo.yaml byOperation '{"token":"op-33"}'
+test_runner examples/async_test/phase11/phase11_common/05-mqtt-timeout.arazzo.yaml mqttTimeout             # fails on purpose
+test_runner examples/async_test/phase11/phase11_common/06-mqtt-text-plain.arazzo.yaml textAlert '{"token":"txt-8"}'
+test_runner examples/async_test/phase11/phase11_common/07-mqtts-tls.arazzo.yaml mqttsRoundTrip '{"token":"tls-5"}'
+test_runner examples/async_test/phase11/phase11_common/08-ws-timeout.arazzo.yaml wsTimeout '{"token":"no-echo-7b21e"}'   # fails on purpose
+test_runner examples/async_test/phase11/phase11_common/09-unknown-protocol.arazzo.yaml amqpFlow            # fails on purpose
+test_runner examples/async_test/phase11/phase11_common/10-inmemory-fallback.arazzo.yaml localFlow
 ```
 
 Notes:
