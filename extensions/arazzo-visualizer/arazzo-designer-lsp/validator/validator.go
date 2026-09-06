@@ -115,6 +115,14 @@ type Validator struct {
 	// EMPTY slice is the meaningful case: the channel exists and declares no location, so a receive has
 	// to search the whole message and can match the wrong one.
 	resolveStepCorrelationLocation func(step *parser.Step) (locations []string, source string, resolved bool)
+
+	// resolveSourceDeclaresServers reports whether an AsyncAPI source description's document declares a
+	// `servers` section. That section is what picks a transport; without it every channel in the file
+	// runs on the in-memory adapter and no broker is contacted.
+	//
+	// resolved=false means the source could not be read (unresolvable path, not indexed yet) and the
+	// check stays quiet rather than claiming a document declares nothing.
+	resolveSourceDeclaresServers func(sd *parser.SourceDescription) (declaresServers bool, resolved bool)
 }
 
 // NewValidator creates a new Validator
@@ -143,6 +151,13 @@ func (v *Validator) WithStepContentTypeResolver(fn func(step *parser.Step) ([]st
 // document says a step's correlation id lives, through fn. Passing nil restores content-only behaviour.
 func (v *Validator) WithStepCorrelationLocationResolver(fn func(step *parser.Step) ([]string, string, bool)) *Validator {
 	v.resolveStepCorrelationLocation = fn
+	return v
+}
+
+// WithSourceAdapterResolver returns the validator configured to resolve whether an AsyncAPI source
+// declares `servers` through fn. Passing nil restores content-only behaviour.
+func (v *Validator) WithSourceAdapterResolver(fn func(sd *parser.SourceDescription) (bool, bool)) *Validator {
+	v.resolveSourceDeclaresServers = fn
 	return v
 }
 
@@ -185,6 +200,7 @@ func (v *Validator) Validate(doc *parser.ArazzoDocument) []ValidationError {
 
 	// Validate source descriptions
 	errors = append(errors, v.validateSourceDescriptions(doc)...)
+	errors = append(errors, v.validateSourceAdapters(doc)...)
 
 	// Validate workflows
 	errors = append(errors, v.validateWorkflows(doc)...)
@@ -868,6 +884,40 @@ func (v *Validator) validateMessageContentType(step *parser.Step) []ValidationEr
 		}}
 	}
 	return nil
+}
+
+// validateSourceAdapters points out that an AsyncAPI source with no `servers` runs in-memory.
+//
+// Worth saying because of HOW that mode fails: an in-memory send/receive pair ALWAYS succeeds, since
+// the workflow receives the message it just sent. So a document that simply forgot `servers` produces a
+// completely green run that never contacted a broker — a passing workflow that proves nothing.
+//
+// Reported as `information`, not a warning: running in-memory is a supported, deliberate mode for
+// tests and local runs (it is what every Phase 9/10 example uses), so it is a default worth stating,
+// not a mistake. One marker per source rather than per step, so a document full of async steps does
+// not fill with markers saying the same thing.
+func (v *Validator) validateSourceAdapters(doc *parser.ArazzoDocument) []ValidationError {
+	if v.resolveSourceDeclaresServers == nil {
+		return nil
+	}
+	var errors []ValidationError
+	for i := range doc.SourceDescriptions {
+		sd := &doc.SourceDescriptions[i]
+		if sd.Type != "asyncapi" {
+			continue
+		}
+		declaresServers, resolved := v.resolveSourceDeclaresServers(sd)
+		if !resolved || declaresServers {
+			continue
+		}
+		errors = append(errors, ValidationError{
+			Line:     sd.LineNumber,
+			Column:   0,
+			Message:  fmt.Sprintf("Source description '%s': the AsyncAPI document declares no 'servers', so steps targeting it run on the default in-memory adapter — no broker is contacted, and a receive can only ever see messages this workflow itself sent. Declare 'servers' in the AsyncAPI document to run against a real broker.", sd.Name),
+			Severity: "information",
+		})
+	}
+	return errors
 }
 
 // validateCorrelationLocation surfaces HOW a receive step will match its correlation id.
