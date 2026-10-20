@@ -20,6 +20,8 @@ import * as vscode from 'vscode';
 import { COMMANDS } from '../constants';
 import { startMCPServer, initializeMCPServerRunner } from './mcpServerRunner';
 
+// #UNUSED - never called: extension.ts registers this command and the task-end listener itself.
+// Calling it as well would register 'arazzo.startMCPServer' twice and fail extension activation.
 /**
  * Registers the MCP Server CLI command so it can be triggered from the editor title bar play button.
  */

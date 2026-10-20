@@ -21,6 +21,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as yaml from 'js-yaml';
 import { TracerServer } from './tracing';
+import { detectSpecType } from '../util/specDetection';
 import { executeTraceServerTask, stopTraceServerTask } from './tracing/traceServerTask';
 import {
     executeMCPServerTask,
@@ -184,11 +185,11 @@ export async function startMCPServer(context: vscode.ExtensionContext, arazzoFil
 
     // Verify it's an Arazzo file
     if (!arazzoFilePath.includes('.arazzo.') && !arazzoFilePath.includes('-arazzo.')) {
-        // Check file content for arazzo field
+        // Check file content for arazzo field - with the editor's own check, so a file the editor
+        // offers to run (play button) is never refused here.
         try {
             const content = fs.readFileSync(arazzoFilePath, 'utf-8');
-            const firstLines = content.split('\n').slice(0, 10).join('\n');
-            if (!/\barazzo\s*:\s*\d+\.\d+\.\d+/i.test(firstLines)) {
+            if (!detectSpecType(content).isArazzo) {
                 vscode.window.showErrorMessage('The active file does not appear to be an Arazzo file.');
                 return;
             }

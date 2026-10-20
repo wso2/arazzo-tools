@@ -26,11 +26,12 @@ import { StateMachine, openView } from './stateMachine';
 import { extension } from './Context';
 import { activate as activateHistory } from './history';
 import { activateVisualizer } from './visualizer/activate';
-import { activateMCPServer } from './mcp';
+import { activateMCPServer } from './mcp'; // #UNUSED - activateMCPServer is never called
 import { RPCLayer } from './RPCLayer';
 import { VisualizerWebview } from './visualizer/webview';
 import { EVENT_TYPE, MACHINE_VIEW, openInputConfigPanel } from '@wso2/arazzo-designer-core';
 import { startMCPServer, stopMCPServer, disposeMCPServer, isMCPServerRunning, onMCPServerStateChange, getMCPActiveFilePath, initializeMCPServerRunner, getMCPServerPort } from './mcp/mcpServerRunner';
+import { detectSpecType } from './util/specDetection';
 import { RunWorkflowCodeLensProvider } from './mcp/runWorkflowCodeLens';
 import { registerArazzoCopilotTools } from './copilotTools';
 
@@ -854,32 +855,8 @@ function checkDocumentForOpenAPI(document?: vscode.TextDocument) {
 		return;
 	}
 
-	// Content-based detection per Arazzo Spec §4.6.1:
-	// The REQUIRED root field (`arazzo` for an Arazzo Description, `openapi` for an OpenAPI document)
-	// is the first meaningful line of the file. Detect on the TOPMOST non-blank, non-comment line
-	// ONLY — this both (a) allows a comment header of any length before the field (v1.1.0 examples
-	// commonly have one, which the old first-10-lines check missed) and (b) avoids a false positive
-	// from a stray `arazzo:`/`openapi:` appearing deeper in the file (in a description, a comment, or
-	// a source-description name). `---` YAML document markers are skipped. An optional quote around
-	// the version is allowed so `arazzo: "1.1.0"` matches as well as `arazzo: 1.1.0`.
-	//
-	// JSON documents open with a bare `{`, so that line is skipped too and the key itself may be
-	// quoted — otherwise `{ "arazzo": "1.1.0" }` would never be recognised and the arazzo-json
-	// language (and with it the language server) would not attach.
-	const firstMeaningfulLine = document.getText()
-		.split(/\r?\n/)
-		.find(l => {
-			const t = l.trim();
-			return t !== '' && t !== '---' && t !== '{' && !t.startsWith('#');
-		}) || '';
-	// The optional leading `{` covers compact JSON, where the opening brace and the root key share a
-	// line (`{"arazzo":"1.1.0",…}`) and so the brace-only skip above does not apply.
-	const hasOpenAPI = /^\s*\{?\s*"?openapi"?\s*:/i.test(firstMeaningfulLine);
-	const hasArazzo = /^\s*\{?\s*"?arazzo"?\s*:\s*["']?\d+\.\d+\.\d+/i.test(firstMeaningfulLine);
-
 	// Set context variables — detect Arazzo purely by content, not file name
-	const isOpenAPI = hasOpenAPI && !hasArazzo;
-	const isArazzo = hasArazzo;
+	const { isOpenAPI, isArazzo } = detectSpecType(document.getText());
 
 	vscode.commands.executeCommand('setContext', 'isFileOpenAPI', isOpenAPI);
 	vscode.commands.executeCommand('setContext', 'isFileArazzo', isArazzo);

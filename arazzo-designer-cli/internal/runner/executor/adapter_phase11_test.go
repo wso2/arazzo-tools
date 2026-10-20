@@ -159,6 +159,16 @@ type fakeMQTTClient struct {
 	// poisoned mirrors paho: once a Connect has failed, this instance can never connect again.
 	poisoned     bool
 	connectCalls int
+	// failSubscribe makes every Subscribe fail.
+	failSubscribe bool
+}
+
+// dropAndReconnect models a connection drop that paho recovers from by itself: the client is
+// connected again, but a clean-session broker has forgotten every subscription.
+func (c *fakeMQTTClient) dropAndReconnect() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.subs = map[string]mqtt.MessageHandler{}
 }
 
 func newFakeMQTTClient() *fakeMQTTClient {
@@ -186,8 +196,9 @@ func (c *fakeMQTTClient) Connect() mqtt.Token {
 }
 
 var (
-	errFakeConnect  = errors.New("connection refused")
-	errFakePoisoned = errors.New("status can only transition to connecting from disconnected")
+	errFakeConnect   = errors.New("connection refused")
+	errFakePoisoned  = errors.New("status can only transition to connecting from disconnected")
+	errFakeSubscribe = errors.New("not currently connected and ResumeSubs not set")
 )
 
 func (c *fakeMQTTClient) IsConnected() bool {
@@ -199,8 +210,11 @@ func (c *fakeMQTTClient) IsConnected() bool {
 func (c *fakeMQTTClient) Subscribe(topic string, _ byte, cb mqtt.MessageHandler) mqtt.Token {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.subs[topic] = cb
 	c.subscribeCalls++
+	if c.failSubscribe {
+		return &fakeToken{err: errFakeSubscribe}
+	}
+	c.subs[topic] = cb
 	return &fakeToken{}
 }
 
@@ -248,6 +262,65 @@ func TestMQTTAdapter_ReceiveTimeout(t *testing.T) {
 	a, _ := newFakeMQTTAdapter()
 	if _, err := a.Receive("quiet/topic", Correlation{}, 60*time.Millisecond); err != ErrReceiveTimeout {
 		t.Fatalf("expected ErrReceiveTimeout, got %v", err)
+	}
+}
+
+// After paho reconnects on its own, the broker has forgotten the subscriptions; the adapter must make
+// them again, or a receive already waiting on the channel gets nothing and times out with no error.
+func TestMQTTAdapter_ResubscribesAfterReconnect(t *testing.T) {
+	a, fake := newFakeMQTTAdapter()
+	if err := a.Subscribe("orders/new"); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	// A late callback from a client the adapter already replaced must not count as a connect.
+	a.onConnect(newFakeMQTTClient())
+	// paho's callback for the FIRST connect must not subscribe again: a second subscribe makes a
+	// broker redeliver retained messages, which a receive could then consume twice.
+	a.onConnect(fake)
+	if fake.subscribeCalls != 1 {
+		t.Fatalf("first connect: subscribeCalls = %d, want 1", fake.subscribeCalls)
+	}
+
+	// A receive is already waiting when the connection drops.
+	got := make(chan *Message, 1)
+	go func() {
+		msg, _ := a.Receive("orders/new", Correlation{}, 2*time.Second)
+		got <- msg
+	}()
+	fake.dropAndReconnect()
+	a.onConnect(fake) // paho's callback for the reconnect
+
+	if fake.subscribeCalls != 2 {
+		t.Fatalf("after reconnect: subscribeCalls = %d, want 2", fake.subscribeCalls)
+	}
+	fake.Publish("orders/new", 1, false, []byte(`{"orderId":"after-reconnect"}`))
+	if msg := <-got; msg == nil || string(msg.Raw) != `{"orderId":"after-reconnect"}` {
+		t.Fatalf("the waiting receive should get a message published after the reconnect, got %v", msg)
+	}
+}
+
+// A topic that cannot be re-subscribed after a reconnect is forgotten, so the next step on it subscribes
+// again and reports the failure instead of waiting on a subscription that does not exist.
+func TestMQTTAdapter_FailedResubscribeIsRetriedByTheNextStep(t *testing.T) {
+	a, fake := newFakeMQTTAdapter()
+	if err := a.Subscribe("orders/new"); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	a.onConnect(fake)
+
+	fake.dropAndReconnect()
+	fake.failSubscribe = true
+	a.onConnect(fake)
+	if err := a.Subscribe("orders/new"); err == nil {
+		t.Fatal("the next subscribe should retry and report the failure, not assume the topic is still subscribed")
+	}
+
+	fake.failSubscribe = false
+	if err := a.Subscribe("orders/new"); err != nil {
+		t.Fatalf("once the broker accepts it again the subscribe should succeed: %v", err)
+	}
+	if _, ok := fake.subs["orders/new"]; !ok {
+		t.Fatal("orders/new should be subscribed on the broker again")
 	}
 }
 

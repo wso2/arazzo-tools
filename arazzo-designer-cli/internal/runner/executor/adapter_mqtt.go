@@ -8,6 +8,7 @@ package executor
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +36,7 @@ type MQTTAdapter struct {
 	mu         sync.Mutex
 	client     mqttClient
 	subscribed map[string]bool // topics with a live subscription
+	connects   int             // successful connects of the current client; more than one means paho reconnected
 
 	// newClient builds the underlying client on first use; tests replace it with a fake factory.
 	newClient func(brokerURL string) mqttClient
@@ -51,22 +53,53 @@ func NewMQTTAdapter(protocol, host string) *MQTTAdapter {
 	if !strings.Contains(host, ":") {
 		host += ":" + defaultPort
 	}
-	return &MQTTAdapter{
+	a := &MQTTAdapter{
 		brokerURL:  scheme + "://" + host,
 		buffer:     newMessageBuffer(),
 		subscribed: map[string]bool{},
-		newClient:  newPahoClient,
 	}
+	a.newClient = a.newPahoClient
+	return a
 }
 
-// newPahoClient is the production mqttClient factory.
-func newPahoClient(brokerURL string) mqttClient {
+// newPahoClient is the production mqttClient factory. paho reconnects by itself after a dropped
+// connection; onConnect then restores the subscriptions the broker forgot.
+func (a *MQTTAdapter) newPahoClient(brokerURL string) mqttClient {
 	opts := mqtt.NewClientOptions().
 		AddBroker(brokerURL).
 		SetClientID(fmt.Sprintf("arazzo-runner-%d", time.Now().UnixNano())).
 		SetCleanSession(true).
-		SetConnectTimeout(mqttOpTimeout)
+		SetConnectTimeout(mqttOpTimeout).
+		SetConnectionLostHandler(func(_ mqtt.Client, err error) {
+			log.Printf("mqtt connection to %s lost: %v; reconnecting", brokerURL, err)
+		}).
+		SetOnConnectHandler(func(c mqtt.Client) { a.onConnect(c) })
 	return mqtt.NewClient(opts)
+}
+
+// onConnect runs each time the client connects: paho calls it on the first connect and again after
+// every automatic reconnect. The first needs nothing, because ensureSubscribed subscribes as it goes.
+// After a reconnect the broker has dropped every subscription (clean session) while subscribed still
+// lists them, so they are made again here - otherwise the adapter believes it is listening and quietly
+// receives nothing. Messages published while the connection was down are lost.
+func (a *MQTTAdapter) onConnect(client mqttClient) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if client != a.client {
+		return // a client already replaced after a failed connect, connecting late
+	}
+	a.connects++
+	if a.connects == 1 {
+		return
+	}
+	for channel := range a.subscribed {
+		if err := waitToken(a.client.Subscribe(channel, 1, a.handlerFor(channel)), "re-subscribe to "+channel); err != nil {
+			// Forget it, so the next step on this channel subscribes again and reports any failure.
+			delete(a.subscribed, channel)
+			log.Printf("%v", err)
+		}
+	}
+	log.Printf("mqtt reconnected to %s; re-subscribed %d topic(s)", a.brokerURL, len(a.subscribed))
 }
 
 // Name identifies this adapter.
@@ -123,23 +156,29 @@ func (a *MQTTAdapter) ensureSubscribed(channel string) error {
 			// on a client that no longer exists, and silently receive nothing.
 			a.client = nil
 			a.subscribed = map[string]bool{}
+			a.connects = 0
 			return err
 		}
 	}
 	if a.subscribed[channel] {
 		return nil
 	}
-	handler := func(_ mqtt.Client, m mqtt.Message) {
+	if err := waitToken(a.client.Subscribe(channel, 1, a.handlerFor(channel)), "subscribe to "+channel); err != nil {
+		return err
+	}
+	a.subscribed[channel] = true
+	return nil
+}
+
+// handlerFor returns the subscription callback for a topic: incoming publications are pushed into the
+// buffer keyed by the topic they were requested on.
+func (a *MQTTAdapter) handlerFor(channel string) mqtt.MessageHandler {
+	return func(_ mqtt.Client, m mqtt.Message) {
 		a.buffer.push(channel, &Message{
 			Raw:      m.Payload(),
 			Metadata: map[string]interface{}{"channel": m.Topic(), "transport": "mqtt"},
 		})
 	}
-	if err := waitToken(a.client.Subscribe(channel, 1, handler), "subscribe to "+channel); err != nil {
-		return err
-	}
-	a.subscribed[channel] = true
-	return nil
 }
 
 // currentClient returns the connected client (only valid after ensureSubscribed succeeded).

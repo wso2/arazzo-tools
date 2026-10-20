@@ -32,6 +32,15 @@ export interface MCPServerTaskParams {
 /** The currently running task execution, if any. */
 let currentExecution: vscode.TaskExecution | undefined;
 
+/** Numbers each server start, so a process exit can be matched to the start it belongs to. */
+let runCount = 0;
+
+/** True once the process of the most recent server start has exited. */
+let latestRunExited = false;
+
+/** The cleanup to run when the server task ends, as given to registerMCPTaskEndListener. */
+let onTaskEnd: (() => void) | undefined;
+
 /**
  * Returns true if the MCP server task is currently running.
  */
@@ -44,14 +53,14 @@ export function isMCPTaskRunning(): boolean {
  * Uses CustomExecution to run the binary inside a Pseudoterminal, mirroring
  * how the trace server task is implemented.
  */
-export function createMCPServerTask(params: MCPServerTaskParams): vscode.Task {
+export function createMCPServerTask(params: MCPServerTaskParams, onExit?: () => void): vscode.Task {
     const taskDefinition: vscode.TaskDefinition = {
         type: 'custom',
         task: 'start-mcp-server'
     };
 
     const execution = new vscode.CustomExecution(async (): Promise<vscode.Pseudoterminal> => {
-        return new MCPServerPseudoterminal(params);
+        return new MCPServerPseudoterminal(params, onExit);
     });
 
     const task = new vscode.Task(
@@ -90,7 +99,7 @@ class MCPServerPseudoterminal implements vscode.Pseudoterminal {
     readonly onDidWrite: vscode.Event<string> = this.writeEmitter.event;
     readonly onDidClose: vscode.Event<number> = this.closeEmitter.event;
 
-    constructor(private readonly params: MCPServerTaskParams) {}
+    constructor(private readonly params: MCPServerTaskParams, private readonly onExit?: () => void) {}
 
     open(_initialDimensions: vscode.TerminalDimensions | undefined): void {
         const { binaryPath, arazzoFilePath, port, tracerPort } = this.params;
@@ -159,6 +168,7 @@ class MCPServerPseudoterminal implements vscode.Pseudoterminal {
             return;
         }
         this.isClosed = true;
+        this.onExit?.();
         this.closeEmitter.fire(exitCode);
     }
 
@@ -183,8 +193,23 @@ export async function executeMCPServerTask(params: MCPServerTaskParams): Promise
         currentExecution = undefined;
     }
 
-    const task = createMCPServerTask(params);
+    const run = ++runCount;
+    latestRunExited = false;
+    const task = createMCPServerTask(params, () => {
+        if (run === runCount) {
+            latestRunExited = true;
+        }
+    });
     currentExecution = await vscode.tasks.executeTask(task);
+
+    // A server that exits at once (e.g. the CLI rejects the file) can end the task before
+    // executeTask resolves. Its end event then had no execution to match, so the task-end listener
+    // ignored it - without this the dead task would look like a running server, and stop could not
+    // reset the UI.
+    if (latestRunExited) {
+        currentExecution = undefined;
+        onTaskEnd?.();
+    }
 }
 
 /**
@@ -210,6 +235,7 @@ export function registerMCPTaskEndListener(
     context: vscode.ExtensionContext,
     onEnd: () => void
 ): void {
+    onTaskEnd = onEnd;
     context.subscriptions.push(
         vscode.tasks.onDidEndTask((event) => {
             // Match on the execution object reference, not task definition type.

@@ -1302,6 +1302,9 @@ pointing into the payload. All in-memory: no broker, no network.
 schema-registry config (they belong together, see above); MQTT credentials and custom TLS
 configuration.
 
+> **✅ FIXED (2026-09-17, branch `bug_fixes_1`)** — the adapter now re-subscribes after paho reconnects;
+> see the bug's entry under "Known Issues" at the end. The analysis below is kept as the record of why.
+
 **⚠️ HIGH PRIORITY GAP — fix before this is used against a broker that matters.** Everything else in
 this phase fails loudly. This one does not: it produces a correct-looking run that quietly stops
 receiving. It is listed first deliberately, ahead of the minor limits below.
@@ -1841,7 +1844,7 @@ Step spans will now overlap in wall-clock time. Parent/child links are set expli
 `state.WorkflowSpanID` rather than derived from emission order, so they *should* be unaffected —
 verify rather than assume, with a test asserting parentage on interleaved spans.
 
-**8. Re-check the Phase 11 reconnect gap.**
+**8. Re-check the Phase 11 reconnect gap.** ✅ **Fixed 2026-09-17** (see Known Issues) — kept for context.
 The high-priority MQTT gap above ("a reconnected client silently stops receiving") gets materially
 more likely here: a receive now stays in flight for its whole timeout instead of a few seconds inside
 one step, so the exposure window grows a lot. **Fix that first, not after.**
@@ -1901,7 +1904,7 @@ cross-cutting sweep and the single user-facing page.
 ## Known Issues / Bugs (separate from the v1.1.0 phases — fix independently)
 
 > **End-of-project cleanup batch.** Best tackled together at the very end, after Phases 1–14, in one
-> final pass: (1) the final XPath push (XPath selectors + `targetSelectorType: xpath`, see Phases 4/6), (2) the server-stop UI bug below, (3) executable `type: arazzo` source descriptions below, (4) the two remaining LSP validation blind spots below (goto target existence; $steps refs outside parameters), (5) JSON line mapping in the LSP parser below, (6) **the project-wide example sweep**, (7) **the user-facing documentation page** — those two moved out of Phase 12 — (8) **a nested workflow's spans should join the parent's trace**, and (9) **an unresolvable `channelPath` channel should be flagged in the editor**. See below.
+> final pass: (1) the final XPath push (XPath selectors + `targetSelectorType: xpath`, see Phases 4/6), (2) ~~the server-stop UI bug below~~ (could not reproduce, 2026-09-17 — see its entry), (3) executable `type: arazzo` source descriptions below, (4) the two remaining LSP validation blind spots below (goto target existence; $steps refs outside parameters), (5) JSON line mapping in the LSP parser below, (6) **the project-wide example sweep**, (7) **the user-facing documentation page** — those two moved out of Phase 12 — (8) **a nested workflow's spans should join the parent's trace**, and (9) **an unresolvable `channelPath` channel should be flagged in the editor**. See below.
 
 ### Project-wide example sweep (was Phase 12 step 3)
 
@@ -2000,7 +2003,29 @@ The lookup this needs already exists: `lookupChannelInSources`
 than the runtime class that currently reports it, and belongs with the other LSP blind spots in
 item 4.
 
-### BUG (HIGH PRIORITY): a reconnected MQTT client silently stops receiving
+### BUG (HIGH PRIORITY): a reconnected MQTT client silently stops receiving — ✅ FIXED (2026-09-17)
+
+> **Fix (branch `bug_fixes_1`, [adapter_mqtt.go](../../arazzo-designer-cli/internal/runner/executor/adapter_mqtt.go)):**
+> re-subscribe after a reconnect. paho calls `SetOnConnectHandler` "both at initial connection time and
+> upon automatic reconnect" (its own docs); the adapter's `onConnect` counts the current client's connects
+> and, from the second on, subscribes again to every topic `subscribed` still lists (a late callback from a
+> client already replaced after a failed connect is ignored). The first connect is skipped —
+> `ensureSubscribed` subscribes as it goes, and a second subscribe would make a broker redeliver retained
+> messages. A topic whose re-subscribe fails is dropped from `subscribed`, so the next step on it
+> subscribes again and reports the failure instead of waiting on nothing. A drop and a reconnect are now
+> logged (`mqtt connection to … lost: …; reconnecting`, `mqtt reconnected to …; re-subscribed N topic(s)`),
+> so a timeout right after one explains itself.
+>
+> **Still lost, by decision:** messages published *while* the connection is down. A clean session cannot
+> recover them; a persistent session (`CleanSession(false)` + `ResumeSubs(true)`) could, but leaves a
+> session on the broker per run and was judged not worth it for a rare, external failure.
+>
+> **Verified:** two unit tests against the fake client (subscriptions restored and an in-flight receive
+> served after a reconnect, the first connect not subscribing twice, a failed re-subscribe retried by the
+> next step) — each fails when its part of the fix is removed. End to end with real paho and
+> `broker.hivemq.com` through a loopback relay whose connection is cut: paho reconnects by itself, and a
+> message published afterwards by a separate client **is received on the new code and times out
+> silently on the old**. The real-broker round trip and Phase 11 examples 01 and 04 still pass.
 
 Not part of the end-of-project batch above — this one should be fixed **before Phase 14**, which
 widens its window considerably.
@@ -2012,7 +2037,31 @@ it is listening, the broker has no subscription, and the channel goes quiet with
 a receive just times out as though nothing were ever sent. Verified on both halves; full detail,
 likelihood and candidate fixes are in Phase 11's limits above. WebSocket is unaffected.
 
-### BUG: stopping the Arazzo server doesn't reset the "server running" UI state
+### BUG: stopping the Arazzo server doesn't reset the "server running" UI state — ⚪ COULD NOT REPRODUCE (2026-09-17)
+
+> **Status: could not reproduce, and no code change fixed it.** The start/stop state code is unchanged
+> since the initial commit, yet stop now resets all three things listed below — the status-bar button,
+> the *Try with curl* CodeLenses and the webview's start-the-server prompt — including start → stop
+> repeated, starting on one file then another before stopping, and stopping by closing the terminal.
+> Most likely a VS Code change in how a terminated task reports its end.
+>
+> **Fixed while reviewing the same code** (branch `bug_fixes_1`):
+> - **A server that exits at once looked alive for good.** If the process ends before
+>   `vscode.tasks.executeTask` resolves, its end event arrives while there is no execution to match, so
+>   the task-end listener ignores it and the saved handle points at a dead task: the UI stays "running"
+>   and stop cannot reset it — this bug's exact symptom, so the first suspect if it ever returns.
+>   `executeMCPServerTask` ([mcpServerTask.ts](arazzo-designer-extension/src/mcp/mcpServerTask.ts)) now
+>   notices, drops the handle and runs the normal task-end cleanup. Each start is numbered, so an older
+>   server exiting late cannot clear a newer one.
+> - **The play button could appear on a file the start then refused.** The server start used an older
+>   first-10-lines check than the editor (no quoted version, no JSON, no long comment header). Both now
+>   call one helper, [util/specDetection.ts](arazzo-designer-extension/src/util/specDetection.ts).
+> - `activateMCPServer` in `mcp/index.ts` is never called; marked `#UNUSED` for a later cleanup.
+>
+> **Verified** with the real `mcpServerTask.ts` against a fake VS Code API: normal start, stop and file
+> switching behave identically before and after; only the two "exits at once" cases differ, and only
+> the old code fails them. The shared detection gives the editor identical results on 15 kinds of file.
+
 **Not related to v1.1.0** — a pre-existing extension lifecycle bug; tracked here so it isn't lost.
 
 **Symptoms:**
@@ -2078,6 +2127,22 @@ Related and already fixed (recorded so the distinction is clear): the `$steps.<i
 a hard **error** whenever the referenced step was declared later, which false-positived on a legal
 backward-`goto` loop — declaration order is not execution order. It now errors only when the step does
 not exist, and warns when it exists but is declared later.
+
+### BY DESIGN: only a file whose first key is `arazzo` is recognised (decided 2026-09-17, not a gap)
+
+The spec requires the field but not its position — v1.1.0 §5.8.1.1: *"The `arazzo` field MUST be used by
+tooling to interpret the Arazzo Description"*, and nothing in §5.2 (Format) constrains key order. The
+extension's detection ([util/specDetection.ts](arazzo-designer-extension/src/util/specDetection.ts))
+reads only the first meaningful line: a deliberate trade from July that avoids false positives from a
+stray `arazzo:` deeper in a file (inside a description, say).
+
+So a valid document such as `info:` followed by `arazzo: 1.1.0`, if its file name also lacks
+`.arazzo.`/`-arazzo.`, gets no Arazzo language, no language server and no play button — and since
+`bug_fixes_1` the server start refuses it as well (its old first-10-lines check used to accept it). Rare
+in practice: generators and hand-written documents put `arazzo` first.
+
+**Decision: keep it.** Reviewed and accepted on 2026-09-17 — `arazzo` comes first in practice, so a file
+that does otherwise not being recognised is acceptable. Recorded here so it is not re-opened as a bug.
 
 ### GAP: the LSP maps line numbers for YAML keys only, not JSON
 
