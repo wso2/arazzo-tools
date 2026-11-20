@@ -269,17 +269,31 @@ func (r *ArazzoRunner) GetWorkflowDetails(workflowID string) map[string]interfac
 }
 
 // ExecuteWorkflow runs a complete workflow from start to finish.
-// This is the main entry point for workflow execution.
+// This is the main entry point for workflow execution. The run gets a trace of its own.
 func (r *ArazzoRunner) ExecuteWorkflow(workflowID string, inputs map[string]interface{}) *models.WorkflowExecutionResult {
+	return r.executeWorkflowInTrace(workflowID, inputs, nil)
+}
+
+// executeWorkflowInTrace runs a workflow, optionally inside a trace that is already open: parent is
+// the span this run belongs under - the step that called it - or nil for a top-level run, which
+// starts its own trace. One run of a workflow that calls another is one story, so it should read as
+// one trace rather than two unrelated ones in a trace viewer.
+func (r *ArazzoRunner) executeWorkflowInTrace(workflowID string, inputs map[string]interface{}, parent *telemetry.SpanContext) *models.WorkflowExecutionResult {
 	log.Printf("=== Starting workflow execution: %s ===", workflowID)
 
 	// --- Telemetry: workflow start ---
 	traceID := telemetry.GenerateTraceID()
+	parentSpanID := ""
+	if parent != nil {
+		traceID = parent.TraceID
+		parentSpanID = parent.SpanID
+	}
 	workflowSpanID := telemetry.GenerateSpanID()
 	workflowStart := time.Now()
 	r.Sink.Send(telemetry.TraceEvent{
 		Lifecycle:  telemetry.LifecycleStart,
 		Context:    telemetry.SpanContext{TraceID: traceID, SpanID: workflowSpanID},
+		ParentID:   parentSpanID,
 		Name:       workflowID,
 		Kind:       telemetry.OTelSpanKindInternal,
 		ArazzoKind: telemetry.SpanKindWorkflow,
@@ -309,6 +323,7 @@ func (r *ArazzoRunner) ExecuteWorkflow(workflowID string, inputs map[string]inte
 		ev := telemetry.TraceEvent{
 			Lifecycle:     telemetry.LifecycleEnd,
 			Context:       telemetry.SpanContext{TraceID: traceID, SpanID: workflowSpanID},
+			ParentID:      parentSpanID,
 			Name:          workflowID,
 			Kind:          telemetry.OTelSpanKindInternal,
 			ArazzoKind:    telemetry.SpanKindWorkflow,
@@ -431,7 +446,7 @@ func (r *ArazzoRunner) ExecuteWorkflow(workflowID string, inputs map[string]inte
 
 		// Handle nested workflow
 		if result.IsNestedWorkflow && result.NextAction != nil && result.NextAction.WorkflowID != "" {
-			nestedResult := r.executeNestedWorkflow(result.NextAction.WorkflowID, step, state)
+			nestedResult := r.executeNestedWorkflow(result.NextAction.WorkflowID, step, state, result.PendingSpanID)
 			if nestedResult != nil {
 				result.Success = nestedResult.Status == models.WorkflowStatusWorkflowComplete
 				if !result.Success {
@@ -843,7 +858,7 @@ func (r *ArazzoRunner) mergeDefaultInputs(wf map[string]interface{}, inputs map[
 }
 
 // executeNestedWorkflow executes a nested workflow call from a step.
-func (r *ArazzoRunner) executeNestedWorkflow(workflowID string, step map[string]interface{}, parentState *models.ExecutionState) *models.WorkflowExecutionResult {
+func (r *ArazzoRunner) executeNestedWorkflow(workflowID string, step map[string]interface{}, parentState *models.ExecutionState, callerSpanID string) *models.WorkflowExecutionResult {
 	log.Printf("Executing nested workflow: %s", workflowID)
 
 	// Prepare inputs from step parameters
@@ -867,7 +882,18 @@ func (r *ArazzoRunner) executeNestedWorkflow(workflowID string, step map[string]
 		nestedInputs[name] = value
 	}
 
-	return r.ExecuteWorkflow(workflowID, nestedInputs)
+	// The nested run belongs inside the step that called it, in the caller's trace. ExecuteStep leaves
+	// that step's span open for exactly this reason (it is closed once this run is in), so the child's
+	// spans sit under a span that is still running. Should the caller's span id ever be missing, fall
+	// back to the calling workflow's span: still one trace, just one level flatter.
+	parentSpanID := callerSpanID
+	if parentSpanID == "" {
+		parentSpanID = parentState.WorkflowSpanID
+	}
+	return r.executeWorkflowInTrace(workflowID, nestedInputs, &telemetry.SpanContext{
+		TraceID: parentState.TraceID,
+		SpanID:  parentSpanID,
+	})
 }
 
 // resolveWorkflowOutputs resolves the workflow's output expressions.
