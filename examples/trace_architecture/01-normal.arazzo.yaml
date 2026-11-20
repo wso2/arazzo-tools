@@ -1,0 +1,39 @@
+# Trace architecture - 1: a NORMAL run. One workflow, two REST steps.
+#
+# THE SHAPE: one run is one trace. The workflow span is the root; each step hangs off it, and each
+# step's HTTP request hangs off that step.
+#
+#   workflow normalRun                 <- root of the trace
+#     step listBrands
+#       http GET /brands
+#     step listProducts
+#       http GET /products
+#
+# An async step would show a `message` span where `http` is here - same position, different transport.
+#
+# Runs against the live Toolshop API (needs internet). No inputs needed.
+
+arazzo: 1.1.0
+
+info:
+  title: "Trace architecture - normal run"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: normalRun
+    summary: Two REST steps in one workflow
+    steps:
+      - stepId: listBrands
+        operationId: getBrands
+        successCriteria:
+          - condition: "$statusCode == 200"
+
+      - stepId: listProducts
+        operationId: getProducts
+        successCriteria:
+          - condition: "$statusCode == 200"

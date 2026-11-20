@@ -1,0 +1,47 @@
+# Trace architecture - 3: a workflow-level `dependsOn`. The dependency is TRIGGERED and waited for.
+#
+# THE SHAPE: the dependency runs inside the workflow that needed it, before that workflow's own steps.
+# Its span is a child of the caller's, because the caller is open and waiting the whole time - and if
+# the dependency fails, the caller fails with it, so the reason should be in the same place.
+#
+#   workflow mainRun                   <- root of the trace
+#     workflow prepRun                 <- parent = workflow mainRun, and it runs FIRST
+#       step listBrands
+#         http GET /brands
+#     step listProducts                <- mainRun's own steps, after the dependency
+#       http GET /products
+#
+# (Workflow-level `dependsOn` triggers the dependency - spec 5.8.4.1. Step-level `dependsOn` does not
+# trigger anything; it only gates.)
+#
+# Run `mainRun`. Runs against the live Toolshop API (needs internet). No inputs needed.
+
+arazzo: 1.1.0
+
+info:
+  title: "Trace architecture - dependsOn"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: mainRun
+    summary: Depends on prepRun, which is run first
+    dependsOn:
+      - prepRun
+    steps:
+      - stepId: listProducts
+        operationId: getProducts
+        successCriteria:
+          - condition: "$statusCode == 200"
+
+  - workflowId: prepRun
+    summary: The dependency
+    steps:
+      - stepId: listBrands
+        operationId: getBrands
+        successCriteria:
+          - condition: "$statusCode == 200"
