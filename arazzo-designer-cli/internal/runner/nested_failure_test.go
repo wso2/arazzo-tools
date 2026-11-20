@@ -187,6 +187,227 @@ func (s *spanSink) stepEnd(t *testing.T, stepID string) telemetry.TraceEvent {
 	return telemetry.TraceEvent{}
 }
 
+// workflowSpan returns one lifecycle half of a workflow's span.
+func (s *spanSink) workflowSpan(t *testing.T, workflowID string, lifecycle telemetry.Lifecycle) telemetry.TraceEvent {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range s.ev {
+		if e.ArazzoKind == telemetry.SpanKindWorkflow && e.Lifecycle == lifecycle && e.Name == workflowID {
+			return e
+		}
+	}
+	t.Fatalf("no %v span for workflow %q", lifecycle, workflowID)
+	return telemetry.TraceEvent{}
+}
+
+// stepStart returns the START span for one step.
+func (s *spanSink) stepStart(t *testing.T, stepID string) telemetry.TraceEvent {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range s.ev {
+		if e.ArazzoKind == telemetry.SpanKindStep && e.Lifecycle == telemetry.LifecycleStart && e.Name == stepID {
+			return e
+		}
+	}
+	t.Fatalf("no start span for step %q", stepID)
+	return telemetry.TraceEvent{}
+}
+
+// A workflow that calls another is ONE run and must read as one trace: the nested run sits inside the
+// step that called it. Two unrelated traces make a trace viewer show the child as a separate story
+// with no link back to the step that caused it.
+func TestNestedWorkflowSpansJoinTheCallersTrace(t *testing.T) {
+	p := writeFlow(t, `arazzo: 1.1.0
+info:
+  title: T
+  version: "1.0.0"
+sourceDescriptions:
+  - name: localBus
+    url: ./local.asyncapi.yaml
+    type: asyncapi
+workflows:
+  - workflowId: parent
+    steps:
+      - stepId: callChild
+        workflowId: child
+  - workflowId: child
+    steps:
+      - stepId: work
+        channelPath: localBus#/channels/events
+        action: send
+        requestBody:
+          payload:
+            marker: ok
+`)
+	sink := &spanSink{}
+	r, err := NewArazzoRunner(p, &models.RuntimeParams{}, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.ExecuteWorkflow("parent", nil)
+
+	parentWorkflow := sink.workflowSpan(t, "parent", telemetry.LifecycleStart)
+	childWorkflow := sink.workflowSpan(t, "child", telemetry.LifecycleStart)
+	callingStep := sink.stepStart(t, "callChild")
+
+	if parentWorkflow.ParentID != "" {
+		t.Errorf("the top-level run should have no parent span, got %q", parentWorkflow.ParentID)
+	}
+	if childWorkflow.Context.TraceID != parentWorkflow.Context.TraceID {
+		t.Errorf("the nested run should share the caller's trace: child %q, parent %q",
+			childWorkflow.Context.TraceID, parentWorkflow.Context.TraceID)
+	}
+	if childWorkflow.ParentID != callingStep.Context.SpanID {
+		t.Errorf("the nested run should sit under the step that called it: parent_id %q, step span %q",
+			childWorkflow.ParentID, callingStep.Context.SpanID)
+	}
+	// The child's END must close the same span, so a viewer sees one span rather than two.
+	if end := sink.workflowSpan(t, "child", telemetry.LifecycleEnd); end.ParentID != callingStep.Context.SpanID ||
+		end.Context.SpanID != childWorkflow.Context.SpanID {
+		t.Errorf("the child's end span must match its start: span %q/%q, parent %q",
+			end.Context.SpanID, childWorkflow.Context.SpanID, end.ParentID)
+	}
+	// Everything emitted belongs to the one trace.
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	for _, e := range sink.ev {
+		if e.Context.TraceID != parentWorkflow.Context.TraceID {
+			t.Fatalf("%s %s is in trace %q, want the caller's %q",
+				e.ArazzoKind, e.Name, e.Context.TraceID, parentWorkflow.Context.TraceID)
+		}
+	}
+}
+
+// One run is one trace, whichever way another workflow is reached: a dependency runs because this
+// workflow needed it, and a goto hands over to it. Both used to start a trace of their own, leaving a
+// viewer with two unrelated stories for a single run.
+func TestDependencyAndGotoWorkflowsShareTheCallersTrace(t *testing.T) {
+	p := writeFlow(t, `arazzo: 1.1.0
+info:
+  title: T
+  version: "1.0.0"
+sourceDescriptions:
+  - name: localBus
+    url: ./local.asyncapi.yaml
+    type: asyncapi
+workflows:
+  - workflowId: main
+    dependsOn:
+      - prep
+    steps:
+      - stepId: handOver
+        channelPath: localBus#/channels/events
+        action: send
+        requestBody:
+          payload:
+            marker: main
+        onSuccess:
+          - name: jump
+            type: goto
+            workflowId: continued
+  - workflowId: prep
+    steps:
+      - stepId: prepare
+        channelPath: localBus#/channels/events
+        action: send
+        requestBody:
+          payload:
+            marker: prep
+  - workflowId: continued
+    steps:
+      - stepId: carryOn
+        channelPath: localBus#/channels/events
+        action: send
+        requestBody:
+          payload:
+            marker: continued
+`)
+	sink := &spanSink{}
+	r, err := NewArazzoRunner(p, &models.RuntimeParams{}, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.ExecuteWorkflow("main", nil); got.Status != models.WorkflowStatusWorkflowComplete {
+		t.Fatalf("status = %v (%s)", got.Status, got.Error)
+	}
+
+	caller := sink.workflowSpan(t, "main", telemetry.LifecycleStart)
+
+	// A dependency runs INSIDE the caller, whose span is open and waiting: a child of it.
+	dep := sink.workflowSpan(t, "prep", telemetry.LifecycleStart)
+	if dep.Context.TraceID != caller.Context.TraceID {
+		t.Errorf("dependency trace = %q, want the caller's %q", dep.Context.TraceID, caller.Context.TraceID)
+	}
+	if dep.ParentID != caller.Context.SpanID {
+		t.Errorf("dependency parent = %q, want the calling workflow's span %q", dep.ParentID, caller.Context.SpanID)
+	}
+
+	// A goto HANDS OVER: the caller has already ended, so the target is a second root in the same
+	// trace. Parenting it would put a child outside its parent's lifetime.
+	target := sink.workflowSpan(t, "continued", telemetry.LifecycleStart)
+	if target.Context.TraceID != caller.Context.TraceID {
+		t.Errorf("goto target trace = %q, want the caller's %q", target.Context.TraceID, caller.Context.TraceID)
+	}
+	if target.ParentID != "" {
+		t.Errorf("goto target should be its own root, got parent %q", target.ParentID)
+	}
+
+	// One run, one trace - including the steps of all three workflows.
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	for _, e := range sink.ev {
+		if e.Context.TraceID != caller.Context.TraceID {
+			t.Fatalf("%s %s is in trace %q, want %q", e.ArazzoKind, e.Name, e.Context.TraceID, caller.Context.TraceID)
+		}
+	}
+}
+
+// A run started on its own keeps its own trace - the change above must not make separate runs share one.
+func TestSeparateRunsKeepSeparateTraces(t *testing.T) {
+	p := writeFlow(t, `arazzo: 1.1.0
+info:
+  title: T
+  version: "1.0.0"
+sourceDescriptions:
+  - name: localBus
+    url: ./local.asyncapi.yaml
+    type: asyncapi
+workflows:
+  - workflowId: solo
+    steps:
+      - stepId: work
+        channelPath: localBus#/channels/events
+        action: send
+        requestBody:
+          payload:
+            marker: ok
+`)
+	sink := &spanSink{}
+	r, err := NewArazzoRunner(p, &models.RuntimeParams{}, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.ExecuteWorkflow("solo", nil)
+	first := sink.workflowSpan(t, "solo", telemetry.LifecycleStart)
+
+	second := &spanSink{}
+	r2, err := NewArazzoRunner(p, &models.RuntimeParams{}, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2.ExecuteWorkflow("solo", nil)
+	other := second.workflowSpan(t, "solo", telemetry.LifecycleStart)
+
+	if first.ParentID != "" || other.ParentID != "" {
+		t.Errorf("a top-level run has no parent span, got %q and %q", first.ParentID, other.ParentID)
+	}
+	if first.Context.TraceID == other.Context.TraceID {
+		t.Error("two separate runs must not share a trace id")
+	}
+}
+
 // A step that calls another workflow must report that workflow's outcome, because the step itself
 // does nothing else. Its span used to be closed inside ExecuteStep - BEFORE the nested run - so it
 // always said error with no message: a failing child gave no reason in the graph, and a succeeding

@@ -269,17 +269,33 @@ func (r *ArazzoRunner) GetWorkflowDetails(workflowID string) map[string]interfac
 }
 
 // ExecuteWorkflow runs a complete workflow from start to finish.
-// This is the main entry point for workflow execution.
+// This is the main entry point for workflow execution. The run gets a trace of its own.
 func (r *ArazzoRunner) ExecuteWorkflow(workflowID string, inputs map[string]interface{}) *models.WorkflowExecutionResult {
+	return r.executeWorkflowInTrace(workflowID, inputs, nil)
+}
+
+// executeWorkflowInTrace runs a workflow, optionally inside a trace that is already open: parent is
+// the span this run belongs under - the step that called it - or nil for a top-level run, which
+// starts its own trace. One run of a workflow that calls another is one story, so it should read as
+// one trace rather than two unrelated ones in a trace viewer.
+func (r *ArazzoRunner) executeWorkflowInTrace(workflowID string, inputs map[string]interface{}, parent *telemetry.SpanContext) *models.WorkflowExecutionResult {
 	log.Printf("=== Starting workflow execution: %s ===", workflowID)
 
 	// --- Telemetry: workflow start ---
 	traceID := telemetry.GenerateTraceID()
+	parentSpanID := ""
+	if parent != nil {
+		// A parent with no span id joins the trace without hanging off anything: a second root, for a
+		// run that follows on rather than running inside the caller (a `goto` to another workflow).
+		traceID = parent.TraceID
+		parentSpanID = parent.SpanID
+	}
 	workflowSpanID := telemetry.GenerateSpanID()
 	workflowStart := time.Now()
 	r.Sink.Send(telemetry.TraceEvent{
 		Lifecycle:  telemetry.LifecycleStart,
 		Context:    telemetry.SpanContext{TraceID: traceID, SpanID: workflowSpanID},
+		ParentID:   parentSpanID,
 		Name:       workflowID,
 		Kind:       telemetry.OTelSpanKindInternal,
 		ArazzoKind: telemetry.SpanKindWorkflow,
@@ -309,6 +325,7 @@ func (r *ArazzoRunner) ExecuteWorkflow(workflowID string, inputs map[string]inte
 		ev := telemetry.TraceEvent{
 			Lifecycle:     telemetry.LifecycleEnd,
 			Context:       telemetry.SpanContext{TraceID: traceID, SpanID: workflowSpanID},
+			ParentID:      parentSpanID,
 			Name:          workflowID,
 			Kind:          telemetry.OTelSpanKindInternal,
 			ArazzoKind:    telemetry.SpanKindWorkflow,
@@ -334,7 +351,7 @@ func (r *ArazzoRunner) ExecuteWorkflow(workflowID string, inputs map[string]inte
 	}
 
 	// Execute dependencies first
-	depOutputs, depStepStatus, err := r.executeDependencies(wf)
+	depOutputs, depStepStatus, err := r.executeDependencies(wf, &telemetry.SpanContext{TraceID: traceID, SpanID: workflowSpanID})
 	if err != nil {
 		endWorkflow(telemetry.SpanStatusError, fmt.Sprintf("Dependency execution failed: %v", err))
 		return &models.WorkflowExecutionResult{
@@ -431,7 +448,7 @@ func (r *ArazzoRunner) ExecuteWorkflow(workflowID string, inputs map[string]inte
 
 		// Handle nested workflow
 		if result.IsNestedWorkflow && result.NextAction != nil && result.NextAction.WorkflowID != "" {
-			nestedResult := r.executeNestedWorkflow(result.NextAction.WorkflowID, step, state)
+			nestedResult := r.executeNestedWorkflow(result.NextAction.WorkflowID, step, state, result.PendingSpanID)
 			if nestedResult != nil {
 				result.Success = nestedResult.Status == models.WorkflowStatusWorkflowComplete
 				if !result.Success {
@@ -504,7 +521,12 @@ func (r *ArazzoRunner) ExecuteWorkflow(workflowID string, inputs map[string]inte
 					// Goto another workflow
 					log.Printf("Goto workflow: %s", result.NextAction.WorkflowID)
 					endWorkflow(telemetry.SpanStatusOK, "")
-					gotoResult := r.ExecuteWorkflow(result.NextAction.WorkflowID, result.NextAction.Inputs)
+					// Still one run, so still one trace. But this workflow does not wait for the other:
+					// it hands over, and `endWorkflow` above already closed its span. So the run below
+					// is a second ROOT in the same trace rather than a child that would start after its
+					// parent had ended.
+					gotoResult := r.executeWorkflowInTrace(result.NextAction.WorkflowID, result.NextAction.Inputs,
+						&telemetry.SpanContext{TraceID: traceID})
 					return gotoResult
 				}
 				if result.NextAction.StepID != "" {
@@ -564,7 +586,9 @@ func (r *ArazzoRunner) ExecuteWorkflow(workflowID string, inputs map[string]inte
 						if fallbackAction.WorkflowID != "" {
 							log.Printf("Fallback goto workflow: %s", fallbackAction.WorkflowID)
 							endWorkflow(telemetry.SpanStatusError, "retry exhausted, goto workflow")
-							gotoResult := r.ExecuteWorkflow(fallbackAction.WorkflowID, fallbackAction.Inputs)
+							// Same handover as the goto above, after retries ran out: same trace, own root.
+							gotoResult := r.executeWorkflowInTrace(fallbackAction.WorkflowID, fallbackAction.Inputs,
+								&telemetry.SpanContext{TraceID: traceID})
 							return gotoResult
 						}
 						if fallbackAction.StepID != "" {
@@ -641,7 +665,7 @@ func (r *ArazzoRunner) ExecuteWorkflow(workflowID string, inputs map[string]inte
 // It returns two maps keyed by dependency workflowId: the workflow outputs (for $dependencies) and the
 // per-step status (for the cross-workflow step-level dependsOn gate, so it can check that a specific
 // step in a dependency completed successfully — not merely that the workflow ran).
-func (r *ArazzoRunner) executeDependencies(wf map[string]interface{}) (map[string]map[string]interface{}, map[string]map[string]models.StepStatus, error) {
+func (r *ArazzoRunner) executeDependencies(wf map[string]interface{}, parent *telemetry.SpanContext) (map[string]map[string]interface{}, map[string]map[string]models.StepStatus, error) {
 	depOutputs := make(map[string]map[string]interface{})
 	depStepStatus := make(map[string]map[string]models.StepStatus)
 
@@ -677,7 +701,10 @@ func (r *ArazzoRunner) executeDependencies(wf map[string]interface{}) (map[strin
 		}
 
 		log.Printf("Executing dependency workflow: %s", depID)
-		depResult := r.ExecuteWorkflow(depID, nil)
+		// A dependency runs inside the span of the workflow that needs it, which is still open and
+		// waiting - so it is a child of it, in the same trace. Its failure becomes the caller's
+		// failure, and that story is only readable if both are in one place.
+		depResult := r.executeWorkflowInTrace(depID, nil, parent)
 		if depResult.Status == models.WorkflowStatusError {
 			depErr := fmt.Errorf("dependency workflow '%s' failed: %s", depID, depResult.Error)
 			if depResult.ErrorClass != "" {
@@ -843,7 +870,7 @@ func (r *ArazzoRunner) mergeDefaultInputs(wf map[string]interface{}, inputs map[
 }
 
 // executeNestedWorkflow executes a nested workflow call from a step.
-func (r *ArazzoRunner) executeNestedWorkflow(workflowID string, step map[string]interface{}, parentState *models.ExecutionState) *models.WorkflowExecutionResult {
+func (r *ArazzoRunner) executeNestedWorkflow(workflowID string, step map[string]interface{}, parentState *models.ExecutionState, callerSpanID string) *models.WorkflowExecutionResult {
 	log.Printf("Executing nested workflow: %s", workflowID)
 
 	// Prepare inputs from step parameters
@@ -867,7 +894,18 @@ func (r *ArazzoRunner) executeNestedWorkflow(workflowID string, step map[string]
 		nestedInputs[name] = value
 	}
 
-	return r.ExecuteWorkflow(workflowID, nestedInputs)
+	// The nested run belongs inside the step that called it, in the caller's trace. ExecuteStep leaves
+	// that step's span open for exactly this reason (it is closed once this run is in), so the child's
+	// spans sit under a span that is still running. Should the caller's span id ever be missing, fall
+	// back to the calling workflow's span: still one trace, just one level flatter.
+	parentSpanID := callerSpanID
+	if parentSpanID == "" {
+		parentSpanID = parentState.WorkflowSpanID
+	}
+	return r.executeWorkflowInTrace(workflowID, nestedInputs, &telemetry.SpanContext{
+		TraceID: parentState.TraceID,
+		SpanID:  parentSpanID,
+	})
 }
 
 // resolveWorkflowOutputs resolves the workflow's output expressions.
