@@ -1904,7 +1904,7 @@ cross-cutting sweep and the single user-facing page.
 ## Known Issues / Bugs (separate from the v1.1.0 phases — fix independently)
 
 > **End-of-project cleanup batch.** Best tackled together at the very end, after Phases 1–14, in one
-> final pass: (1) the final XPath push (XPath selectors + `targetSelectorType: xpath`, see Phases 4/6), (2) ~~the server-stop UI bug below~~ (could not reproduce, 2026-09-17 — see its entry), (3) executable `type: arazzo` source descriptions below, (4) the two remaining LSP validation blind spots below (goto target existence; $steps refs outside parameters), (5) JSON line mapping in the LSP parser below, (6) **the project-wide example sweep**, (7) **the user-facing documentation page** — those two moved out of Phase 12 — (8) **a nested workflow's spans should join the parent's trace**, and (9) **an unresolvable `channelPath` channel should be flagged in the editor**. See below.
+> final pass: (1) the final XPath push (XPath selectors + `targetSelectorType: xpath`, see Phases 4/6), (2) ~~the server-stop UI bug below~~ (could not reproduce, 2026-09-17 — see its entry), (3) executable `type: arazzo` source descriptions below, (4) the two remaining LSP validation blind spots below (goto target existence; $steps refs outside parameters), (5) JSON line mapping in the LSP parser below, (6) **the project-wide example sweep**, (7) **the user-facing documentation page** — those two moved out of Phase 12 — (8) ~~a nested workflow's spans should join the parent's trace~~ (fixed 2026-10-08), and (9) **an unresolvable `channelPath` channel should be flagged in the editor**. See below.
 
 ### Project-wide example sweep (was Phase 12 step 3)
 
@@ -1944,7 +1944,38 @@ Topics, with the plan sections that are their source material:
 The Phase 10/11 sections of this plan are ~370 lines of written material already — this is mostly
 reshaping internal notes into user-facing prose, not research.
 
-### A nested workflow's spans should join the parent's trace
+### A nested workflow's spans should join the parent's trace — ✅ FIXED (2026-10-08)
+
+> **Fix (branch `bug_fixes_1`, [runner.go](../../arazzo-designer-cli/internal/runner/runner.go)):**
+> `ExecuteWorkflow` is now a thin wrapper over `executeWorkflowInTrace(workflowID, inputs, parent)`.
+> A top-level run passes `nil` and starts its own trace, exactly as before; `executeNestedWorkflow`
+> passes the caller's trace id and the calling step's span (the one `ExecuteStep` leaves open for
+> this purpose), so the child's workflow span carries `ParentID` and shares the trace. `ParentID`
+> already reached OTLP as `parentSpanId`, so a viewer nests the run with no exporter change.
+>
+> **Tests** ([nested_failure_test.go](../../arazzo-designer-cli/internal/runner/nested_failure_test.go)):
+> every span of a nested run shares the caller's trace, the child's start AND end carry the calling
+> step's span as parent, a top-level run still has no parent, and two separate runs still get
+> different trace ids. Both halves of the fix were removed in turn to confirm the test fails.
+>
+> **Webview:** unaffected. Node colouring filters by `workflow.id`, and the Logs tab groups runs by
+> trace id but builds its cards per span id — so a child called twice in one parent run now shows
+> both executions in one run group instead of two groups, which is what one run should look like.
+>
+> **One run is one trace, everywhere (decided 2026-10-08).** The same applies to the other two ways a
+> second workflow is reached, so a single run never splits into unrelated traces:
+> - **a workflow-level `dependsOn` dependency** — a CHILD of the workflow that needed it. Its span is
+>   open and waiting while the dependency runs, and the dependency's failure becomes the caller's, so
+>   the explanation belongs in the same place.
+> - **a `goto` to another workflow** — the same trace, but its OWN ROOT, with no parent. A goto hands
+>   over rather than waiting: `endWorkflow` closes the caller's span before the target starts, so
+>   parenting it would put a child outside its parent's lifetime. A root says "this followed on",
+>   which is what happened.
+>
+> Covered by `TestDependencyAndGotoWorkflowsShareTheCallersTrace`, which also asserts every span of the
+> run - all three workflows - carries the one trace id. Verified non-vacuous three ways: giving the
+> dependency its own trace, giving the goto target its own trace, and parenting the goto target each
+> fail it.
 
 Running a workflow that calls another produces **two unrelated traces**, each with its own trace id
 and no parent link:

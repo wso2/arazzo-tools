@@ -1,0 +1,47 @@
+# Trace architecture - 2: a NESTED workflow. A step whose target is another workflow.
+#
+# THE SHAPE: the nested run sits INSIDE the step that called it. That step's span stays open for as
+# long as the child runs, so the child is a child in time as well as in name.
+#
+#   workflow parentRun                 <- root of the trace
+#     step listBrands
+#       http GET /brands
+#     step callChild                   <- stays open while the child runs
+#       workflow childRun              <- parent = step callChild
+#         step listProducts
+#           http GET /products
+#
+# A step's child is whatever the step did: an HTTP request, a message, or a whole workflow.
+#
+# Runs against the live Toolshop API (needs internet). No inputs needed.
+
+arazzo: 1.1.0
+
+info:
+  title: "Trace architecture - nested workflow"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: parentRun
+    summary: A REST step, then a step that calls another workflow
+    steps:
+      - stepId: listBrands
+        operationId: getBrands
+        successCriteria:
+          - condition: "$statusCode == 200"
+
+      - stepId: callChild
+        workflowId: childRun          # the nested call
+
+  - workflowId: childRun
+    summary: The nested target of callChild
+    steps:
+      - stepId: listProducts
+        operationId: getProducts
+        successCriteria:
+          - condition: "$statusCode == 200"

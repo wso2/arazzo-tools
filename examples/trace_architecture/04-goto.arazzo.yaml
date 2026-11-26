@@ -1,0 +1,48 @@
+# Trace architecture - 4: a `goto` to another workflow. The run HANDS OVER.
+#
+# THE SHAPE: still one run, so still one trace - but the target is a SECOND ROOT, not a child. A goto
+# does not wait: the first workflow ends, then the second starts. Parenting the second to the first
+# would put a child outside its parent's lifetime, so it is left unparented and simply follows on.
+#
+#   workflow handOverRun               <- root 1, ends when the goto fires
+#     step listBrands
+#       http GET /brands
+#   workflow continuedRun              <- root 2, same trace, no parent
+#     step listProducts
+#       http GET /products
+#
+# Compare with 02: a nested call waits for the child, so there the child IS inside the caller.
+#
+# Run `handOverRun`. Runs against the live Toolshop API (needs internet). No inputs needed.
+
+arazzo: 1.1.0
+
+info:
+  title: "Trace architecture - goto another workflow"
+  version: "1.0.0"
+
+sourceDescriptions:
+  - name: toolshop
+    url: ./toolshop-openapi.yaml
+    type: openapi
+
+workflows:
+  - workflowId: handOverRun
+    summary: Hands over to continuedRun once its step passes
+    steps:
+      - stepId: listBrands
+        operationId: getBrands
+        successCriteria:
+          - condition: "$statusCode == 200"
+        onSuccess:
+          - name: handOver
+            type: goto
+            workflowId: continuedRun   # control transfers; this workflow ends here
+
+  - workflowId: continuedRun
+    summary: The workflow the goto hands over to
+    steps:
+      - stepId: listProducts
+        operationId: getProducts
+        successCriteria:
+          - condition: "$statusCode == 200"
